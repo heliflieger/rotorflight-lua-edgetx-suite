@@ -21,6 +21,8 @@ local function loadModule(path)
   return nil
 end
 
+local DisplayProfile = nil
+
 local function getDisplayProfile()
   if not DisplayProfile then
     DisplayProfile = loadModule("core/display_profile.lua")
@@ -56,7 +58,6 @@ local function getRowH()
   if prof and prof.rowH then return prof.rowH end
   local w = _G.LCD_W or 480
   if w >= 760 then return 50 end
-  if w <= 320 then return 34 end
   return 40
 end
 
@@ -65,7 +66,6 @@ local function getHorizontalRowH()
   if prof and prof.horizontalRowH then return prof.horizontalRowH end
   local w = _G.LCD_W or 480
   if w >= 760 then return 68 end
-  if w <= 320 then return 48 end
   return 56
 end
 
@@ -74,7 +74,6 @@ local function getSectionH()
   if prof and prof.sectionH then return prof.sectionH end
   local w = _G.LCD_W or 480
   if w >= 760 then return 46 end
-  if w <= 320 then return 32 end
   return 38
 end
 
@@ -83,7 +82,6 @@ local function getStaticSectionH()
   if prof and prof.staticSectionH then return prof.staticSectionH end
   local w = _G.LCD_W or 480
   if w >= 760 then return 46 end
-  if w <= 320 then return 32 end
   return 38
 end
 
