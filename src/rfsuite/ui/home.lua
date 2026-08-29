@@ -771,6 +771,7 @@ local function onBack(source, ev)
         if fromEvent then
           state.suppressBackFrames = 6
         end
+        state.lastBackTick = (type(getTime) == "function" and getTime()) or 0
         scheduleBuildUI(true)
         return
       end
@@ -797,11 +798,11 @@ local function onBack(source, ev)
     if fromEvent then
       state.suppressBackFrames = 6
     end
-    state.lastBackTick = now
+    state.lastBackTick = (type(getTime) == "function" and getTime()) or 0
     scheduleBuildUI(true)
     return
   end
-  state.lastBackTick = now
+  state.lastBackTick = (type(getTime) == "function" and getTime()) or 0
   state.isClosing = true
 end
 
