@@ -182,12 +182,25 @@ local function publishService()
   end
 end
 
+local function computeFblConnected(s)
+  local target = s or state
+  if type(target) ~= "table" then return false end
+  return (target.lastConnected == true)
+    and (target.versionReadCompleted == true)
+    and (not target.unsupportedApi)
+    and (type(target.values) == "table" and type(target.values.apiVersion) == "string" and target.values.apiVersion ~= "" and target.values.apiVersion ~= "0")
+end
+
 local function publish()
   ensureRootState()
   publishService()
   local session = _G.rfsuite.session
   local diagnostics = _G.rfsuite.diagnostics
 
+  local isFblConnected = computeFblConnected(state)
+
+  session.fblConnected = isFblConnected
+  session.rawRfConnected = state.lastConnected == true
   session.apiVersion = state.values.apiVersion
   session.fcVersion = state.values.fcVersion
   session.rfVersion = state.values.rfVersion
@@ -199,6 +212,8 @@ local function publish()
   session.mspLastError = state.mspLastError
   session.mspLastErrorAt = state.mspLastErrorAt
   session.telemetryType = state.protocol
+  diagnostics.fblConnected = isFblConnected
+  diagnostics.rawRfConnected = state.lastConnected == true
   diagnostics.apiVersion = state.values.apiVersion
   diagnostics.fcVersion = state.values.fcVersion
   diagnostics.rfVersion = state.values.rfVersion
@@ -818,6 +833,10 @@ function Runtime.pump()
   state.queue:processQueue(nowSeconds())
   publish()
   return true
+end
+
+function Runtime.isFblConnected()
+  return computeFblConnected(state)
 end
 
 function Runtime.getState()

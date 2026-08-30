@@ -145,16 +145,15 @@ hasMspSensor = function()
 end
 
 isFblConnected = function()
-  local runtimeState = MspRuntime and type(MspRuntime.getState) == "function" and MspRuntime.getState() or nil
-  if type(runtimeState) ~= "table" then
-    return nil
+  if MspRuntime and type(MspRuntime.isFblConnected) == "function" then
+    return MspRuntime.isFblConnected()
   end
-  if runtimeState.lastConnected == true then
-    return true
+
+  local session = getSession()
+  if type(session) == "table" and session.fblConnected ~= nil then
+    return session.fblConnected == true
   end
-  if runtimeState.lastConnected == false then
-    return false
-  end
+
   return nil
 end
 

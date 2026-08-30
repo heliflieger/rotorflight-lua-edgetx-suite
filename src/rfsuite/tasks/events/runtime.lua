@@ -93,7 +93,9 @@ local function publishConnected(val)
   local session = _G.rfsuite.session
   if session.isConnected == val then return end
   session.isConnected = val
+  session.rfConnected = val
   if val == false then
+    session.fblConnected = false
     session.flightcount = 0
     -- The tool and each widget are separate Lua states holding their own copy of what the card
     -- said, and the state that renames is usually not the state that puts the name back. One
@@ -155,6 +157,8 @@ function Events.reset()
   state.linkStableUp = false
   ensureSession()
   _G.rfsuite.session.isConnected = false
+  _G.rfsuite.session.rfConnected = false
+  _G.rfsuite.session.fblConnected = false
   _G.rfsuite.session.modelName = nil
 end
 

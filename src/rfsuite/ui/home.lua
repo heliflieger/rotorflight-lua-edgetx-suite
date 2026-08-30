@@ -492,6 +492,7 @@ state = {
   mspAttached = false,
   mspLastTick = 0,
   fblConnected = false,
+  rfConnected = false,
   infoSessionSnapshot = nil,
   lastAudioTick = 0,
   audioState = {
@@ -1120,33 +1121,17 @@ local function maybeShowMspLinkConfigDialog()
 end
 
 local function readFblConnected()
+  if MspRuntime and type(MspRuntime.isFblConnected) == "function" then
+    return MspRuntime.isFblConnected()
+  end
+
   local root = _G and _G.rfsuite
   local session = root and root.session
-  if type(session) == "table" and session.isConnected ~= nil then
-    return session.isConnected == true
+  if type(session) == "table" and session.fblConnected ~= nil then
+    return session.fblConnected == true
   end
 
-  if not MspRuntime or type(MspRuntime.getState) ~= "function" then
-    return false
-  end
-
-  local mspState = MspRuntime.getState()
-  if type(mspState) ~= "table" then
-    return false
-  end
-
-  -- MSP-Version nicht unterstützt? Dann wie "nicht verbunden" behandeln
-  if mspState.unsupportedApi == true then
-    return false
-  end
-  if mspState.apiSupported == false then
-    return false
-  end
-  if mspState.versionReadCompleted ~= true then
-    return false
-  end
-
-  return mspState.lastConnected == true
+  return false
 end
 
 local function returnToRootOnDisconnect()
@@ -1178,7 +1163,6 @@ local function updateRuntimeMenuConditions()
   local root = _G and _G.rfsuite
   local session = root and root.session
 
-  local wasConnected = state.fblConnected == true
   local nextFblConnected = readFblConnected()
   if state.fblConnected ~= nextFblConnected then
     state.fblConnected = nextFblConnected
@@ -1187,14 +1171,20 @@ local function updateRuntimeMenuConditions()
       if session then
         session.esc4WayDetectedProto = nil
       end
-      if wasConnected then
-        if Audio and type(Audio.resetConnectionState) == "function" then
-          Audio.resetConnectionState(state.audioState)
-        end
-        returnToRootOnDisconnect()
-      end
     end
     scheduleBuildUI(false)
+  end
+
+  local wasRfConnected = state.rfConnected == true
+  local nextRfConnected = (type(session) == "table" and session.isConnected == true)
+  if state.rfConnected ~= nextRfConnected then
+    state.rfConnected = nextRfConnected
+    if not nextRfConnected and wasRfConnected then
+      if Audio and type(Audio.resetConnectionState) == "function" then
+        Audio.resetConnectionState(state.audioState)
+      end
+      returnToRootOnDisconnect()
+    end
   end
 
   local currentMenuId = state.menu.getCurrentMenuId()
@@ -2204,6 +2194,7 @@ function M.init()
   state.closeMemStart = nil
   state.mspLastTick = 0
   state.fblConnected = false
+  state.rfConnected = false
   state.infoSessionSnapshot = nil
   state.mspUnsupportedDialogShown = false
   state.mspUnsupportedVersionShown = nil

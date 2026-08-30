@@ -398,6 +398,15 @@ local function updateConnectionState(self)
     mspProgress = MspRuntime.getProgress()
   end
   local connected = type(runtimeState) == "table" and runtimeState.lastConnected == true
+  local fblConnected = false
+  if MspRuntime and type(MspRuntime.isFblConnected) == "function" then
+    fblConnected = MspRuntime.isFblConnected()
+  elseif type(runtimeState) == "table" then
+    fblConnected = (runtimeState.lastConnected == true)
+      and (runtimeState.versionReadCompleted == true)
+      and (not runtimeState.unsupportedApi)
+      and (type(runtimeState.values) == "table" and type(runtimeState.values.apiVersion) == "string" and runtimeState.values.apiVersion ~= "" and runtimeState.values.apiVersion ~= "0")
+  end
   local hasVoltage = type(self.state.voltage) == "number" and self.state.voltage > 0
   -- The FLAG and not the value. readTelemetry sets `fuelTelemetrySeen` only once a fuel or
   -- smartfuel sensor has actually produced a number, while `state.fuel` is initialised to 0 in
@@ -546,7 +555,8 @@ local function updateConnectionState(self)
     end
   end
 
-  self.state.fblConnected = connected
+  self.state.rfConnected = connected
+  self.state.fblConnected = fblConnected
   self.state.connectionReady = ready
   -- Kept apart from `ready` on purpose. Drawing may start before the connect chain has run;
   -- announcing the model may not, because the announcement needs the name that chain reads.
@@ -1417,7 +1427,7 @@ function Runtime.new(zone, options)
     -- A start, and not merely "not ready": with no flight controller present the gate below is
     -- false for as long as the radio is on, and paying the faster rate for that would be the
     -- whole steady state of a bench radio.
-    local starting = (self.state.fblConnected == true) and (self.connectionReady ~= true)
+    local starting = (self.state.rfConnected == true) and (self.connectionReady ~= true)
     local logicTick = starting and LOGIC_TICK_STARTING_SECONDS or LOGIC_TICK_SECONDS
     if (now - self._lastLogicTick) < logicTick then return self.connectionReady end
     self._lastLogicTick = now
@@ -1442,7 +1452,7 @@ function Runtime.new(zone, options)
     -- so that lastFlightMaxCurrent, lastMinVoltage, consumedMah etc. remain visible.
     -- Use hadInflightFlight instead of flightMode, because flightMode can jump to preflight
     -- when sensors go offline, while hadInflightFlight stays true until next session.
-    local isPostflightOffline = (self.state.hadInflightFlight == true) and not isFblConnected
+    local isPostflightOffline = (self.state.hadInflightFlight == true) and (self.state.rfConnected ~= true)
     if not isPostflightOffline then
       readTelemetry(self.state)
     end
