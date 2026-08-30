@@ -151,6 +151,18 @@ function M.build(ctx)
   -- Always sync sequence counter to prevent rebuild loop in empty state
   state.lastSeq = rf and rf.log_history_seq or 0
 
+  -- Background panel for the log view to guarantee readable contrast across all EdgeTX themes
+  -- (prevents white text on light blue or unstyled page backgrounds)
+  children[#children + 1] = {
+    type   = "rectangle",
+    x      = x,
+    y      = y,
+    w      = w,
+    h      = h,
+    color  = COLOR_THEME_PRIMARY3,
+    filled = true
+  }
+
   local history = rf and rf.log_history
   if not history or #history == 0 then
     children[#children + 1] = {
