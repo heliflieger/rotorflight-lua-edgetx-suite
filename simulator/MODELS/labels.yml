@@ -3,8 +3,8 @@ Labels:
 Sort: 1
 Models:
   model1.yml:
-    hash: "a1350000115d38ae"
-    name: "MODEL01"
+    hash: "9f3500001e5d63a9"
+    name: "Pilot"
     mod0type: 5
     labels: ""
     bitmap: "Pilot2.png"

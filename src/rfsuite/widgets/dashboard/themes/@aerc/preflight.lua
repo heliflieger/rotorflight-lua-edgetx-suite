@@ -5,7 +5,15 @@ local function loadAercCommon()
     return _G.__rfsuiteThemeAercCommonModule
   end
 
-  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@aerc/common.lua", "t")
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    local mod = _G.rfsuite.require("widgets/dashboard/themes/@aerc/common.lua")
+    if mod and type(mod) == "table" then
+      return mod
+    end
+  end
+
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@aerc/common.lua", mode)
   if not chunk then return nil end
   local ok, mod = pcall(chunk)
   if ok and type(mod) == "table" then
@@ -14,7 +22,7 @@ local function loadAercCommon()
   return nil
 end
 
-local AercCommon = loadAercCommon()
+local AercCommon = loadAercCommon() or {}
 
 local function cfgValue(key, fallback, state)
   local cfg = state and state.themeConfig or nil

@@ -2,14 +2,24 @@ local Engine = {}
 
 local requireModule = (_G.rfsuite and _G.rfsuite.require)
 if not requireModule then
-  local rChunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/require.lua", "t")
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local rChunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/require.lua", mode)
   if rChunk then
-    requireModule = rChunk()
+    local ok, res = pcall(rChunk)
+    if ok and type(res) == "function" then
+      requireModule = res
+    end
   end
 end
 requireModule = requireModule or function(path)
   local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
-  return assert(loadScript(fullPath, "t"))()
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(fullPath, mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" then return mod end
+  end
+  return nil
 end
 
 local Common = requireModule("widgets/dashboard/themes/default/common.lua")

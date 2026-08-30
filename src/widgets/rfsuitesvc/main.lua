@@ -13,12 +13,29 @@ if lvgl == nil then
 end
 
 local function create(zone, options)
-  local requireChunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/require.lua", "t")
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local requireChunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/require.lua", mode)
   if requireChunk then
-    requireChunk()
+    pcall(requireChunk)
   end
-  local factory = assert(loadScript("/WIDGETS/rfsuitesvc/app.lua", "t"))
-  return factory(zone, options)
+  local appChunk = loadScript("/WIDGETS/rfsuitesvc/app.lua", mode)
+  if not appChunk then
+    appChunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/service/runtime.lua", mode)
+    if appChunk then
+      local ok, Runtime = pcall(appChunk)
+      if ok and type(Runtime) == "table" and type(Runtime.new) == "function" then
+        return Runtime.new(zone, options)
+      end
+    end
+    return nil
+  end
+  local ok, factory = pcall(appChunk)
+  if ok and type(factory) == "function" then
+    return factory(zone, options)
+  elseif ok and type(factory) == "table" and type(factory.new) == "function" then
+    return factory.new(zone, options)
+  end
+  return nil
 end
 
 -- A caught error, on its way to the card, so the reason a pass failed outlives the pass. The

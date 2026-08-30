@@ -15,7 +15,15 @@ local function loadSrbCommon()
     return _G.__rfsuiteThemeSrbCommonModule
   end
 
-  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@srb-rc/common.lua", "t")
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    local mod = _G.rfsuite.require("widgets/dashboard/themes/@srb-rc/common.lua")
+    if mod and type(mod) == "table" then
+      return mod
+    end
+  end
+
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@srb-rc/common.lua", mode)
   if not chunk then return nil end
   local ok, mod = pcall(chunk)
   if ok and type(mod) == "table" then
@@ -27,7 +35,7 @@ local function loadSrbCommon()
   return nil
 end
 
-local SrbCommon = loadSrbCommon()
+local SrbCommon = loadSrbCommon() or {}
 
 local function cfgValue(key, fallback, state)
   local cfg = state and state.themeConfig or nil
