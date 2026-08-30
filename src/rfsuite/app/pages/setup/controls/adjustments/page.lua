@@ -22,11 +22,8 @@ local ConfirmDialog = nil
 local ApiVersion = nil
 local t = nil
 
--- The firmware's own limit: MAX_AUX_CHANNEL_COUNT = MAX_SUPPORTED_RC_CHANNEL_COUNT (18)
--- - CONTROL_CHANNEL_COUNT (5) = 13, the same on RF 4.5.x and 4.6.x. The CLI refuses a
--- channel index past it, and rc_adjustments.c indexes rcInput[] out of bounds with one,
--- so the pickers must not offer AUX 14 and above.
-local AUX_CHANNEL_COUNT_FALLBACK = 13
+-- Rotorflight firmware limit: MAX_SUPPORTED_RC_CHANNEL_COUNT (18) - CONTROL_CHANNEL_COUNT (5) = 13 (AUX 1..13, indices 0..12)
+local AUX_CHANNEL_COUNT = 13
 local RANGE_MIN = 875
 local RANGE_MAX = 2125
 local RANGE_STEP = 5
@@ -313,7 +310,7 @@ local function channelRawToUs(value)
 end
 
 local function auxIndexToMember(auxIndex)
-  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT - 1)
   local session = getSession()
   local rx = session and session.rx
   local map = rx and rx.map or nil
@@ -454,8 +451,10 @@ end
 local function sanitizeAdjustmentRange(adjRange)
   if type(adjRange) ~= "table" then adjRange = {} end
   adjRange.adjFunction = clamp(math.floor(adjRange.adjFunction or 0), 0, 255)
-  adjRange.enaChannel = clamp(math.floor(adjRange.enaChannel or 0), 0, 255)
-  adjRange.adjChannel = clamp(math.floor(adjRange.adjChannel or 0), 0, 255)
+  if adjRange.enaChannel ~= 255 then
+    adjRange.enaChannel = clamp(math.floor(adjRange.enaChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
+  end
+  adjRange.adjChannel = clamp(math.floor(adjRange.adjChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
   adjRange.adjStep = clamp(math.floor(adjRange.adjStep or 0), 0, 255)
 
   if type(adjRange.enaRange) ~= "table" then adjRange.enaRange = { start = 1300, ["end"] = 1700 } end
@@ -870,15 +869,19 @@ local function queueAdjustmentsWrite(requestRebuild, i18n)
     local minLo, minHi = toS16Bytes(adjRange.adjMin)
     local maxLo, maxHi = toS16Bytes(adjRange.adjMax)
 
+    local enaChannel = adjRange.enaChannel
+    if enaChannel ~= 255 then
+      enaChannel = clamp(math.floor(enaChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
+    end
+    local adjChannel = clamp(math.floor(adjRange.adjChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
+
     local payload = {
       slotIndex - 1,
       clamp(adjRange.adjFunction, 0, 255),
-      -- 255 is the Always sentinel; any real channel index is bounded so a stale
-      -- selection from an older save cannot reach the firmware out of range.
-      adjRange.enaChannel == 255 and 255 or clamp(adjRange.enaChannel, 0, AUX_CHANNEL_COUNT_FALLBACK - 1),
+      enaChannel,
       toS8Byte(enaStartStep),
       toS8Byte(enaEndStep),
-      clamp(adjRange.adjChannel, 0, AUX_CHANNEL_COUNT_FALLBACK - 1),
+      adjChannel,
       toS8Byte(adjRange1StartStep),
       toS8Byte(adjRange1EndStep),
       toS8Byte(adjRange2StartStep),
@@ -930,7 +933,7 @@ local function checkLiveUpdates()
   -- 1) Auto-detect Enable Channel
   local enaAutoState = ui.autoDetectEnaSlots[slot]
   if enaAutoState then
-    for auxIdx = 0, AUX_CHANNEL_COUNT_FALLBACK - 1 do
+    for auxIdx = 0, AUX_CHANNEL_COUNT - 1 do
       local us = getAuxPulseUs(auxIdx)
       if us then
         if not enaAutoState.baseline then enaAutoState.baseline = {} end
@@ -954,7 +957,7 @@ local function checkLiveUpdates()
   -- 2) Auto-detect Value Channel
   local adjAutoState = ui.autoDetectAdjSlots[slot]
   if adjAutoState then
-    for auxIdx = 0, AUX_CHANNEL_COUNT_FALLBACK - 1 do
+    for auxIdx = 0, AUX_CHANNEL_COUNT - 1 do
       local us = getAuxPulseUs(auxIdx)
       if us then
         if not adjAutoState.baseline then adjAutoState.baseline = {} end
@@ -1309,7 +1312,7 @@ function M.build(ctx)
   }
 
   local auxOptions = { "AUTO", "Always" }
-  for i = 1, AUX_CHANNEL_COUNT_FALLBACK do
+  for i = 1, AUX_CHANNEL_COUNT do
     auxOptions[#auxOptions + 1] = "AUX " .. tostring(i)
   end
 
@@ -1337,7 +1340,7 @@ function M.build(ctx)
         adjRange.enaRange["end"] = 1500
       else
         ui.autoDetectEnaSlots[ui.selectedRangeIndex] = nil
-        adjRange.enaChannel = clamp(val - 3, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+        adjRange.enaChannel = clamp(val - 3, 0, AUX_CHANNEL_COUNT - 1)
       end
       ui.dirtySlots[ui.selectedRangeIndex] = true
       ui.dirty = true
@@ -1483,7 +1486,7 @@ function M.build(ctx)
     }
 
     local adjAuxOptions = { "AUTO" }
-    for i = 1, AUX_CHANNEL_COUNT_FALLBACK do
+    for i = 1, AUX_CHANNEL_COUNT do
       adjAuxOptions[#adjAuxOptions + 1] = "AUX " .. tostring(i)
     end
 
@@ -1503,7 +1506,7 @@ function M.build(ctx)
           ui.autoDetectAdjSlots[ui.selectedRangeIndex] = { baseline = nil }
         else
           ui.autoDetectAdjSlots[ui.selectedRangeIndex] = nil
-          adjRange.adjChannel = clamp(val - 2, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+          adjRange.adjChannel = clamp(val - 2, 0, AUX_CHANNEL_COUNT - 1)
         end
         ui.dirtySlots[ui.selectedRangeIndex] = true
         ui.dirty = true

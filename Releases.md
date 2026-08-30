@@ -27,6 +27,9 @@
   - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
 
 ### Bug Fixes & Improvements
+- **Adjustments & Modes AUX Channel Bounds (`setup/controls/adjustments`, `setup/controls/modes`)**:
+  - Capped AUX channel selection pickers and auto-detection loops at the firmware limit `AUX 1` .. `AUX 13` (`MAX_AUX_CHANNEL_COUNT = 13` = `MAX_SUPPORTED_RC_CHANNEL_COUNT - CONTROL_CHANNEL_COUNT`), removing unreachable `AUX 14` .. `AUX 20` entries.
+  - Added strict write payload and sanitization clamping against `AUX_CHANNEL_COUNT - 1` (indices 0..12) to prevent out-of-bounds array indexing in flight controller receiver inputs.
 - **Start Screen Bounded Wait & Startup Race Elimination (`ui/home.lua`)**:
   - Enforced an upper bound (max 2.0s offline, max 3.5s online) on the initial startup screen, preventing indefinite hangs when connecting to powered receivers with unresponsive flight controllers or wedged MSP links.
   - Eliminated the 0.6s timer race (0.45s vs 8.75s) by resolving the start screen as soon as core MSP identity (API version + MCU UID) is established, allowing onconnect tasks to run asynchronously in the background.

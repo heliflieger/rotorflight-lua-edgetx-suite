@@ -22,7 +22,8 @@ local ConfirmDialog = nil
 local t = nil
 
 local MODE_LOGIC_OPTIONS = {"OR", "AND"}
-local AUX_CHANNEL_COUNT_FALLBACK = 20
+-- Rotorflight firmware limit: MAX_SUPPORTED_RC_CHANNEL_COUNT (18) - CONTROL_CHANNEL_COUNT (5) = 13 (AUX 1..13, indices 0..12)
+local AUX_CHANNEL_COUNT = 13
 local RANGE_MIN = 875
 local RANGE_MAX = 2125
 local RANGE_STEP = 5
@@ -114,7 +115,7 @@ local function channelRawToUs(value)
 end
 
 local function auxIndexToMember(auxIndex)
-  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT - 1)
   local session = getSession()
   local rx = session and session.rx
   local map = rx and rx.map or nil
@@ -142,7 +143,7 @@ end
 
 local function buildAuxOptions(i18n)
   local options = { "AUTO" }
-  for i = 1, AUX_CHANNEL_COUNT_FALLBACK do
+  for i = 1, AUX_CHANNEL_COUNT do
     options[#options + 1] = "AUX " .. tostring(i)
   end
   return options
@@ -410,7 +411,7 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
         ui.autoDetectSlots[slot] = { baseline = nil }
       else
         ui.autoDetectSlots[slot] = nil
-        rawRange.auxChannelIndex = clamp(val - 2, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+        rawRange.auxChannelIndex = clamp(val - 2, 0, AUX_CHANNEL_COUNT - 1)
       end
       ui.dirty = true
     end
@@ -736,7 +737,7 @@ local function queueModesWrite(requestRebuild, i18n)
     local payload = {
       slot - 1,
       clamp(range.id or 0, 0, 255),
-      clamp(range.auxChannelIndex or 0, 0, 255),
+      clamp(range.auxChannelIndex or 0, 0, AUX_CHANNEL_COUNT - 1),
       toS8Byte(startStep),
       toS8Byte(endStep),
       clamp(extra.modeLogic or 0, 0, 1),
@@ -797,7 +798,7 @@ local function checkLiveUpdates()
     if rawRange then
       local autoState = ui.autoDetectSlots[slot]
       if autoState then
-        for auxIdx = 0, AUX_CHANNEL_COUNT_FALLBACK - 1 do
+        for auxIdx = 0, AUX_CHANNEL_COUNT - 1 do
           local us = getAuxPulseUs(auxIdx)
           if us then
             if not autoState.baseline then autoState.baseline = {} end
