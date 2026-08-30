@@ -223,11 +223,10 @@ return {
       unsupported_message_suffix = " wird nicht unterstuetzt.",
       supported_label = "Unterstuetzt: ",
       init_progress = "MSP Initialisierung",
-      link_config_title = "MSP-Link-Konfiguration",
-      link_config_message_1 = "Initiales MSP-Lesen ist fehlgeschlagen (API_VERSION).",
-      link_config_message_2 = "Sicherstellen, dass FEATURE_TELEMETRY aktiv und der MSP-Serial-Port konfiguriert ist.",
-      link_config_message_3 = "Packet Rate und Packet Ratio muessen zum ELRS-Link passen.",
-      link_config_message_4 = "Danach neu verbinden und Info erneut oeffnen."
+      no_reply_title = "Flight Controller antwortet nicht",
+      no_reply_message_1 = "Keine MSP-Antwort vom Flight Controller empfangen.",
+      no_reply_message_2 = "Bitte pruefen, ob FEATURE_TELEMETRY aktiviert und der MSP-Port konfiguriert ist.",
+      no_reply_message_3 = "Bei ELRS: Pruefen, ob Packet Rate und Packet Ratio uebereinstimmen."
     },
     pages = {
       setup_mixer = {
@@ -1861,7 +1860,8 @@ return {
       title = "SERVICE",
       waiting_for_link = "Warte auf MSP-Verbindung",
       loading = "Lade Daten...",
-      connected = "Verbunden"
+      connected = "Verbunden",
+      no_msp_reply = "Keine MSP-Antwort"
     }
   }
 }

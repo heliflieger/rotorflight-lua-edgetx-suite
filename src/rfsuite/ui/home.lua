@@ -1064,23 +1064,24 @@ local function maybeShowMspLinkConfigDialog()
     return value
   end
 
+  local errKind = nil
   local errMsg = nil
   local errAt = 0
   if type(session) == "table" then
+    errKind = session.mspErrorKind or errKind
     errMsg = session.mspLastError or errMsg
     errAt = tonumber(session.mspLastErrorAt) or errAt
   end
-  if (not errMsg or errMsg == "") and type(diagnostics) == "table" then
+  if (not errKind or errKind == "") and type(diagnostics) == "table" then
+    errKind = diagnostics.mspErrorKind or errKind
     errMsg = diagnostics.mspLastError or errMsg
     errAt = tonumber(diagnostics.mspLastErrorAt) or errAt
   end
 
-  if type(errMsg) ~= "string" or errMsg == "" then
-    state.mspLinkConfigWarningAt = 0
-    return
-  end
-
-  if not string.find(errMsg, "cmd=1", 1, true) then
+  if errKind ~= "no_reply" then
+    if not errMsg or errMsg == "" then
+      state.mspLinkConfigWarningAt = 0
+    end
     return
   end
 
@@ -1088,12 +1089,11 @@ local function maybeShowMspLinkConfigDialog()
     return
   end
 
-  local title = tr("app.msp.link_config_title", "MSP link configuration")
-  local l1 = tr("app.msp.link_config_message_1", "Initial MSP read failed (API_VERSION).")
-  local l2 = tr("app.msp.link_config_message_2", "Please check Rotorflight telemetry settings.")
-  local l3 = tr("app.msp.link_config_message_3", "Packet Rate and Packet Ratio must match the ELRS link.")
-  local l4 = tr("app.msp.link_config_message_4", "Then reconnect and open Info again.")
-  local message = l1 .. "\n" .. l2 .. "\n" .. l3 .. "\n" .. l4
+  local title = tr("app.msp.no_reply_title", "Flight Controller Not Responding")
+  local l1 = tr("app.msp.no_reply_message_1", "No MSP reply from flight controller.")
+  local l2 = tr("app.msp.no_reply_message_2", "Check that FEATURE_TELEMETRY is enabled and the MSP serial port is configured.")
+  local l3 = tr("app.msp.no_reply_message_3", "For ELRS, verify that Packet Rate and Packet Ratio match.")
+  local message = l1 .. "\n\n" .. l2 .. "\n\n" .. l3
 
   local dialog = getMspUnsupportedDialogModule()
   if dialog then
@@ -2638,15 +2638,18 @@ function M.run(event, touchState)
 
       -- Finish initial load when core MSP identity is resolved or timeout is reached.
       -- If the FBL is offline, we enter the menu after a short timeout (2s).
-      -- If connected but the FC is unresponsive or wedged, we bound the wait (3.5s)
-      -- so the pilot reaches the main menu with locked tiles rather than hanging on the start screen indefinitely.
+      -- If connected with RF link, we wait for MSP handshake or bounded connect timeout (6s).
+      -- If an explicit MSP error occurs or timeout is reached, we unblock the start screen
+      -- so the pilot reaches the main menu with a clear diagnostic notice instead of hanging indefinitely.
       local mspState = nil
       if MspRuntime and type(MspRuntime.getState) == "function" then
         mspState = MspRuntime.getState()
       end
       local isConnected = mspState and mspState.lastConnected == true
+      local hasMspError = (mspState and mspState.mspLastError ~= nil and mspState.mspLastError ~= "")
+        or (_G.rfsuite and _G.rfsuite.session and _G.rfsuite.session.mspLastError ~= nil and _G.rfsuite.session.mspLastError ~= "")
       local elapsed = now - (state.initialLoadStartTick or now)
-      local timeoutReached = (not isConnected and elapsed > 200) or (elapsed > 350)
+      local timeoutReached = (not isConnected and elapsed > 200) or hasMspError or (elapsed > 600)
 
       local mspSettled = (isConnected and mspProgress and mspProgress.done >= mspProgress.total)
                          or timeoutReached

@@ -56,6 +56,11 @@
   - Decoupled `fblConnected` (true Flight Controller MSP handshake) from `rfConnected` / `session.isConnected` (pure RF telemetry link presence).
   - Resolved an issue where main menu tiles (`enabledWhen = "fblConnected"`) unlocked 0.6s after RF link connection based on RSSI alone before any MSP reply arrived from the flight controller.
   - Required verified API version handshake (`versionReadCompleted == true` and valid `apiVersion`) before unlocking FC-dependent configuration tiles, keeping tiles safely locked when an FC is unpowered, booting, or silent.
+- **Unresponsive Flight Controller Diagnosis & Connect Timeout (`ui/home.lua`, `tasks/msp`, `widgets/service`)**:
+  - Unblocked the initial startup screen when a flight controller is silent (e.g. freshly flashed board with `FEATURE_TELEMETRY` disabled, or misconfigured MSP port), dismissing the loading spinner after ~6.0s instead of hanging indefinitely.
+  - Automatically displays an actionable diagnostic notice explaining the root cause (*"No MSP reply from flight controller. Check that FEATURE_TELEMETRY is enabled and the MSP serial port is configured."*) and providing ELRS packet rate/ratio hints.
+  - Reduced initial `API_VERSION` query timeout from 5.0s to 1.5s with 3 retries for rapid failure detection (~6s total) and exposed `session.mspLastError` and `session.mspErrorKind` across session and diagnostics state.
+  - Updated the service widget to clearly report `"No MSP reply"` rather than `"Loading data... (0/5)"` when telemetry link is active but the flight controller remains silent.
 - **Start Screen Bounded Wait & Startup Race Elimination (`ui/home.lua`)**:
   - Enforced an upper bound (max 2.0s offline, max 3.5s online) on the initial startup screen, preventing indefinite hangs when connecting to powered receivers with unresponsive flight controllers or wedged MSP links.
   - Eliminated the 0.6s timer race (0.45s vs 8.75s) by resolving the start screen as soon as core MSP identity (API version + MCU UID) is established, allowing onconnect tasks to run asynchronously in the background.

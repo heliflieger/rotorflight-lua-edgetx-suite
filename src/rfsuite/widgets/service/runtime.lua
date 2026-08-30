@@ -175,14 +175,20 @@ local function readStatus(self)
   end
 
   local t = (self.i18n and type(self.i18n.t) == "function") and self.i18n.t or nil
+  local mspErr = (s and s.mspLastError) or (_G.rfsuite and _G.rfsuite.diagnostics and _G.rfsuite.diagnostics.mspLastError)
+  local mspErrorKind = (s and s.mspErrorKind) or (_G.rfsuite and _G.rfsuite.diagnostics and _G.rfsuite.diagnostics.mspErrorKind)
   if not status.link then
     status.text = (t and t("widgets.service.waiting_for_link")) or "Waiting for MSP link"
   elseif not status.tasksDone then
-    local text = (t and t("widgets.service.loading")) or "Loading data..."
-    if status.total and status.total > 0 then
-      text = text .. " (" .. tostring(status.done) .. "/" .. tostring(status.total) .. ")"
+    if mspErrorKind == "no_reply" or (mspErr and mspErr ~= "") then
+      status.text = (t and t("widgets.service.no_msp_reply")) or "No MSP reply"
+    else
+      local text = (t and t("widgets.service.loading")) or "Loading data..."
+      if status.total and status.total > 0 then
+        text = text .. " (" .. tostring(status.done) .. "/" .. tostring(status.total) .. ")"
+      end
+      status.text = text
     end
-    status.text = text
   else
     status.text = (t and t("widgets.service.connected")) or "Connected"
   end

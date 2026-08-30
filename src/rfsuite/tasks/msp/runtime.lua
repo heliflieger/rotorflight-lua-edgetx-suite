@@ -211,6 +211,7 @@ local function publish()
   session.apiLimited = state.limitedApi == true
   session.mspLastError = state.mspLastError
   session.mspLastErrorAt = state.mspLastErrorAt
+  session.mspErrorKind = state.mspErrorKind
   session.telemetryType = state.protocol
   diagnostics.fblConnected = isFblConnected
   diagnostics.rawRfConnected = state.lastConnected == true
@@ -222,11 +223,13 @@ local function publish()
   diagnostics.apiLimited = state.limitedApi == true
   diagnostics.mspLastError = state.mspLastError
   diagnostics.mspLastErrorAt = state.mspLastErrorAt
+  diagnostics.mspErrorKind = state.mspErrorKind
 end
 
-local function setMspError(message, now)
+local function setMspError(message, now, kind)
   state.mspLastError = tostring(message or "")
   state.mspLastErrorAt = now or nowSeconds()
+  state.mspErrorKind = kind or (message and "error" or nil)
 end
 
 local function isApiVersionSupported(version)
@@ -463,8 +466,8 @@ local function enqueueVersionReads(now)
       state.consecutiveApiVersionFailures = (state.consecutiveApiVersionFailures or 0) + 1
       local backoff = math.min(30, 2 + state.consecutiveApiVersionFailures * 2)
       state.requestBackoffUntil = nowSeconds() + backoff
-      setMspError("API_VERSION read failed (cmd=1)", nowSeconds())
-      log("API_VERSION read failed repeatedly; backoff " .. tostring(backoff) .. "s", "warn")
+      setMspError("No MSP reply from flight controller (cmd=1). Check that FEATURE_TELEMETRY is enabled and the MSP serial port is configured.", nowSeconds(), "no_reply")
+      log("API_VERSION read failed repeatedly (no MSP reply); backoff " .. tostring(backoff) .. "s", "warn")
       state.pendingVersionRead = true
       publish()
     end
@@ -564,6 +567,15 @@ local function doDisconnect(now, reason, keepLink)
   -- Ensure runtime reflects disconnected state.
   if not keepLink then
     state.lastConnected = false
+    state.mspLastError = nil
+    state.mspLastErrorAt = 0
+    state.mspErrorKind = nil
+    state.consecutiveApiVersionFailures = 0
+    state.requestBackoffUntil = 0
+  else
+    if type(reason) == "string" and reason ~= "" then
+      setMspError(reason, now)
+    end
   end
 
   if type(reason) == "string" and reason ~= "" then
@@ -757,6 +769,10 @@ function Runtime.tick()
       state.unsupportedApi = false
       state.limitedApi = false
       state.unsupportedApiLogged = false
+      state.mspLastError = nil
+      state.mspLastErrorAt = 0
+      state.consecutiveApiVersionFailures = 0
+      state.requestBackoffUntil = 0
       log("MSP link connected", "info")
       state.pendingVersionRead = true
       state.pendingUidRead = true

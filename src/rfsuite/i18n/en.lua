@@ -223,11 +223,10 @@ return {
       unsupported_message_suffix = " is not supported.",
       supported_label = "Supported: ",
       init_progress = "MSP init",
-      link_config_title = "MSP Link Configuration",
-      link_config_message_1 = "Initial MSP read failed (API_VERSION).",
-      link_config_message_2 = "Ensure FEATURE_TELEMETRY is enabled and MSP serial port is configured.",
-      link_config_message_3 = "Packet Rate and Packet Ratio must match the ELRS link.",
-      link_config_message_4 = "Then reconnect and open Info again."
+      no_reply_title = "Flight Controller Not Responding",
+      no_reply_message_1 = "No MSP reply from flight controller.",
+      no_reply_message_2 = "Check that FEATURE_TELEMETRY is enabled and the MSP serial port is configured.",
+      no_reply_message_3 = "For ELRS, verify that Packet Rate and Packet Ratio match."
     },
     pages = {
       setup_mixer = {
@@ -1860,7 +1859,8 @@ return {
       title = "SERVICE",
       waiting_for_link = "Waiting for MSP link",
       loading = "Loading data...",
-      connected = "Connected"
+      connected = "Connected",
+      no_msp_reply = "No MSP reply"
     }
   }
 }
