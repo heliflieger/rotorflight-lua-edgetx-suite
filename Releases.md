@@ -30,6 +30,10 @@
 - **Adjustments & Modes AUX Channel Bounds (`setup/controls/adjustments`, `setup/controls/modes`)**:
   - Capped AUX channel selection pickers and auto-detection loops at the firmware limit `AUX 1` .. `AUX 13` (`MAX_AUX_CHANNEL_COUNT = 13` = `MAX_SUPPORTED_RC_CHANNEL_COUNT - CONTROL_CHANNEL_COUNT`), removing unreachable `AUX 14` .. `AUX 20` entries.
   - Added strict write payload and sanitization clamping against `AUX_CHANNEL_COUNT - 1` (indices 0..12) to prevent out-of-bounds array indexing in flight controller receiver inputs.
+- **Onconnect API Version Task Disconnect Sentinel Handling (`tasks/events/onconnect/tasks/apiversion.lua`)**:
+  - Fixed an issue where the `apiversion` onconnect task immediately completed on reconnect due to the disconnect sentinel `"0"` being truthy and non-empty.
+  - Added explicit check rejecting `"0"` alongside `nil` and `""` so the connect chain properly waits for a verified MSP API version read.
+  - Implemented `M.reset()` on the `apiversion` task to ensure clean state resets across connect/disconnect cycles.
 - **Start Screen Bounded Wait & Startup Race Elimination (`ui/home.lua`)**:
   - Enforced an upper bound (max 2.0s offline, max 3.5s online) on the initial startup screen, preventing indefinite hangs when connecting to powered receivers with unresponsive flight controllers or wedged MSP links.
   - Eliminated the 0.6s timer race (0.45s vs 8.75s) by resolving the start screen as soon as core MSP identity (API version + MCU UID) is established, allowing onconnect tasks to run asynchronously in the background.

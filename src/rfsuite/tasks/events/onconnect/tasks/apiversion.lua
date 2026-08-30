@@ -37,7 +37,10 @@ function M.wakeup()
   local mspState = msp and type(msp.getState) == "function" and msp.getState()
 
   -- Wait until API version has been read or MSP runtime decided it won't be read
-  if (not session.apiVersion or session.apiVersion == "") and mspState and mspState.pendingVersionRead == true then
+  local apiVersion = session.apiVersion
+  if (not apiVersion or apiVersion == "" or tostring(apiVersion) == "0")
+      and mspState
+      and (mspState.pendingVersionRead == true or mspState.versionReadCompleted ~= true) then
     return
   end
 
@@ -68,6 +71,10 @@ end
 
 function M.isComplete()
   return done
+end
+
+function M.reset()
+  done = false
 end
 
 return M
