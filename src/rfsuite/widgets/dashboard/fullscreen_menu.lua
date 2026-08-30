@@ -16,7 +16,7 @@ function M.build(children, widget)
   local dX = 0
   local dY = 0
   
-  local t = (widget.i18n and type(widget.i18n.t) == "function") and widget.i18n.t or function(_, k, f) return f end
+  local t = (widget.i18n and type(widget.i18n.t) == "function") and widget.i18n.t or function(k, f) return f or k end
 
   local bg_color = COLOR_THEME_PRIMARY3 or BLACK
   if bg_color == BLACK and lcd and type(lcd.RGB) == "function" then

@@ -35,6 +35,9 @@
   - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
 
 ### Bug Fixes & Improvements
+- **Dashboard Widget i18n Status Line & Fullscreen Menu Fallback (`widgets/dashboard`)**:
+  - Localized the soft timeout connection splash status line (`"Connected with partial telemetry"`) via `widgets.dashboard.connected_partial_telemetry`.
+  - Corrected the degenerate fallback translator function signature in `fullscreen_menu.lua` from `function(_, k, f)` to `function(k, f)` so fallback label strings are properly returned instead of `nil` when i18n context is unavailable.
 - **Telemetry Sensor Status Initialization (`tasks/events/onconnect`, `app/pages/tools/diagnostics`)**:
   - Load telemetry configuration during the connection chain and distinguish an unloaded configuration from a validation failure, preventing a false `ERROR` before the first sensor read.
 - **Housekeeping Queue Starvation & Dependency Loading Order (`tasks/msp/runtime.lua`, `queue.lua`)**:

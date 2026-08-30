@@ -527,7 +527,7 @@ local function updateConnectionState(self)
   elseif not ready then
     statusLine = (t and t("widgets.dashboard.connected_starting")) or "Connected, starting dashboard..."
   elseif softTimeoutReady then
-    statusLine = "Connected with partial telemetry"
+    statusLine = (t and t("widgets.dashboard.connected_partial_telemetry")) or "Connected with partial telemetry"
   end
 
   if self.connectionReady ~= ready then
