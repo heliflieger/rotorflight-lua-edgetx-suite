@@ -43,6 +43,11 @@
   - Fixed an issue where the `apiversion` onconnect task immediately completed on reconnect due to the disconnect sentinel `"0"` being truthy and non-empty.
   - Added explicit check rejecting `"0"` alongside `nil` and `""` so the connect chain properly waits for a verified MSP API version read.
   - Implemented `M.reset()` on the `apiversion` task to ensure clean state resets across connect/disconnect cycles.
+- **Unified Visual Language & Save/Notice Modal Consolidation (`ui/home.lua`, `controls/modes`, `controls/adjustments`, `dashboard/theme`, `splash.lua`)**:
+  - Eliminated conflicting visual vocabularies during save operations where native EdgeTX blue message dialogs (`lvgl.message`) were raised over the suite's flat in-progress save overlay, which previously blocked the Lua `run()` loop and required keyboard dismissal.
+  - Standardized all save outcome reporting (success and failure) to route through `ctx.reportSave()` and `reportSaveOutcome()`, displaying unified non-blocking notice overlays with touch- and key-navigable dismissal.
+  - Replaced native modal alerts in `modes`, `adjustments`, and `theme` settings with in-suite notices (`ui.notice` / `LoadingOverlay.appendNotice`), ensuring the run loop advances smoothly and UI rebuilds take place immediately.
+  - Harmonized the dashboard widget connection splash (`widgets/dashboard/splash.lua`) color palette with the core tool start screen using semantic theme tokens (`COLOR_THEME_PRIMARY3`, `COLOR_THEME_PRIMARY2`), creating a unified visual identity across standalone tools and telemetry widgets.
 - **Start Screen Bounded Wait & Startup Race Elimination (`ui/home.lua`)**:
   - Enforced an upper bound (max 2.0s offline, max 3.5s online) on the initial startup screen, preventing indefinite hangs when connecting to powered receivers with unresponsive flight controllers or wedged MSP links.
   - Eliminated the 0.6s timer race (0.45s vs 8.75s) by resolving the start screen as soon as core MSP identity (API version + MCU UID) is established, allowing onconnect tasks to run asynchronously in the background.

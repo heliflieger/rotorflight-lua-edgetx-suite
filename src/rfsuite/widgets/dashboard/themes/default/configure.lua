@@ -111,11 +111,21 @@ end
 function M.onSave(ctx)
   saveConfig(ctx.preferences)
   local ok, err = ctx.savePreferences()
-  if lvgl and lvgl.message then
-    local i18n = ctx.i18n
-    local title = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_title") or "Error"
-    local message = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_message") or "Save failed"
-    lvgl.message({ title = title, message = message .. ": " .. tostring(err or "io") })
+  if ok then
+    ui.dirty = false
+    if ctx and type(ctx.reportSave) == "function" then
+      local i18n = ctx.i18n
+      local title = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.saved_title") or "Saved"
+      local message = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.saved_message") or "Theme settings saved"
+      ctx.reportSave({ ok = true, title = title, message = message })
+    end
+  else
+    if ctx and type(ctx.reportSave) == "function" then
+      local i18n = ctx.i18n
+      local title = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_title") or "Error"
+      local message = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_message") or "Save failed"
+      ctx.reportSave({ title = title, message = message .. ": " .. tostring(err or "io") })
+    end
   end
   return true
 end

@@ -1665,6 +1665,8 @@ return {
         value_theme_inflight = "DEFAULT",
         value_theme_postflight = "DEFAULT",
         value_model_override = "DISABLED",
+        saved_title = "Saved",
+        saved_message = "Theme settings saved",
         save_error_title = "Error",
         save_error_message = "Save failed"
       },
@@ -1709,6 +1711,8 @@ return {
         help_message = "Configure settings exposed by the selected dashboard theme.",
         value_theme_config = "OPEN",
         value_connection_guard = "ON",
+        saved_title = "Saved",
+        saved_message = "Theme settings saved",
         save_error_title = "Error",
         save_error_message = "Save failed"
       },

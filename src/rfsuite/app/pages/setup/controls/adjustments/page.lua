@@ -398,22 +398,24 @@ end
 
 local function getChannelUsForRangeSet(channelIndex, autoTable, slot, i18n)
   if autoTable and autoTable[slot] then
-    if lvgl and lvgl.message then
-      lvgl.message({
-        title = pageText(i18n, "title", "Adjustments"),
-        message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Adjustments"),
+      message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return nil
   end
 
   local us = getAuxPulseUs(channelIndex or 0)
   if not us then
-    if lvgl and lvgl.message then
-      lvgl.message({
-        title = pageText(i18n, "title", "Adjustments"),
-        message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Adjustments"),
+      message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return nil
   end
@@ -768,7 +770,7 @@ local function startLoad(requestRebuild)
   return true
 end
 
-local function queueAdjustmentsWrite(requestRebuild, i18n)
+local function queueAdjustmentsWrite(requestRebuild, i18n, ctx)
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -780,14 +782,13 @@ local function queueAdjustmentsWrite(requestRebuild, i18n)
   end
 
   local changedSlots = {}
-  for i = 1, 42 do
+  for i = 1, #ui.adjustmentRanges do
     if ui.dirtySlots[i] then
       changedSlots[#changedSlots + 1] = i
     end
   end
 
   if #changedSlots == 0 then
-    ui.dirty = false
     return true
   end
 
@@ -806,8 +807,9 @@ local function queueAdjustmentsWrite(requestRebuild, i18n)
     if type(requestRebuild) == "function" then
       requestRebuild()
     end
-    if lvgl and lvgl.message then
-      lvgl.message({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
+        ok = false,
         title = pageText(i18n, "save_error_title", "Error"),
         message = tostring(reason or pageText(i18n, "save_error_message", "Save failed"))
       })
@@ -833,8 +835,9 @@ local function queueAdjustmentsWrite(requestRebuild, i18n)
             if type(requestRebuild) == "function" then
               requestRebuild()
             end
-            if lvgl and lvgl.message then
-              lvgl.message({
+            if ctx and type(ctx.reportSave) == "function" then
+              ctx.reportSave({
+                ok = true,
                 title = pageText(i18n, "saved_title", "Saved"),
                 message = pageText(i18n, "saved_message", "Adjustment configuration saved")
               })
@@ -850,6 +853,13 @@ local function queueAdjustmentsWrite(requestRebuild, i18n)
         saveToSession()
         if type(requestRebuild) == "function" then
           requestRebuild()
+        end
+        if ctx and type(ctx.reportSave) == "function" then
+          ctx.reportSave({
+            ok = true,
+            title = pageText(i18n, "saved_title", "Saved"),
+            message = pageText(i18n, "saved_message", "Adjustment configuration saved")
+          })
         end
       end
       return
@@ -1128,9 +1138,24 @@ function M.build(ctx)
   local h = ctx.h
   local i18n = ctx.i18n
 
-  if ui.loading or ui.saving then
-    local titleText = ui.loading and "@i18n(app.loading)@" or "@i18n(app.saving)@"
-    local msgText = ui.loading and pageText(i18n, "loading", "Loading adjustment ranges...") or pageText(i18n, "saving", "Saving adjustment ranges...")
+  if ui.notice and LoadingOverlay and type(LoadingOverlay.appendNotice) == "function" then
+    LoadingOverlay.appendNotice(children, {
+      x = x, y = y, w = w, h = h,
+      title = ui.notice.title,
+      message = ui.notice.message,
+      press = function()
+        ui.notice = nil
+        if type(ui.runtime.requestRebuild) == "function" then
+          ui.runtime.requestRebuild()
+        end
+      end
+    })
+    return
+  end
+
+  if ui.loading then
+    local titleText = "@i18n(app.loading)@"
+    local msgText = pageText(i18n, "loading", "Loading adjustment ranges...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
       title = titleText,
@@ -1803,10 +1828,11 @@ function M.build(ctx)
 end
 
 function M.onSave(ctx)
-  local ok, err = queueAdjustmentsWrite(ctx and ctx.requestRebuild, ctx and ctx.i18n)
+  local ok, err = queueAdjustmentsWrite(ctx and ctx.requestRebuild, ctx and ctx.i18n, ctx)
   if not ok then
     if ctx and type(ctx.reportSave) == "function" then
       ctx.reportSave({
+        ok = false,
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or pageText(ctx and ctx.i18n, "save_error_message", "Save failed"))
       })

@@ -910,12 +910,9 @@ local function onStar()
     return
   end
 
-  if lvgl and lvgl.message and state.i18n then
-    lvgl.message({
-      title = state.i18n.t("app.help.title"),
-      message = "Star action is reserved for standard functions."
-    })
-  end
+  state.helpContent = "Star action is reserved for standard functions."
+  state.helpPageTitle = (state.i18n and state.i18n.t and state.i18n.t("app.help.title")) or "Help"
+  scheduleBuildUI(true)
 end
 
 getActivePageModule = function()
@@ -1318,6 +1315,26 @@ local function showArmedNotice()
   scheduleBuildUI(false)
 end
 
+-- A page that has no pipeline still saves behind the notice, so its outcome belongs in the
+-- notice as well. Raising a dialog for it puts a second box on top of a first one that cannot
+-- be repainted away, because the report is made from inside the save the notice is announcing --
+-- and while a native modal stands the tool's run() does not run at all.
+local function reportSaveOutcome(outcome)
+  if type(outcome) ~= "table" then return end
+  local title = outcome.title
+  local message = outcome.message
+  if type(title) ~= "string" and type(message) ~= "string" then return end
+  state.saveOutcome = { title = title, message = message }
+  -- A save that worked has nothing to be acknowledged, so its notice gets a moment to be read
+  -- and then goes; anything else stands until it is read away. The page decides which it is,
+  -- because only the page knows whether the write it just made reached anything.
+  if outcome.ok == true then
+    state.saveOutcome.clearAt = (getTime and getTime() or 0) + SAVE_OUTCOME_LINGER_TICKS
+  end
+  state.saveOverlayVisible = true
+  scheduleBuildUI(false)
+end
+
 local function onReload()
   if isModelArmed() and not isLocalSettingsPage() then
     showArmedNotice()
@@ -1402,32 +1419,11 @@ local function onReload()
     return
   end
 
-  if lvgl and lvgl.message then
-    lvgl.message({
-      title = "Reload",
-      message = "Reload from FBL is not wired yet."
-    })
-  end
-end
-
--- A page that has no pipeline still saves behind the notice, so its outcome belongs in the
--- notice as well. Raising a dialog for it puts a second box on top of a first one that cannot
--- be repainted away, because the report is made from inside the save the notice is announcing --
--- and while a native modal stands the tool's run() does not run at all.
-local function reportSaveOutcome(outcome)
-  if type(outcome) ~= "table" then return end
-  local title = outcome.title
-  local message = outcome.message
-  if type(title) ~= "string" and type(message) ~= "string" then return end
-  state.saveOutcome = { title = title, message = message }
-  -- A save that worked has nothing to be acknowledged, so its notice gets a moment to be read
-  -- and then goes; anything else stands until it is read away. The page decides which it is,
-  -- because only the page knows whether the write it just made reached anything.
-  if outcome.ok == true then
-    state.saveOutcome.clearAt = (getTime and getTime() or 0) + SAVE_OUTCOME_LINGER_TICKS
-  end
-  state.saveOverlayVisible = true
-  scheduleBuildUI(false)
+  reportSaveOutcome({
+    ok = false,
+    title = "Reload",
+    message = "Reload from FBL is not wired yet."
+  })
 end
 
 local function onSave()
@@ -1459,12 +1455,11 @@ local function onSave()
 
         if not ok then
           pcall(Log.emit, "rfsuite", "page.onSave failed: " .. tostring(shouldRebuild), "error", true)
-          if lvgl and lvgl.message then
-            lvgl.message({
-              title = SAVE_TEXT.failed_title,
-              message = tostring(shouldRebuild)
-            })
-          end
+          reportSaveOutcome({
+            ok = false,
+            title = SAVE_TEXT.failed_title,
+            message = tostring(shouldRebuild)
+          })
           scheduleBuildUI(false)
           return
         end
@@ -1475,12 +1470,11 @@ local function onSave()
         local okEeprom, errEeprom = queueEepromWriteIfNeeded(page)
         if not okEeprom then
           pcall(Log.emit, "rfsuite", "EEPROM write queue failed: " .. tostring(errEeprom), "warn", true)
-          if lvgl and lvgl.message then
-            lvgl.message({
-              title = SAVE_TEXT.saved_title,
-              message = SAVE_TEXT.eeprom_pending .. " " .. tostring(errEeprom)
-            })
-          end
+          reportSaveOutcome({
+            ok = false,
+            title = SAVE_TEXT.saved_title,
+            message = SAVE_TEXT.eeprom_pending .. " " .. tostring(errEeprom)
+          })
         end
 
         if shouldRebuild ~= false then
@@ -1544,12 +1538,11 @@ local function onSave()
     return
   end
 
-  if lvgl and lvgl.message then
-    lvgl.message({
-      title = "Save",
-      message = "Save to FBL is not wired yet."
-    })
-  end
+  reportSaveOutcome({
+    ok = false,
+    title = "Save",
+    message = "Save to FBL is not wired yet."
+  })
 end
 
 local function getCardPressHandler(cardId)

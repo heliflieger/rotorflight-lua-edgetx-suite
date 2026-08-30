@@ -1694,6 +1694,8 @@ return {
         value_theme_postflight = "STANDARD",
         value_model_override = "DEAKTIVIERT",
         help_message = "Waehle das Dashboard-Design fuer Vorflug, Flug und Nachflug sowie optionale Modell-Overrides.",
+        saved_title = "Gespeichert",
+        saved_message = "Theme-Einstellungen gespeichert",
         save_error_title = "Fehler",
         save_error_message = "Speichern fehlgeschlagen"
       },
@@ -1710,6 +1712,8 @@ return {
         help_message = "Konfiguriere die Einstellungen, die vom ausgewaehlten Dashboard-Design bereitgestellt werden.",
         value_theme_config = "OEFFNEN",
         value_connection_guard = "EIN",
+        saved_title = "Gespeichert",
+        saved_message = "Theme-Einstellungen gespeichert",
         save_error_title = "Fehler",
         save_error_message = "Speichern fehlgeschlagen"
       },

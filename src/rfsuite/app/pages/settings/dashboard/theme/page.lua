@@ -223,13 +223,11 @@ function M.onReload(ctx)
 end
 
 local function reportSaveError(ctx, err)
-  if not lvgl then return end
-  local dialog = {
-    title = t(ctx.i18n, "save_error_title", "Error"),
-    message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io")
-  }
-  if type(lvgl.message) == "function" then
-    pcall(lvgl.message, dialog)
+  if ctx and type(ctx.reportSave) == "function" then
+    ctx.reportSave({
+      title = t(ctx.i18n, "save_error_title", "Error"),
+      message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io")
+    })
   end
 end
 
@@ -246,6 +244,13 @@ function M.onSave(ctx)
   else
     -- Both stores, because this page reports a save as done only when both were believed.
     ui.dirty = false
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
+        ok = true,
+        title = t(ctx.i18n, "saved_title", "Saved"),
+        message = t(ctx.i18n, "saved_message", "Theme settings saved")
+      })
+    end
   end
   return true
 end

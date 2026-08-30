@@ -19,7 +19,7 @@ function Splash.build(zone, statusLine, title)
       y = 0,
       w = w,
       h = h,
-      color = BLACK,
+      color = COLOR_THEME_PRIMARY3,
       filled = true
     },
     {
@@ -37,7 +37,7 @@ function Splash.build(zone, statusLine, title)
       w = w,
       text = tostring(title or "Connecting FBL..."),
       align = CENTER,
-      color = WHITE,
+      color = COLOR_THEME_PRIMARY2,
       font = MIDSIZE
     },
     {
@@ -47,7 +47,7 @@ function Splash.build(zone, statusLine, title)
       w = w,
       text = tostring(statusLine or "Please wait for telemetry"),
       align = CENTER,
-      color = COLOR_THEME_DISABLED,
+      color = COLOR_THEME_PRIMARY2,
       font = SMLSIZE
     }
   }

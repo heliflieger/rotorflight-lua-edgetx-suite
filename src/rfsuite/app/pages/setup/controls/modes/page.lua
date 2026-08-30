@@ -226,22 +226,24 @@ end
 
 local function onPressSetRange(slot, rawRange, i18n)
   if ui.autoDetectSlots[slot] then
-    if lvgl and lvgl.message then
-      lvgl.message({
-        title = pageText(i18n, "title", "Modes"),
-        message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Modes"),
+      message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return
   end
 
   local us = getAuxPulseUs(rawRange.auxChannelIndex or 0)
   if not us then
-    if lvgl and lvgl.message then
-      lvgl.message({
-        title = pageText(i18n, "title", "Modes"),
-        message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Modes"),
+      message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return
   end
@@ -287,11 +289,12 @@ local function addRangeToSelectedMode(i18n)
   end
 
   if not freeSlot then
-    if lvgl and lvgl.message then
-      lvgl.message({
-        title = pageText(i18n, "title", "Modes"),
-        message = pageText(i18n, "msg_no_free_slots", "No free mode slots remain. Delete an existing range first.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Modes"),
+      message = pageText(i18n, "msg_no_free_slots", "No free mode slots remain. Delete an existing range first.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return
   end
@@ -657,7 +660,7 @@ local function startLoad(requestRebuild)
   return true
 end
 
-local function queueModesWrite(requestRebuild, i18n)
+local function queueModesWrite(requestRebuild, i18n, ctx)
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -683,8 +686,9 @@ local function queueModesWrite(requestRebuild, i18n)
     if type(requestRebuild) == "function" then
       requestRebuild()
     end
-    if lvgl and lvgl.message then
-      lvgl.message({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
+        ok = false,
         title = pageText(i18n, "save_error_title", "Error"),
         message = tostring(reason or pageText(i18n, "save_error_message", "Save failed"))
       })
@@ -708,8 +712,9 @@ local function queueModesWrite(requestRebuild, i18n)
             if type(requestRebuild) == "function" then
               requestRebuild()
             end
-            if lvgl and lvgl.message then
-              lvgl.message({
+            if ctx and type(ctx.reportSave) == "function" then
+              ctx.reportSave({
+                ok = true,
                 title = pageText(i18n, "saved_title", "Saved"),
                 message = pageText(i18n, "saved_message", "Mode configuration saved")
               })
@@ -724,6 +729,13 @@ local function queueModesWrite(requestRebuild, i18n)
         saveToSession()
         if type(requestRebuild) == "function" then
           requestRebuild()
+        end
+        if ctx and type(ctx.reportSave) == "function" then
+          ctx.reportSave({
+            ok = true,
+            title = pageText(i18n, "saved_title", "Saved"),
+            message = pageText(i18n, "saved_message", "Mode configuration saved")
+          })
         end
       end
       return
@@ -920,9 +932,24 @@ function M.build(ctx)
   local h = ctx.h
   local i18n = ctx.i18n
 
-  if ui.loading or ui.saving then
-    local titleText = ui.loading and "@i18n(app.loading)@" or "@i18n(app.saving)@"
-    local msgText = ui.loading and pageText(i18n, "loading", "Loading mode data...") or pageText(i18n, "saving_config", "Saving mode configuration...")
+  if ui.notice and LoadingOverlay and type(LoadingOverlay.appendNotice) == "function" then
+    LoadingOverlay.appendNotice(children, {
+      x = x, y = y, w = w, h = h,
+      title = ui.notice.title,
+      message = ui.notice.message,
+      press = function()
+        ui.notice = nil
+        if type(ui.runtime.requestRebuild) == "function" then
+          ui.runtime.requestRebuild()
+        end
+      end
+    })
+    return
+  end
+
+  if ui.loading then
+    local titleText = "@i18n(app.loading)@"
+    local msgText = pageText(i18n, "loading", "Loading mode data...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
       title = titleText,
@@ -1032,10 +1059,11 @@ function M.build(ctx)
 end
 
 function M.onSave(ctx)
-  local ok, err = queueModesWrite(ctx and ctx.requestRebuild, ctx and ctx.i18n)
+  local ok, err = queueModesWrite(ctx and ctx.requestRebuild, ctx and ctx.i18n, ctx)
   if not ok then
     if ctx and type(ctx.reportSave) == "function" then
       ctx.reportSave({
+        ok = false,
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or pageText(ctx and ctx.i18n, "save_error_message", "Save failed"))
       })
