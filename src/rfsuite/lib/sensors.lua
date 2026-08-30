@@ -16,12 +16,7 @@ do
     end
   end
 end
-local SIM_SENSOR_PATHS = {
-  "/SCRIPTS/TOOLS/rfsuite-core/sim/sensors/",
-  "/SCRIPTS/TOOLS/rfsuite.user/sim/sensors/",
-  "/SCRIPTS/rfsuite-core/sim/sensors/",
-  "SCRIPTS/TOOLS/rfsuite-core/sim/sensors/",
-}
+
 local SIM_FILE_ALIASES = {
   ["PID#"] = "pid_profile",
   ["RTE#"] = "rate_profile",

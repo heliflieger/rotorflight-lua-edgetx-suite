@@ -19,16 +19,19 @@ local themeCommon = requireModule("widgets/dashboard/themes/default/common.lua")
 
 local folder = "widgets/dashboard/objects/time/"
 local renders = {}
+local missingRenders = {}
 
 local function getRender(subtype)
   local key = subtype or "time"
   if renders[key] then return renders[key] end
+  if missingRenders[key] then return nil end
 
   local mod = requireModule(folder .. key .. ".lua")
   if mod then
     renders[key] = mod
     return mod
   end
+  missingRenders[key] = true
   return nil
 end
 

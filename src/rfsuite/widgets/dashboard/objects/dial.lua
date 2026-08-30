@@ -19,15 +19,19 @@ local themeCommon = requireModule("widgets/dashboard/themes/default/common.lua")
 
 local folder = "widgets/dashboard/objects/dial/"
 local renders = {}
+local missingRenders = {}
 
 local function getRender(subtype)
   local key = subtype or "image"
   if renders[key] then return renders[key] end
+  if missingRenders[key] then return nil end
+
   local mod = requireModule(folder .. key .. ".lua")
   if mod and type(mod) == "table" then
     renders[key] = mod
     return mod
   end
+  missingRenders[key] = true
   return nil
 end
 
@@ -38,6 +42,7 @@ function Wrapper.render(nodes, rect, box, state)
   if not utils then return end
 
   utils.drawContainer(nodes, rect, box, state)
+
   local render = getRender(box and box.subtype)
   if render and type(render.render) == "function" then
     if not themeCommon then
