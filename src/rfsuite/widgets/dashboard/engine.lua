@@ -226,59 +226,22 @@ function Engine.build(zone, state, theme)
   return nodes
 end
 
-function Engine.renderKey(state, boxSources)
-  local voltage = Utils.toNumber(state and state.voltage, 0)
-  local lq = Utils.toNumber(state and state.lq, 0)
-  local fuel = Utils.toNumber(state and state.fuel, 0)
-  local rpm = Utils.toNumber(state and state.rpm, 0)
-  local flight = Utils.toNumber(state and state.flightSeconds, 0)
-  local total = Utils.toNumber(state and state.totalFlightSeconds, 0)
-  local bb_used = state and state.dataflash and state.dataflash.used or 0
-  local bb_total = state and state.dataflash and state.dataflash.total or 0
+function Engine.renderKey(state, _)
   local cells = Utils.toNumber(state and state.batteryCellCount, 0)
   local themeMin = Utils.toNumber(state and state.themeConfig and state.themeConfig.v_min, 0)
   local themeMax = Utils.toNumber(state and state.themeConfig and state.themeConfig.v_max, 0)
-  local armFlags = Utils.toNumber(state and state.armFlags, 0)
+  local zoneW = Utils.toNumber(state and state.zoneW, 0)
+  local zoneH = Utils.toNumber(state and state.zoneH, 0)
+  local flightMode = tostring((state and state.flightMode) or "")
 
-  local k = string.format("%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d",
-    math.floor(lq + 0.5),
-    math.floor(fuel + 0.5),
-    math.floor(rpm + 0.5),
-    math.floor(flight + 0.5),
-    math.floor(total + 0.5),
-    math.floor(voltage * 10 + 0.5),
-    math.floor(bb_used + 0.5),
-    math.floor(bb_total + 0.5),
+  return string.format("%s|%dx%d|%d|%d|%d",
+    flightMode,
+    zoneW,
+    zoneH,
     math.floor(cells + 0.5),
     math.floor(themeMin * 10 + 0.5),
-    math.floor(themeMax * 10 + 0.5),
-    math.floor(armFlags + 0.5)
+    math.floor(themeMax * 10 + 0.5)
   )
-
-  if boxSources and state then
-    for i = 1, #boxSources do
-      local source = boxSources[i]
-      local v = nil
-      if source == "esc_temp" then v = state.escTemp
-      elseif source == "mcu_temp" then v = state.mcuTemp
-      elseif source == "pid_profile" then v = state.profile
-      elseif source == "rate_profile" then v = state.rateProfile
-      elseif source == "battery_profile" then v = state.batteryProfile
-      elseif source == "governor" then
-        v = tostring(state.governor or "x") .. ":" .. tostring(state.armDisableFlags or "x")
-      else
-        v = state[source]
-      end
-      if type(v) == "number" then
-        k = k .. "|" .. tostring(math.floor(v * 10 + 0.5))
-      elseif type(v) == "string" then
-        k = k .. "|" .. v
-      else
-        k = k .. "|x"
-      end
-    end
-  end
-  return k
 end
 
 return Engine

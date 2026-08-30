@@ -1556,6 +1556,13 @@ function Runtime.new(zone, options)
 
     local ready = performBackgroundWork(self)
 
+    if self.zone then
+      self.state.zoneW = self.zone.w or 0
+      self.state.zoneH = self.zone.h or 0
+      self.state.zoneX = self.zone.x or 0
+      self.state.zoneY = self.zone.y or 0
+    end
+    self.state.flightMode = self.flightMode
 
     if not ready and self.flightMode ~= "postflight" then
       local statusLine = self.statusLine or "Please wait..."

@@ -68,78 +68,117 @@ end
 
 function Render.render(nodes, rect, box, state, themeCommon, utils)
   local cfg = getBoxConfig(box)
+  local lastRaw = nil
+  local lastSource = nil
+  local lastUnit = nil
+  local lastDecimals = nil
+  local lastTransform = nil
+  local cachedText = nil
 
-  local source = cfg.source
-  if cfg.sourceDynamic then
-    source = utils.resolveValue(source, box, state)
-  end
+  local textGetter = function()
+    local source = cfg.source
+    if cfg.sourceDynamic then
+      source = utils.resolveValue(source, box, state)
+    end
 
-  local raw = source ~= nil and mapSourceFast(source, state, utils) or nil
+    local raw = source ~= nil and mapSourceFast(source, state, utils) or nil
 
-  local unit = cfg.unit
-  if cfg.unitDynamic then
-    unit = utils.resolveValue(unit, box, state)
-  end
+    local unit = cfg.unit
+    if cfg.unitDynamic then
+      unit = utils.resolveValue(unit, box, state)
+    end
 
-  if source == "esc_temp" or source == "mcu_temp" then
-    if useFahrenheit() and type(raw) == "number" then
-      raw = (raw * 9 / 5) + 32
-      unit = "°F"
+    local isTemp = (source == "esc_temp" or source == "mcu_temp")
+    local isFahr = isTemp and useFahrenheit()
+    if isTemp then
+      if isFahr and type(raw) == "number" then
+        raw = (raw * 9 / 5) + 32
+        unit = "°F"
+      else
+        unit = "°C"
+      end
+    end
+
+    local transform = cfg.transform
+    if cfg.transformDynamic then
+      transform = utils.resolveValue(transform, box, state)
+    end
+    raw = utils.applyTransform(raw, transform)
+
+    local decimals = cfg.decimals
+    if cfg.decimalsDynamic then
+      decimals = utils.resolveValue(decimals, box, state)
+    end
+
+    if raw == lastRaw and source == lastSource and unit == lastUnit and decimals == lastDecimals and transform == lastTransform and cachedText ~= nil then
+      return cachedText
+    end
+
+    lastRaw = raw
+    lastSource = source
+    lastUnit = unit
+    lastDecimals = decimals
+    lastTransform = transform
+
+    local valueText = nil
+    if source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function" then
+      valueText = themeCommon.formatVoltage(raw)
     else
-      unit = "°C"
+      valueText = utils.formatDisplayValue(raw, decimals)
     end
-  end
 
-  local transform = cfg.transform
-  if cfg.transformDynamic then
-    transform = utils.resolveValue(transform, box, state)
-  end
-  raw = utils.applyTransform(raw, transform)
-
-  local decimals = cfg.decimals
-  if cfg.decimalsDynamic then
-    decimals = utils.resolveValue(decimals, box, state)
-  end
-
-  local valueText = nil
-  if source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function" then
-    valueText = themeCommon.formatVoltage(raw)
-  else
-    valueText = utils.formatDisplayValue(raw, decimals)
-  end
-
-  if not (source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function") then
-    valueText = utils.appendUnit(valueText, unit)
-  end
-
-  local valueFont = cfg.font
-  if cfg.fontDynamic then
-    valueFont = utils.resolveValue(valueFont, box, state)
-  end
-  if utils.isLowResolution(state) then
-    local lowFont = cfg.fontLowRes
-    if cfg.fontLowResDynamic then
-      lowFont = utils.resolveValue(lowFont, box, state)
+    if not (source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function") then
+      valueText = utils.appendUnit(valueText, unit)
     end
-    if lowFont ~= nil then
-      valueFont = lowFont
-    end
-  end
-  valueFont = valueFont or MIDSIZE
 
-  valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
-
-  local autoSizeChars = cfg.autoSizeChars
-  if cfg.autoSizeCharsDynamic then
-    autoSizeChars = utils.resolveValue(autoSizeChars, box, state)
+    valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
+    cachedText = valueText or "--"
+    return cachedText
   end
 
-  if type(autoSizeChars) == "number" and type(valueText) == "string" and #valueText > autoSizeChars then
-    local autoSizeFont = cfg.autoSizeFont
-    if cfg.autoSizeFontDynamic then
-      autoSizeFont = utils.resolveValue(autoSizeFont, box, state)
+  local lastFontText = nil
+  local cachedFont = nil
+
+  local fontGetter = function()
+    local valueText = textGetter()
+    if valueText == lastFontText and cachedFont ~= nil then
+      return cachedFont
     end
-    valueFont = autoSizeFont or SMLSIZE
+    lastFontText = valueText
+
+    local autoSizeChars = cfg.autoSizeChars
+    if cfg.autoSizeCharsDynamic then
+      autoSizeChars = utils.resolveValue(autoSizeChars, box, state)
+    end
+
+    if type(autoSizeChars) == "number" and type(valueText) == "string" and #valueText > autoSizeChars then
+      local autoSizeFont = cfg.autoSizeFont
+      if cfg.autoSizeFontDynamic then
+        autoSizeFont = utils.resolveValue(autoSizeFont, box, state)
+      end
+      cachedFont = autoSizeFont or SMLSIZE
+      return cachedFont
+    end
+
+    local valueFont = cfg.font
+    if cfg.fontDynamic then
+      valueFont = utils.resolveValue(valueFont, box, state)
+    end
+    if utils.isLowResolution(state) then
+      local lowFont = cfg.fontLowRes
+      if cfg.fontLowResDynamic then
+        lowFont = utils.resolveValue(lowFont, box, state)
+      end
+      if lowFont ~= nil then
+        valueFont = lowFont
+      end
+    end
+    cachedFont = valueFont or MIDSIZE
+    return cachedFont
+  end
+
+  local colorGetter = function()
+    return utils.resolveTextColor(box, state, WHITE)
   end
 
   utils.pushLabel(
@@ -147,10 +186,10 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
     rect.x + 4,
     utils.defaultValueY(rect, box),
     rect.w - 8,
-    valueText,
-    utils.resolveTextColor(box, state, WHITE),
+    textGetter,
+    colorGetter,
     box.valuealign or box.titlealign or CENTER,
-    valueFont
+    fontGetter
   )
 end
 

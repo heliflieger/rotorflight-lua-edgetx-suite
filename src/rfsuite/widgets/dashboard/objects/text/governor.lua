@@ -170,17 +170,68 @@ local function governorColor(state, box)
 end
 
 function Render.render(nodes, rect, box, state, _, utils)
-  local valueText = governorText(state)
-  valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
+  local lastFlags = nil
+  local lastArmFlags = nil
+  local lastArmed = nil
+  local lastGov = nil
+  local cachedText = nil
+
+  local textGetter = function()
+    local flags = state and state.armDisableFlags
+    local armFlags = state and state.armFlags
+    local armed = state and state.armed
+    local gov = state and state.governor
+
+    if flags == lastFlags and armFlags == lastArmFlags and armed == lastArmed and gov == lastGov and cachedText ~= nil then
+      return cachedText
+    end
+
+    lastFlags = flags
+    lastArmFlags = armFlags
+    lastArmed = armed
+    lastGov = gov
+
+    local valueText = governorText(state)
+    valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
+    cachedText = valueText or "--"
+    return cachedText
+  end
+
+  local lastColorArmFlags = nil
+  local lastColorArmed = nil
+  local lastColorGov = nil
+  local cachedColor = nil
+
+  local colorGetter = function()
+    local armFlags = state and state.armFlags
+    local armed = state and state.armed
+    local gov = state and state.governor
+
+    if armFlags == lastColorArmFlags and armed == lastColorArmed and gov == lastColorGov and cachedColor ~= nil then
+      return cachedColor
+    end
+
+    lastColorArmFlags = armFlags
+    lastColorArmed = armed
+    lastColorGov = gov
+
+    cachedColor = governorColor(state, box)
+    return cachedColor
+  end
+
+  local fontGetter = function()
+    return utils.resolveFont(box, state, 0, "font", "font_lowres")
+  end
+
   utils.pushLabel(
     nodes,
     rect.x + 4,
     utils.defaultValueY(rect, box),
     rect.w - 8,
-    valueText,
-    governorColor(state, box),
+    textGetter,
+    colorGetter,
     box.valuealign or box.titlealign or CENTER,
-    utils.resolveFont(box, state, 0, "font", "font_lowres")
+    fontGetter
   )
 end
 

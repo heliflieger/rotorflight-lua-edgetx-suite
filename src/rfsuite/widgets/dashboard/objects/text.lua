@@ -54,15 +54,27 @@ function Wrapper.render(nodes, rect, box, state)
       render.render(nodes, rect, box, state, themeCommon, utils)
     end
   else
-    local title = box and box.title or ""
-    local val = box and box.value or "--"
-    local color = (box and box.textcolor) or (themeCommon and themeCommon.resolveThemeColor("textcolor", box and box.textcolor)) or WHITE
-    local align = (box and box.valuealign) or (box and box.titlealign) or CENTER
-    local font = (box and box.font) or MIDSIZE
-    if type(font) == "function" then
-      font = font(box, state)
+    local lastVal = nil
+    local cachedText = nil
+    local textGetter = function()
+      local v = (box and type(box.value) == "function") and box.value(box, state) or (box and box.value or "--")
+      if v == lastVal and cachedText ~= nil then
+        return cachedText
+      end
+      lastVal = v
+      cachedText = tostring(v)
+      return cachedText
     end
-    utils.pushLabel(nodes, rect.x + 4, utils.defaultValueY(rect, box), rect.w - 8, tostring(val), color, align, font)
+    local colorGetter = function()
+      local c = (box and type(box.textcolor) == "function") and box.textcolor(box, state) or (box and box.textcolor)
+      return (c ~= nil) and c or ((themeCommon and themeCommon.resolveThemeColor("textcolor", c)) or WHITE)
+    end
+    local align = (box and box.valuealign) or (box and box.titlealign) or CENTER
+    local fontGetter = function()
+      local f = (box and type(box.font) == "function") and box.font(box, state) or (box and box.font or MIDSIZE)
+      return f
+    end
+    utils.pushLabel(nodes, rect.x + 4, utils.defaultValueY(rect, box), rect.w - 8, textGetter, colorGetter, align, fontGetter)
   end
 end
 

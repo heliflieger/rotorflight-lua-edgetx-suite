@@ -279,6 +279,19 @@ function Utils.appendUnit(valueText, unit)
 end
 
 function Utils.normalizeAlign(align, fallback)
+  if type(align) == "function" then
+    return function()
+      local a = align()
+      if type(a) == "number" then return a end
+      if type(a) == "string" then
+        local token = string.lower(a)
+        if token == "left" then return LEFT end
+        if token == "right" then return RIGHT end
+        if token == "center" or token == "centre" then return CENTER end
+      end
+      return fallback or CENTER
+    end
+  end
   if type(align) == "number" then return align end
   if type(align) ~= "string" then return fallback or CENTER end
 
@@ -290,6 +303,19 @@ function Utils.normalizeAlign(align, fallback)
 end
 
 function Utils.normalizeColor(color, fallback)
+  if type(color) == "function" then
+    return function()
+      local c = color()
+      if type(c) == "number" then return c end
+      if type(c) == "string" then
+        local mapped = COLOR_NAME_MAP[string.lower(c)]
+        if type(mapped) == "number" then
+          return mapped
+        end
+      end
+      return fallback or WHITE
+    end
+  end
   if type(color) == "number" then return color end
   if type(color) == "string" then
     local mapped = COLOR_NAME_MAP[string.lower(color)]

@@ -27,6 +27,10 @@
 - **Flight Controller Reboot Policy Documentation (`tasks/msp/save_pipeline.lua`)**:
   - Embedded explicit Rotorflight 2 flight controller reboot policy guidelines directly into save pipeline headers and architecture documentation.
   - Formulated clear boundaries for mandatory reboots (hardware drivers, DMA, UART ports, radio config, ESC protocols, sensor alignment), conditional reboots (swash/tail geometry changes), and non-reboot live tuning (PIDs, rates, governor, filters).
+- **Reactive LVGL Telemetry Bindings & Zero-Rebuild Dashboard Engine (`widgets/dashboard`)**:
+  - Migrated telemetry labels, gauges, arcs, duration timers, governor indicators, and stats to reactive getter closures evaluated directly by EdgeTX's native `callRefs` loop in C++.
+  - Pruned dynamic sensor data (`voltage`, `rpm`, `flightSeconds`, `fuel`, `lq`, etc.) from `Engine.renderKey`, eliminating continuous 2-Hz full-scene teardown and rebuild churn (`lvgl.clear()` + `lvgl.build()`).
+  - Scene rebuilds are now strictly confined to layout mutations (flight mode changes `preflight` $\rightarrow$ `inflight` $\rightarrow$ `postflight`, theme switches, and zone resizing), resulting in zero memory allocations and minimal CPU overhead during steady-state flights.
 - **MSP API Return Format Normalization (`tasks/msp/api`)**:
   - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
 
