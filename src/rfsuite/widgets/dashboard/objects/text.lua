@@ -67,7 +67,7 @@ function Wrapper.render(nodes, rect, box, state)
     end
     local colorGetter = function()
       local c = (box and type(box.textcolor) == "function") and box.textcolor(box, state) or (box and box.textcolor)
-      return (c ~= nil) and c or ((themeCommon and themeCommon.resolveThemeColor("textcolor", c)) or WHITE)
+      return (c ~= nil) and c or WHITE
     end
     local align = (box and box.valuealign) or (box and box.titlealign) or CENTER
     local fontGetter = function()
