@@ -50,6 +50,11 @@ local function defaultPreferences()
       debug_level                  = "off",
     },
     localizations = {
+      -- NOTE: `language` is intentionally not seeded here.
+      -- Absence of the key means "auto": system_locale.lua will fall through
+      -- to the baked package locale (release builds) or getGeneralSettings()
+      -- (source / simulator).  Only set it once the user makes an explicit
+      -- choice via Settings › Localization.
       temperature_unit = 0,
       altitude_unit    = 0,
     },

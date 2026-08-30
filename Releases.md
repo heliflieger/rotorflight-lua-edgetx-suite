@@ -119,6 +119,11 @@
   - Fixed text overlap / overdrawing: log entries are now truncated with an ellipsis (`…`) via binary-search `fitToWidth` to guarantee each line occupies exactly one `rowH` row, regardless of message length.
   - Fixed invisible text on light EdgeTX themes: replaced `GREY_DEFAULT` (white/near-white on light themes) with `COLOR_THEME_DISABLED` for `debug` and `trace` log levels, ensuring readable contrast on both light and dark themes.
   - Dynamically derived `rowH` and `maxVisible` from font metrics via `textSize("Ag", SMLSIZE)` instead of assuming a fixed height, correctly adapting across 320x240, standard, and 800x480 radio display classes without overdrawing or boundary clipping.
+- **Runtime Locale Resolution & Language Selector (`lib/system_locale.lua`, `settings/localization/page.lua`, `lib/preferences.lua`) – fixes #103**:
+  - `system_locale.lua:resolveSystemLanguage()` previously returned the build-time template placeholder `@i18n_language@` verbatim at runtime in uncompiled / simulator mode. `I18n.new("@i18n_language@")` failed to load any bundle and silently fell back to English, causing all Settings › General labels and confirmation dialogs to appear in English regardless of the selected language.
+  - Introduced a three-step runtime fallback: ① read `language` from `[localizations]` in `preferences.ini` (set via Settings › Localization); ② read the EdgeTX `LANGUAGE` global (where exposed by the firmware); ③ caller-supplied default (`"en"`). The `@i18n_language@` marker is retained as a precompile token only – packaged release builds still get the locale baked in at build time, while source/simulator runs now correctly pick up the user's chosen language.
+  - Added a **Language** dropdown (English / German) to Settings › Localization so users can set their preferred UI language; the choice is persisted in `preferences.ini` under `[localizations] language` and takes effect on the next tool open.
+  - Added `language = "en"` to `lib/preferences.lua` defaults so the key is always present in newly created `preferences.ini` files.
 
 ### Performance, Memory & Build System
 - **Tile & Theme Icon Pre-Scaling to 40x40 (`app/pages`, `widgets/dashboard/themes`)**:

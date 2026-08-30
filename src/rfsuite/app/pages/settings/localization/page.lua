@@ -14,8 +14,9 @@ local Common = nil
 --   type "number" → tonumber() coercion, default must be a number
 
 local CONFIG_SCHEMA = {
-  { key = "temperature_unit", type = "number", default = 0 },
-  { key = "altitude_unit",    type = "number", default = 0 },
+  { key = "language",         type = "string", default = "en"  },
+  { key = "temperature_unit", type = "number", default = 0     },
+  { key = "altitude_unit",    type = "number", default = 0     },
 }
 
 local function buildDefaultConfig()
@@ -57,7 +58,12 @@ local function copyFromPrefs(prefs)
   local loc = (prefs and prefs.localizations) or {}
 
   for _, field in ipairs(CONFIG_SCHEMA) do
-    ui.config[field.key] = tonumber(loc[field.key]) or field.default
+    if field.type == "string" then
+      local v = tostring(loc[field.key] or "")
+      ui.config[field.key] = v ~= "" and v or field.default
+    else
+      ui.config[field.key] = tonumber(loc[field.key]) or field.default
+    end
   end
 end
 
@@ -78,6 +84,13 @@ local function getAltOptions(i18n)
   return {
     { value = 0, label = t(i18n, "alt_meter", "Meter") },
     { value = 1, label = t(i18n, "alt_feet", "Feet") },
+  }
+end
+
+local function getLangOptions(i18n)
+  return {
+    { value = "en", label = t(i18n, "language_en", "English") },
+    { value = "de", label = t(i18n, "language_de", "German")  },
   }
 end
 
@@ -125,6 +138,14 @@ function M.build(ctx)
   local cursorY = ctx.y
 
   ui.runtime.setRequestRebuild(ctx.requestRebuild)
+
+  cursorY = cursorY + Controls.appendComboSelect(
+    children, x, cursorY, w,
+    t(i18n, "language", "Language"),
+    getLangOptions(i18n),
+    ui.config.language,
+    ui.runtime.getValueSetter("language")
+  )
 
   cursorY = cursorY + Controls.appendComboSelect(
     children, x, cursorY, w,
