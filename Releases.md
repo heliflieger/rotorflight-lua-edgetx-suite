@@ -106,6 +106,10 @@
   - Wrapped page save callbacks in `pcall` guards to capture errors and report them cleanly in the notice box.
 - **Dialog Fallback Handling (`ui/controls.lua`)**:
   - Properly recognized asynchronous `lvgl.confirm` dialogs as active modals, preventing premature fallback invocation.
+- **Session Logs Text Overlap & Contrast Fix (`app/pages/tools/diagnostics/session_logs/page.lua`)** (fixes #91):
+  - Fixed text overlap / overdrawing: log entries are now truncated with an ellipsis (`…`) via binary-search `fitToWidth` to guarantee each line occupies exactly one `rowH` row, regardless of message length.
+  - Fixed invisible text on light EdgeTX themes: replaced `GREY_DEFAULT` (white/near-white on light themes) with `COLOR_THEME_DISABLED` for `debug` and `trace` log levels, ensuring readable contrast on both light and dark themes.
+  - Dynamically derived `rowH` and `maxVisible` from font metrics via `textSize("Ag", SMLSIZE)` instead of assuming a fixed height, correctly adapting across 320x240, standard, and 800x480 radio display classes without overdrawing or boundary clipping.
 
 ### Performance, Memory & Build System
 - **Tile & Theme Icon Pre-Scaling to 40x40 (`app/pages`, `widgets/dashboard/themes`)**:
