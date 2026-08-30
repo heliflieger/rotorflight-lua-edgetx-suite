@@ -9,21 +9,41 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
       return cachedText
     end
     lastSecs = val
-    local valueText = themeCommon.formatDuration(val)
-    valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
+    local valueText = nil
+    if themeCommon and type(themeCommon.formatDuration) == "function" then
+      local ok, res = pcall(themeCommon.formatDuration, val)
+      if ok and res ~= nil then valueText = res end
+    end
+    if valueText == nil then
+      local totalSecs = math.max(0, math.floor(tonumber(val) or 0))
+      local mins = math.floor(totalSecs / 60)
+      local secs = totalSecs % 60
+      valueText = string.format("%02d:%02d", mins, secs)
+    end
+    if utils and type(utils.applyLowResMaxChars) == "function" then
+      valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
+    end
     cachedText = valueText or "00:00"
     return cachedText
   end
 
   local fontGetter = function()
-    return utils.resolveFont(box, state, MIDSIZE, "font", "font_lowres")
+    if utils and type(utils.resolveFont) == "function" then
+      return utils.resolveFont(box, state, MIDSIZE, "font", "font_lowres")
+    end
+    return (box and box.font) or MIDSIZE
   end
 
   local colorGetter = function()
-    return utils.resolveTextColor(box, state, WHITE)
+    if utils and type(utils.resolveTextColor) == "function" then
+      return utils.resolveTextColor(box, state, WHITE)
+    end
+    return (box and box.textcolor) or WHITE
   end
 
-  utils.pushLabel(nodes, rect.x + 4, utils.defaultValueY(rect, box), rect.w - 8, textGetter, colorGetter, box.valuealign or box.titlealign or CENTER, fontGetter)
+  if utils and type(utils.pushLabel) == "function" then
+    utils.pushLabel(nodes, rect.x + 4, (utils.defaultValueY and utils.defaultValueY(rect, box)) or (rect.y + 4), rect.w - 8, textGetter, colorGetter, box.valuealign or box.titlealign or CENTER, fontGetter)
+  end
 end
 
 return Render

@@ -1,8 +1,12 @@
 local Wrapper = {}
 
-local requireModule = (_G.rfsuite and _G.rfsuite.require) or function(path)
+local function requireModule(path)
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    return _G.rfsuite.require(path)
+  end
   local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
-  local chunk = loadScript(fullPath, "t")
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(fullPath, mode)
   if chunk then
     local ok, mod = pcall(chunk)
     if ok and type(mod) == "table" then return mod end

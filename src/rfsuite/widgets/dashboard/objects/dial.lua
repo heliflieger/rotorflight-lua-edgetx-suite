@@ -1,26 +1,48 @@
 local Wrapper = {}
 
-local utils = assert(loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/objects/common.lua", "t"))()
-local themeCommon = assert(loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/default/common.lua", "t"))()
+local function requireModule(path)
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    return _G.rfsuite.require(path)
+  end
+  local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(fullPath, mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" then return mod end
+  end
+  return nil
+end
 
-local folder = "/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/objects/dial/"
+local utils = requireModule("widgets/dashboard/objects/common.lua")
+local themeCommon = requireModule("widgets/dashboard/themes/default/common.lua")
+
+local folder = "widgets/dashboard/objects/dial/"
 local renders = {}
 
 local function getRender(subtype)
   local key = subtype or "image"
   if renders[key] then return renders[key] end
-  local chunk = loadScript(folder .. key .. ".lua", "t")
-  if not chunk then return nil end
-  local ok, render = pcall(chunk)
-  if not ok or type(render) ~= "table" then return nil end
-  renders[key] = render
-  return render
+  local mod = requireModule(folder .. key .. ".lua")
+  if mod and type(mod) == "table" then
+    renders[key] = mod
+    return mod
+  end
+  return nil
 end
 
 function Wrapper.render(nodes, rect, box, state)
+  if not utils then
+    utils = requireModule("widgets/dashboard/objects/common.lua")
+  end
+  if not utils then return end
+
   utils.drawContainer(nodes, rect, box, state)
   local render = getRender(box and box.subtype)
   if render and type(render.render) == "function" then
+    if not themeCommon then
+      themeCommon = requireModule("widgets/dashboard/themes/default/common.lua")
+    end
     render.render(nodes, rect, box, state, themeCommon, utils)
   end
 end

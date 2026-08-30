@@ -122,12 +122,12 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
 
     local valueText = nil
     if source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function" then
-      valueText = themeCommon.formatVoltage(raw)
-    else
-      valueText = utils.formatDisplayValue(raw, decimals)
+      local ok, res = pcall(themeCommon.formatVoltage, raw)
+      if ok and res ~= nil then valueText = res end
     end
 
-    if not (source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function") then
+    if valueText == nil then
+      valueText = utils.formatDisplayValue(raw, decimals)
       valueText = utils.appendUnit(valueText, unit)
     end
 

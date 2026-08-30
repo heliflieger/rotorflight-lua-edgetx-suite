@@ -63,7 +63,13 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
       end
       lastSource = source
       lastStatInput = val
-      raw = themeCommon.formatInteger(val, "%")
+      if themeCommon and type(themeCommon.formatInteger) == "function" then
+        local ok, res = pcall(themeCommon.formatInteger, val, "%")
+        if ok and res ~= nil then raw = res end
+      end
+      if raw == nil then
+        raw = (val ~= nil) and (tostring(math.floor(tonumber(val) or 0)) .. "%") or "--"
+      end
     elseif source == "min_voltage_cell" then
       local val = state and state.lastMinVoltage
       if source == lastSource and val == lastStatInput and cachedText ~= nil then
@@ -71,7 +77,18 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
       end
       lastSource = source
       lastStatInput = val
-      raw = themeCommon.formatCellVoltage(state, val)
+      if themeCommon and type(themeCommon.formatCellVoltage) == "function" then
+        local ok, res = pcall(themeCommon.formatCellVoltage, state, val)
+        if ok and res ~= nil then raw = res end
+      end
+      if raw == nil then
+        local num = tonumber(val)
+        if num and num > 0 then
+          raw = string.format("%.2fV/c", num / resolveCellCount(state, themeCommon))
+        else
+          raw = "--.-V/c"
+        end
+      end
     else
       local stattype = utils.resolveValue(box.stattype, box, state)
       local statSource = nil

@@ -1,8 +1,12 @@
 local Wrapper = {}
 
-local requireModule = (_G.rfsuite and _G.rfsuite.require) or function(path)
+local function requireModule(path)
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    return _G.rfsuite.require(path)
+  end
   local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
-  local chunk = loadScript(fullPath, "t")
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(fullPath, mode)
   if chunk then
     local ok, mod = pcall(chunk)
     if ok and type(mod) == "table" then return mod end
@@ -424,19 +428,23 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
             if type(curCells) == "number" and curCells > 0 then
               cells = curCells
             elseif type(themeCommon.estimateCellCount) == "function" then
-              cells = themeCommon.estimateCellCount(state)
+              local ok, c = pcall(themeCommon.estimateCellCount, state)
+              if ok and c ~= nil then cells = c end
             end
 
             if type(cells) == "number" and cells > 0 then
               cellText = string.format("%.2fV (%dS)", curVoltage / cells, cells)
             elseif type(themeCommon.formatCellVoltage) == "function" then
-              cellText = themeCommon.formatCellVoltage(state, curVoltage)
+              local ok, cv = pcall(themeCommon.formatCellVoltage, state, curVoltage)
+              if ok and cv ~= nil then cellText = cv end
             end
 
+            local okFmt, fmtV = pcall(themeCommon.formatVoltage, curVoltage)
+            local baseV = (okFmt and fmtV) or string.format("%.1fV", curVoltage)
             if cellText and cellText ~= "" then
-              voltageText = themeCommon.formatVoltage(curVoltage) .. " / " .. cellText
+              voltageText = baseV .. " / " .. cellText
             else
-              voltageText = themeCommon.formatVoltage(curVoltage)
+              voltageText = baseV
             end
           end
 
@@ -611,15 +619,19 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
     end
     local valueText = nil
     if source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function" then
-      valueText = themeCommon.formatVoltage(curVal)
-    elseif not curHasValue then
-      if unit ~= nil and unit ~= "" then
-        valueText = "-- " .. tostring(unit)
+      local ok, res = pcall(themeCommon.formatVoltage, curVal)
+      if ok and res ~= nil then valueText = res end
+    end
+    if valueText == nil then
+      if not curHasValue then
+        if unit ~= nil and unit ~= "" then
+          valueText = "-- " .. tostring(unit)
+        else
+          valueText = "--"
+        end
       else
-        valueText = "--"
+        valueText = utils.appendUnit(utils.formatDisplayValue(curVal, decimals), unit)
       end
-    else
-      valueText = utils.appendUnit(utils.formatDisplayValue(curVal, decimals), unit)
     end
     cachedValueText = valueText or "--"
     return cachedValueText
