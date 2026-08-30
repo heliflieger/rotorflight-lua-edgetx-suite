@@ -49,12 +49,7 @@ local function estimateWrappedTextHeight(text, width, font)
   lineH = tonumber(lineH) or 16
   if lineH < 12 then lineH = 12 end
 
-  local spaceW = safeTextSize(" ", font)
-  if not spaceW or spaceW <= 0 then
-    spaceW = 4
-  end
-
-  local totalH = 0
+  local totalLines = 0
   for i = 1, #lines do
     local paragraph = lines[i]
     local currentLine = ""
@@ -71,13 +66,10 @@ local function estimateWrappedTextHeight(text, width, font)
       end
     end
 
-    totalH = totalH + (paragraphLines * lineH)
-    if i < #lines then
-      totalH = totalH + lineH
-    end
+    totalLines = totalLines + paragraphLines
   end
 
-  return totalH
+  return totalLines * lineH
 end
 
 function HelpView.open(ctx)

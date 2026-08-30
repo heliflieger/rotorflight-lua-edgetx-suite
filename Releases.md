@@ -57,6 +57,10 @@
   - Removed unsafe preference seeding and ensured `batteryConfig` is safely populated and preserved on save.
 - **Theme Color Token Normalization (`ui/controls.lua`, widgets)**:
   - Replaced hardcoded `GREY_DEFAULT` / nil color tokens with semantic theme color tokens across UI controls and widgets, fixing invisible text and rendering artifacts under custom color themes.
+- **Help View Paragraph Spacing & Height Estimation (`ui/help_view.lua`)**:
+  - Removed duplicate paragraph spacing in `estimateWrappedTextHeight`, aligning text container height estimation with native EdgeTX LVGL label rendering (48 px for 2 paragraphs instead of 80 px) and eliminating unnecessary scrollable whitespace.
+- **FC Version Simulator Fixture Sync (`tasks/msp/api/fc_version.lua`)**:
+  - Updated `fc_version` mock fixture from `{ 4, 5, 1 }` (RF 2.2.1) to `{ 4, 6, 0 }` (Rotorflight 2.3.0 / FC 4.6.0), synchronizing mock telemetry with `build_info.lua`.
 - **UI Controls, Heights & Display Spacing (`ui/controls.lua`)**:
   - Unified native LVGL widget heights (standard 36 px), font rounding, and vertical alignments across all pages (PIDs, Rates, Mixer, Modes, Failsafe, Governor, Trims).
   - Resolved wide-display layout spacing and boundary clipping on large color touchscreens (e.g. 800x480).
