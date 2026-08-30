@@ -27,6 +27,11 @@
   - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
 
 ### Bug Fixes & Improvements
+- **Housekeeping Queue Starvation & Dependency Loading Order (`tasks/msp/runtime.lua`, `queue.lua`)**:
+  - Eliminated the staggered module-loading race condition where `UID` dependencies finished loading before `API_VERSION` dependencies, inadvertently seizing the transmit slot and starving the connect chain.
+  - Held `UID` read back until `API_VERSION` is successfully received and verified, ensuring primary flight controller compatibility is established before secondary model preference lookups.
+  - Bounded housekeeping reads with tighter timeouts (1.5s) and retry budgets (max 2–3 retries) with backoff re-arming upon failures.
+  - Enhanced `Queue:clear()` to supply distinct `"cleared"` error reason to callbacks, allowing callers to differentiate queue drops from transport timeouts.
 - **Adjustments & Modes AUX Channel Bounds (`setup/controls/adjustments`, `setup/controls/modes`)**:
   - Capped AUX channel selection pickers and auto-detection loops at the firmware limit `AUX 1` .. `AUX 13` (`MAX_AUX_CHANNEL_COUNT = 13` = `MAX_SUPPORTED_RC_CHANNEL_COUNT - CONTROL_CHANNEL_COUNT`), removing unreachable `AUX 14` .. `AUX 20` entries.
   - Added strict write payload and sanitization clamping against `AUX_CHANNEL_COUNT - 1` (indices 0..12) to prevent out-of-bounds array indexing in flight controller receiver inputs.

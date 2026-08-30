@@ -56,6 +56,7 @@ local state = {
   _disconnectHandled = false,
   requestBackoffUntil = 0,
   consecutiveApiVersionFailures = 0,
+  consecutiveUidFailures = 0,
   mspLastError = nil,
   mspLastErrorAt = 0,
   pendingVersionRead = true,
@@ -134,33 +135,27 @@ end
 local function ensureVersionDeps()
   if not ApiVersionApi then
     ApiVersionApi = loadModule("tasks/msp/api/api_version.lua")
-    return false
   end
   if not FcVersionApi then
     FcVersionApi = loadModule("tasks/msp/api/fc_version.lua")
-    return false
   end
   if not Version then
     Version = loadModule("lib/version.lua")
-    return false
   end
   if not ApiVersion then
     ApiVersion = loadModule("lib/api_version.lua")
-    return false
   end
-  return true
+  return ApiVersionApi ~= nil and FcVersionApi ~= nil and Version ~= nil and ApiVersion ~= nil
 end
 
 local function ensureUidDep()
   if not UidApi then
     UidApi = loadModule("tasks/msp/api/uid.lua")
-    return false
   end
   if not ModelPreferences then
     ModelPreferences = loadModule("lib/model_preferences.lua")
-    return false
   end
-  return true
+  return UidApi ~= nil and ModelPreferences ~= nil
 end
 
 local function ensureRootState()
@@ -422,7 +417,8 @@ local function enqueueVersionReads(now)
     client = HOUSEKEEPING_CLIENT,
     command = ApiVersionApi.command,
     simulatorResponse = ApiVersionApi.simulatorResponse,
-    timeout = 5.0,
+    timeout = 1.5,
+    maxRetries = 3,
     processReply = function(_, buf)
       local parsed = ApiVersionApi.parse(buf)
       if parsed and parsed.version then
@@ -447,7 +443,8 @@ local function enqueueVersionReads(now)
       state.versionReadCompleted = true
       publish()
     end,
-    errorHandler = function()
+    errorHandler = function(msg, reason)
+      if reason == "cleared" then return end
       state.consecutiveApiVersionFailures = (state.consecutiveApiVersionFailures or 0) + 1
       local backoff = math.min(30, 2 + state.consecutiveApiVersionFailures * 2)
       state.requestBackoffUntil = nowSeconds() + backoff
@@ -462,7 +459,8 @@ local function enqueueVersionReads(now)
     client = HOUSEKEEPING_CLIENT,
     command = FcVersionApi.command,
     simulatorResponse = FcVersionApi.simulatorResponse,
-    timeout = 5.0,
+    timeout = 1.5,
+    maxRetries = 3,
     processReply = function(_, buf)
       local parsed = FcVersionApi.parse(buf)
       if parsed then
@@ -478,6 +476,14 @@ end
 
 local function enqueueUidRead(now)
   if not state.pendingUidRead then
+    return true
+  end
+  -- UID read must only be enqueued AFTER API version read has completed successfully.
+  -- The API version determines whether the suite can communicate with the FC at all.
+  if not state.versionReadCompleted or state.unsupportedApi then
+    return true
+  end
+  if not state.values.apiVersion or state.values.apiVersion == "" or state.values.apiVersion == "0" then
     return true
   end
   if not state.queue or not state.queue:isProcessed() then
@@ -499,17 +505,24 @@ local function enqueueUidRead(now)
     client = HOUSEKEEPING_CLIENT,
     command = UidApi.command,
     simulatorResponse = UidApi.simulatorResponse,
-    timeout = 5.0,
+    timeout = 1.5,
+    maxRetries = 2,
     processReply = function(_, buf)
       local parsed = UidApi.parse(buf)
       if parsed and parsed.mcuId and parsed.mcuId ~= "" then
+        state.consecutiveUidFailures = 0
         state.values.mcuId = tostring(parsed.mcuId)
         applyModelPreferencesForMcu(state.values.mcuId)
       end
       publish()
     end,
-    errorHandler = function()
+    errorHandler = function(msg, reason)
+      if reason == "cleared" then return end
+      state.consecutiveUidFailures = (state.consecutiveUidFailures or 0) + 1
+      local backoff = math.min(30, 2 + state.consecutiveUidFailures * 2)
+      state.requestBackoffUntil = nowSeconds() + backoff
       state.pendingUidRead = true
+      log("UID read failed (cmd=2); backoff " .. tostring(backoff) .. "s", "warn")
       publish()
     end
   })
@@ -556,6 +569,11 @@ local function doDisconnect(now, reason, keepLink)
   state.pendingUidRead = true
   state.versionReadCompleted = false
   state.limitedApi = false
+  state.consecutiveApiVersionFailures = 0
+  state.consecutiveUidFailures = 0
+  state.requestBackoffUntil = 0
+  state.mspLastError = nil
+  state.mspLastErrorAt = 0
   state.values.apiVersion = "0"
   state.values.fcVersion = "0"
   state.values.rfVersion = "0"

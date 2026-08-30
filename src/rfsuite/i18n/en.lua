@@ -225,7 +225,7 @@ return {
       init_progress = "MSP init",
       link_config_title = "MSP Link Configuration",
       link_config_message_1 = "Initial MSP read failed (API_VERSION).",
-      link_config_message_2 = "Please check Rotorflight telemetry settings.",
+      link_config_message_2 = "Ensure FEATURE_TELEMETRY is enabled and MSP serial port is configured.",
       link_config_message_3 = "Packet Rate and Packet Ratio must match the ELRS link.",
       link_config_message_4 = "Then reconnect and open Info again."
     },

@@ -265,13 +265,13 @@ function Queue:clear(clientId, opts)
 
   if clientId == nil then
     if self.currentMessage and type(self.currentMessage.errorHandler) == "function" then
-      handlers[#handlers + 1] = self.currentMessage.errorHandler
+      handlers[#handlers + 1] = { fn = self.currentMessage.errorHandler, msg = self.currentMessage }
     end
 
     while qcount(self.queue) > 0 do
       local msg = qpop(self.queue)
       if msg and type(msg.errorHandler) == "function" then
-        handlers[#handlers + 1] = msg.errorHandler
+        handlers[#handlers + 1] = { fn = msg.errorHandler, msg = msg }
       end
     end
 
@@ -293,7 +293,7 @@ function Queue:clear(clientId, opts)
     if self.currentMessage and self.currentMessage.client == clientId
       and not (keepWrites and isWriteMessage(self.currentMessage)) then
       if type(self.currentMessage.errorHandler) == "function" then
-        handlers[#handlers + 1] = self.currentMessage.errorHandler
+        handlers[#handlers + 1] = { fn = self.currentMessage.errorHandler, msg = self.currentMessage }
       end
       self.currentMessage = nil
       self.currentMessageStartTime = nil
@@ -313,7 +313,7 @@ function Queue:clear(clientId, opts)
       if msg then
         if msg.client == clientId and not (keepWrites and isWriteMessage(msg)) then
           if type(msg.errorHandler) == "function" then
-            handlers[#handlers + 1] = msg.errorHandler
+            handlers[#handlers + 1] = { fn = msg.errorHandler, msg = msg }
           end
         else
           qpush(kept, msg)
@@ -331,7 +331,7 @@ function Queue:clear(clientId, opts)
     inFlight and tostring(inFlight) or "-", depthBefore, qcount(self.queue), #handlers)
 
   for i = 1, #handlers do
-    pcall(handlers[i])
+    pcall(handlers[i].fn, handlers[i].msg, "cleared")
   end
 end
 
