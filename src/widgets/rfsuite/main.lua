@@ -21,19 +21,22 @@ local function create(zone, options)
   local appChunk = loadScript("/WIDGETS/rfsuite/app.lua", mode)
   if not appChunk then
     appChunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/runtime.lua", mode)
-    if appChunk then
-      local ok, Runtime = pcall(appChunk)
-      if ok and type(Runtime) == "table" and type(Runtime.new) == "function" then
-        return Runtime.new(zone, options)
+  end
+  if not appChunk then return nil end
+
+  local ok, res = pcall(appChunk, zone, options)
+  if ok and res ~= nil then
+    if type(res) == "function" then
+      local okFn, widget = pcall(res, zone, options)
+      if okFn then return widget end
+    elseif type(res) == "table" then
+      if type(res.new) == "function" then
+        local okNew, widget = pcall(res.new, zone, options)
+        if okNew then return widget end
+      else
+        return res
       end
     end
-    return nil
-  end
-  local ok, factory = pcall(appChunk)
-  if ok and type(factory) == "function" then
-    return factory(zone, options)
-  elseif ok and type(factory) == "table" and type(factory.new) == "function" then
-    return factory.new(zone, options)
   end
   return nil
 end
