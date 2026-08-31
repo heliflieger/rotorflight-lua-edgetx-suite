@@ -621,6 +621,17 @@ local function updateConnectionState(self)
       -- new modelPreferences table instance that races the concurrent MSP
       -- publisher reads, defeating the content-signature guard and causing
       -- multiple full scene teardowns in rapid succession (CPU limit crash).
+      --
+      -- Defer the first LVGL dashboard build to the next firmware tick.
+      -- When connectionReady flips from false to true the onconnect chain
+      -- may still be running (name, governor_config, esc_sensor_config…).
+      -- Their loadScript() calls share the instruction budget with the
+      -- callRefs() sweep the firmware runs after widget.refresh(), so
+      -- adding a full LVGL build on top of that reliably hits the CPU
+      -- limit.  The same one-tick deferral used for theme reloads is
+      -- sufficient: the radio holds the splash frame for a single ~50 ms
+      -- cycle, which is imperceptible to the user.
+      self._themeReloadedThisTick = true
     else
       -- Open, and shut again: from here on there is something to steady and the hold is paid.
       if wasReady then self.everReady = true end
@@ -1656,10 +1667,17 @@ function Runtime.new(zone, options)
     if nextMode ~= self.flightMode then
       self.flightMode = nextMode
       reloadActiveTheme(self)
+      -- Theme module load is expensive on its own. Defer the LVGL build to
+      -- the next firmware tick so that the combined cost of background work
+      -- (MSP tick + prefs + connection state + theme load) does not exceed
+      -- the EdgeTX instruction budget when callRefs() runs after refresh().
+      self._themeReloadedThisTick = true
     elseif selectedTheme ~= self.themePath or modelPrefsChanged then
       reloadActiveTheme(self)
+      self._themeReloadedThisTick = true
     elseif not self.theme then
       reloadActiveTheme(self)
+      self._themeReloadedThisTick = true
     end
     
     -- Clear event_context immediately after all widget background logic
@@ -1704,6 +1722,18 @@ function Runtime.new(zone, options)
     end
 
     local ready = performBackgroundWork(self)
+
+    -- If performBackgroundWork() loaded a new theme module this tick, the
+    -- combined instruction cost of (MSP + prefs + connectionState + themeLoad)
+    -- already consumes a significant share of the EdgeTX budget.  Adding an
+    -- LVGL build or even just the callRefs reactive-reference sweep on top of
+    -- that reliably hits the CPU limit.  Defer all drawing to the next
+    -- firmware tick -- the radio will simply hold the previous frame for one
+    -- ~50 ms cycle, which is imperceptible to the user.
+    if self._themeReloadedThisTick then
+      self._themeReloadedThisTick = false
+      return
+    end
 
     if self.zone then
       self.state.zoneW = self.zone.w or 0
