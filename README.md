@@ -40,24 +40,32 @@ Tutorials, documentation, and flight videos can be found on the
 
 ## Installation
 
-Download the latest release from
-[GitHub](https://github.com/rotorflight/rotorflight-lua-edgetx-suite/releases/). Releases are
-published per language — pick `rfsuite-radio-install-v<version>_en.zip` or the `_de` archive.
-The language is baked into the package, so switching languages later means installing the
-other archive.
+### Automated Installation (Recommended)
 
-The archive holds `SCRIPTS`, `WIDGETS` and `SOUNDS` folders that are unpacked over the root of
-the transmitter's SD card.
+The easiest and recommended way to install or update RFSuite is using the standalone [RFSuite Updater](https://github.com/rotorflight/rotorflight-lua-edgetx-suite-updater) application. It automatically detects your radio's SD card, downloads the latest release in your chosen language, and safely installs all scripts, widgets, and sound packs while preserving your custom settings and user themes.
 
-USB Method
+1. Download the latest version for Windows, macOS, or Linux from the [RFSuite Updater Releases](https://github.com/rotorflight/rotorflight-lua-edgetx-suite-updater/releases).
+2. Connect your powered-on transmitter to your computer via USB and select **USB Storage (SD)** on the radio screen.
+3. Launch the **RFSuite Updater**, select your release track and language, and click **Install / Update**.
+4. Once completed, safely eject the drive and disconnect the USB cable.
 
-1. Connect your transmitter to a computer with a USB cable
+
+### Manual Installation (ZIP Archive)
+
+Alternatively, you can manually download and unpack the release archive:
+
+1. Download the latest release from [GitHub Releases](https://github.com/rotorflight/rotorflight-lua-edgetx-suite/releases/). Releases are published per language — pick `rfsuite-radio-install-v<version>_en.zip` or the `_de` archive. The language is baked into the package, so switching languages later means installing the other archive.
+2. The archive holds `SCRIPTS`, `WIDGETS` and `SOUNDS` folders that are unpacked over the root of the transmitter's SD card.
+
+#### USB Method
+
+1. Connect your transmitter to a computer with a USB cable (select **USB Storage (SD)** on the radio)
 2. Open the new drive on your computer
 3. Unzip the archive and copy its `SCRIPTS`, `WIDGETS` and `SOUNDS` folders to the root of the new drive
 4. Eject the drive
 5. Unplug the USB cable
 
-SD Card Method
+#### SD Card Method
 
 1. Power off your transmitter
 2. Remove the SD card and plug it into a computer
@@ -66,11 +74,13 @@ SD Card Method
 5. Reinsert the SD card into the transmitter
 6. Power up your transmitter
 
+---
+
 You will know that you've done it correctly when you find `rfsuite.lua` in the
 `/SCRIPTS/TOOLS` directory. *RFSuite* now appears in the *Tools* menu of your transmitter, and
 *RFSuite* and *RFSuite Service* appear in the widget list when you configure a screen.
 
-To update, unpack a newer archive over the existing installation. Your settings, model
+To update manually, unpack a newer archive over the existing installation. Your settings, model
 preferences and any user dashboard themes live in `/SCRIPTS/TOOLS/rfsuite.user/`, which the
 release archive does not write to.
 
