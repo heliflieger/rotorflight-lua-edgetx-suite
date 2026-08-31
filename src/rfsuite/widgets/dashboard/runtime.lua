@@ -450,7 +450,10 @@ local function reloadPreferencesIfNeeded(self, force)
     self.built = false
     self.renderKey = nil
     self._cachedRenderKey = nil
-    self.lastModelPreferences = nil
+    -- NOTE: do NOT clear lastModelPreferences here. Clearing it disarms the
+    -- content-signature guard in refresh() so that the next identical table
+    -- instance (allocated by a concurrent publisher) would trigger a redundant
+    -- full scene rebuild and blow the EdgeTX instruction budget.
     self._lastUIRefresh = 0
   end
 
@@ -611,8 +614,13 @@ local function updateConnectionState(self)
       if softTimeoutReady then
         widgetLog(self, "Splash soft-timeout reached; continuing without full startup prerequisites", "warn")
       end
-      -- Force reload preferences when connection ready to ensure we have the latest model settings
-      reloadPreferencesIfNeeded(self, true)
+      -- NOTE: do NOT call reloadPreferencesIfNeeded() here. The FBL
+      -- reconnect-edge handler already cleared self.theme and self.built,
+      -- which is sufficient to trigger a single fresh theme load in the
+      -- next refresh() pass.  A redundant forced-reload here allocates a
+      -- new modelPreferences table instance that races the concurrent MSP
+      -- publisher reads, defeating the content-signature guard and causing
+      -- multiple full scene teardowns in rapid succession (CPU limit crash).
     else
       -- Open, and shut again: from here on there is something to steady and the hold is paid.
       if wasReady then self.everReady = true end
@@ -1591,7 +1599,13 @@ function Runtime.new(zone, options)
       self.state.rateProfile = nil
       self.state.batteryProfile = nil
       self.modelPreferences = nil
+      -- Clear the reference so the identity check fails on the next frame
+      -- and the slow-path signature comparison is triggered.  Keep the
+      -- signature itself so that an identical modelPrefs content (same model,
+      -- same settings) is correctly identified as "no change" and only a
+      -- genuine model or settings change triggers a theme rebuild.
       self.lastModelPreferences = nil
+      -- self.lastModelPrefsSignature is intentionally NOT cleared here.
       self.flightMode = "preflight"
       self.theme = nil
       self.built = false
