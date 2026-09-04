@@ -333,7 +333,11 @@ end
 
 --- The files the tool writes when a preference changes, and how often they are looked at.
 -- One second is the rate the old signal was polled at, so nothing gets slower here.
-local PREFERENCES_FILE = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
+local PREFERENCES_FILE  = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
+-- Sentinel written by lib/preferences.lua M.save(). The widget removes it after
+-- consuming it so that a single save triggers exactly one reload even when the
+-- RTC is absent (frozen mtime) or the new INI happens to be the same byte-size.
+local RELOAD_REQ_FILE   = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 local PREFS_STAT_INTERVAL = 1.0
 
 local function publishPreferencesToGlobal(prefs)
@@ -530,6 +534,29 @@ local function reloadPreferencesIfNeeded(self, force)
         pendingStamp = stamp
       end
     end
+
+    -- Sentinel written by lib/preferences.lua M.save() on every save. Detected here
+    -- as a second, independent path: even when the RTC is absent (frozen mtime) or
+    -- the new INI happens to be the same byte-size as the old one the fstat stamp
+    -- above will be unchanged, but this sentinel will still be present. Consuming
+    -- (removing) it immediately guarantees exactly one reload per save.
+    if type(fstat) == "function" then
+      local ok, info = pcall(fstat, RELOAD_REQ_FILE)
+      if ok and type(info) == "table" then
+        -- File exists: consume it and signal a reload.
+        if type(os) == "table" and type(os.remove) == "function" then
+          pcall(os.remove, RELOAD_REQ_FILE)
+        elseif type(io) == "table" then
+          -- Fallback: truncate the file so a subsequent fstat shows size 0.
+          local rf = io.open(RELOAD_REQ_FILE, "w")
+          if rf then io.close(rf) end
+        end
+        logGv("reloadPreferencesIfNeeded: sentinel reload.req detected and consumed")
+        signalReload = true
+        -- Let pendingStamp stay nil: the stamp already reflects the new file, so the
+        -- next poll will see it as the baseline and not re-signal.
+      end
+    end
   end
 
   if not force and not signalReload then
@@ -587,6 +614,13 @@ local function reloadPreferencesIfNeeded(self, force)
     self.built = false
     self.renderKey = nil
     self._cachedRenderKey = nil
+    -- Invalidate the theme-path memo. The memo keys on table identity, so when
+    -- self.preferences is replaced with a fresh table the memo's references point
+    -- to the old, discarded tables and resolveThemePathForState would return the
+    -- stale cached theme path without re-evaluating. Clearing it ensures the next
+    -- render picks up the correct theme even if the new preferences table happens
+    -- to contain the same values (e.g. a different theme at the same path length).
+    themePathMemo = {}
     -- NOTE: do NOT clear lastModelPreferences here. Clearing it disarms the
     -- content-signature guard in refresh() so that the next identical table
     -- instance (allocated by a concurrent publisher) would trigger a redundant
@@ -1877,7 +1911,7 @@ function Runtime.new(zone, options)
     self._cachedRenderKey = nil
     self._lastUIRefresh = 0
     -- Reporting starts over, which is what makes switching tracing on mid-session work: changing
-    -- the debug level rewrites preferences.ini, and that is what the widget entry point watches,
+    -- the debug level rewrites preferences.ini, which reloadPreferencesIfNeeded watches,
     -- so the reload lands at exactly the moment a user is asked to turn tracing on.
     self._usagePeak = -1
     self._usageWindowPeak = -1

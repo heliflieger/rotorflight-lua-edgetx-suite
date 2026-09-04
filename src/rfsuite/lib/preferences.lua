@@ -1,6 +1,11 @@
 local M = {}
 
-local PREF_PATH = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
+local PREF_PATH        = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
+-- Sentinel written on every save so the widget can detect a change even when
+-- the RTC is absent (timestamp frozen) or the new INI is the same byte-size
+-- (e.g. swapping between two themes whose path strings have the same length).
+-- The widget reads and then removes this file, so it is never left on the card.
+local RELOAD_REQ_PATH  = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 
 -- How much is asked for per io.read() call. It is a chunk size, not a limit: the reader
 -- below keeps going until the file ends.
@@ -192,9 +197,18 @@ function M.save(prefs)
 
   io.close(f)
 
-  -- No signal is sent. Writing this file IS the event: the widget compares the file's
-  -- size and mtime and reloads when they move, so nothing has to be told and nothing can
-  -- be consumed by the wrong reader. The pilot's model is not touched.
+  -- Signal the dashboard widget that preferences have changed. The fstat-based
+  -- stamp (size + mtime) is unreliable on radios without a battery-backed RTC
+  -- (mtime stays frozen at 2000-01-01) and fails when the new INI is the same
+  -- byte-length as the old one.  Writing a tiny sentinel that the widget can
+  -- detect — regardless of RTC state or theme-name length — is the robust
+  -- alternative.  The widget removes the file after consuming it, so it is
+  -- never left around after a reload.
+  local sf = io.open(RELOAD_REQ_PATH, "w")
+  if sf then
+    io.write(sf, "1")
+    io.close(sf)
+  end
 
   return true
 end
