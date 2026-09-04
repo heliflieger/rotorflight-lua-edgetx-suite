@@ -538,19 +538,18 @@ local function reloadPreferencesIfNeeded(self, force)
     -- Sentinel written by lib/preferences.lua M.save() on every save. Detected here
     -- as a second, independent path: even when the RTC is absent (frozen mtime) or
     -- the new INI happens to be the same byte-size as the old one the fstat stamp
-    -- above will be unchanged, but this sentinel will still be present. Consuming
-    -- (removing) it immediately guarantees exactly one reload per save.
+    -- above will be unchanged, but this sentinel will still be present.
+    --
+    -- EdgeTX Lua exposes no os module, so there is no os.remove(). Consuming the
+    -- sentinel is done by truncating the file to 0 bytes with io.open(path, "w").
+    -- The next poll then sees size == 0 and does not fire again, so exactly one
+    -- reload is triggered per save.
     if type(fstat) == "function" then
       local ok, info = pcall(fstat, RELOAD_REQ_FILE)
-      if ok and type(info) == "table" then
-        -- File exists: consume it and signal a reload.
-        if type(os) == "table" and type(os.remove) == "function" then
-          pcall(os.remove, RELOAD_REQ_FILE)
-        elseif type(io) == "table" then
-          -- Fallback: truncate the file so a subsequent fstat shows size 0.
-          local rf = io.open(RELOAD_REQ_FILE, "w")
-          if rf then io.close(rf) end
-        end
+      if ok and type(info) == "table" and (info.size or 0) > 0 then
+        -- File exists with content: consume it by truncating to 0 bytes.
+        local rf = io.open(RELOAD_REQ_FILE, "w")
+        if rf then io.close(rf) end
         logGv("reloadPreferencesIfNeeded: sentinel reload.req detected and consumed")
         signalReload = true
         -- Let pendingStamp stay nil: the stamp already reflects the new file, so the
