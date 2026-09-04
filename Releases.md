@@ -35,6 +35,12 @@
   - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
 
 ### Bug Fixes & Improvements
+- **Dashboard ESC Temperature Gauge Arc Coloring (`widgets/dashboard/objects/gauge.lua`)** (fixes #132):
+  - Fixed `getArcValueColor` falling through to the LiPo cell-voltage branch for temperature sources (`esc_temp`, `mcu_temp`), which divided the temperature value by the estimated battery cell count and applied ascending (low = bad) threshold logic — causing cold ESC temperatures to display as critical (red) and hot temperatures as OK (green).
+  - Added explicit temperature source detection (`isTempSource`) with inverted threshold coloring: low/cool = green, high/hot = orange/red.
+  - Temperature thresholds resolve from box properties (`warntemp`/`alerttemp`), theme configuration (`esctemp_warn`/`esctemp_alert`), or sensible defaults (90 °C warn, 105 °C alert).
+  - Applied Fahrenheit compensation when the user's temperature unit preference is active.
+  - Eliminated dependency on battery cell count for temperature arc coloring.
 - **Dashboard Memory & Loader Cleanup (`widgets/dashboard`, `lib/sensors`, `setup/esc_motors/esc_tools/escmfg/am32`)**:
   - Removed uncalled legacy builder and card functions (~330 lines) from `widgets/dashboard/themes/default/common.lua`, significantly reducing RAM footprint on radios.
   - Implemented missing negative caches (`missingRenders`) in `objects/dial.lua`, `objects/time.lua`, and `objects/image.lua` to eliminate redundant disk I/O / `loadScript` lookups on every scene rebuild for absent subrenderers.

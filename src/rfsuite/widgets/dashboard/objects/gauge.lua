@@ -126,6 +126,55 @@ local function getArcValueColor(value, state, box, themeCommon, utils)
     return ARC_OK_COLOR
   end
 
+  -- Resolve source to detect temperature gauges.
+  local source = box and box.source
+  if utils and type(utils.resolveValue) == "function" then
+    source = utils.resolveValue(source, box, state)
+  end
+
+  -- Temperature sources: inverted threshold logic (high = warning/critical).
+  -- No division by battery cell count; raw value is evaluated directly.
+  if isTempSource(source) or unit == "°C" or unit == "°F" then
+    if value <= 0 then
+      return ARC_BG_COLOR
+    end
+
+    -- Resolve warn threshold (°C): box property -> theme config -> default 90.
+    local warnTemp = tonumber(box and (box.warntemp or box.warn))
+    if not warnTemp then
+      local cfg = state and state.themeConfig
+      warnTemp = tonumber(cfg and cfg.esctemp_warn)
+    end
+    warnTemp = warnTemp or 90
+
+    -- Resolve alert threshold (°C): box property -> theme config -> default max(warn+15, 105).
+    local alertTemp = tonumber(box and (box.alerttemp or box.alert))
+    if not alertTemp then
+      local cfg = state and state.themeConfig
+      alertTemp = tonumber(cfg and cfg.esctemp_alert)
+    end
+    alertTemp = alertTemp or math.max(warnTemp + 15, 105)
+
+    -- Ensure warn < alert.
+    if warnTemp > alertTemp then
+      local tmp = warnTemp
+      warnTemp = alertTemp
+      alertTemp = tmp
+    end
+
+    -- When Fahrenheit display is active, renderArc already converts curVal to °F
+    -- before calling this function, so the thresholds must be converted as well.
+    if useFahrenheit() then
+      warnTemp = cToF(warnTemp)
+      alertTemp = cToF(alertTemp)
+    end
+
+    if value >= alertTemp then return ARC_ALERT_COLOR end
+    if value >= warnTemp then return ARC_WARN_COLOR end
+    return ARC_OK_COLOR
+  end
+
+  -- Default: battery cell voltage handling (ascending thresholds, low = bad).
   if value <= 0 then
     return ARC_BG_COLOR
   end
