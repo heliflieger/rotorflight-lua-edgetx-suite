@@ -3,19 +3,20 @@ local M = {}
 local PREF_PATH        = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
 -- Reload request file monitored by the dashboard widget via fstat size.
 -- Uses a rotating byte counter (1..32 bytes) so changes are reliably detected
--- even without an RTC or when the INI byte-size doesn't change, without ever
--- consuming or deleting the file (which breaks multi-reader and drops armed events).
+-- where fstat is available even without an RTC or when the INI byte-size doesn't change,
+-- without ever consuming or deleting the file (which breaks multi-reader and drops armed events).
 local RELOAD_REQ_PATH  = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 
-local function bumpReloadCounter()
+local function bumpReloadCounter(userRoot)
+  local targetPath = userRoot and (userRoot .. "/reload.req") or RELOAD_REQ_PATH
   local n = 1
   if type(fstat) == "function" then
-    local ok, info = pcall(fstat, RELOAD_REQ_PATH)
+    local ok, info = pcall(fstat, targetPath)
     if ok and type(info) == "table" then
       n = ((info.size or 0) % 32) + 1
     end
   end
-  local f = io.open(RELOAD_REQ_PATH, "w")
+  local f = io.open(targetPath, "w")
   if f then
     io.write(f, string.rep("x", n))
     io.close(f)
@@ -215,7 +216,8 @@ function M.save(prefs)
   -- Signal the dashboard widget that preferences have changed via rotating
   -- sequence length in reload.req. Multi-reader safe, armed-safe, and independent
   -- of RTC timestamp or INI file size equality.
-  bumpReloadCounter()
+  local userRoot = string.match(PREF_PATH, "^(.*)/[^/]+$")
+  bumpReloadCounter(userRoot)
 
   return true
 end

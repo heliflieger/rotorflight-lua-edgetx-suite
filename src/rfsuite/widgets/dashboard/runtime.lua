@@ -552,9 +552,9 @@ local function reloadPreferencesIfNeeded(self, force)
     end
 
     -- Rotating sequence file written by preference writers on every save. Detected here
-    -- as a second, independent path: even when the RTC is absent (frozen mtime) or
-    -- the new INI happens to be the same byte-size as the old one, the sequence size
-    -- will have changed.
+    -- as a second, independent path: where fstat is available, even when the RTC is absent
+    -- (frozen mtime) or the new INI happens to be the same byte-size as the old one,
+    -- the sequence size will have changed.
     --
     -- Readers only inspect info.size using fstat and NEVER write, truncate, or unlink
     -- the file. This ensures:
