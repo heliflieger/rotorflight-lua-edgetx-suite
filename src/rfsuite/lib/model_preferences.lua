@@ -5,6 +5,27 @@ local USER_ROOTS = {
   "SCRIPTS:/TOOLS/rfsuite.user"
 }
 
+-- Reload request file monitored by the dashboard widget via fstat size.
+-- Uses a rotating byte counter (1..32 bytes) so changes are reliably detected
+-- even without an RTC or when the INI byte-size doesn't change, without ever
+-- consuming or deleting the file (which breaks multi-reader and drops armed events).
+local RELOAD_REQ_PATH = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
+
+local function bumpReloadCounter()
+  local n = 1
+  if type(fstat) == "function" then
+    local ok, info = pcall(fstat, RELOAD_REQ_PATH)
+    if ok and type(info) == "table" then
+      n = ((info.size or 0) % 32) + 1
+    end
+  end
+  local f = io.open(RELOAD_REQ_PATH, "w")
+  if f then
+    io.write(f, string.rep("x", n))
+    io.close(f)
+  end
+end
+
 -- How much is asked for per io.read() call. It is a chunk size, not a limit: the reader
 -- below keeps going until the file ends.
 local READ_CHUNK = 2048
@@ -338,7 +359,10 @@ function M.saveByMcuId(mcuId, prefs)
         cachedMcuId = safeId
         cachedPrefs = deepCopyTable(data)
         cachedPath = path
-        -- No signal is sent. Writing this file IS the event -- see lib/preferences.lua.
+        -- Signal the dashboard widget that model preferences have changed via
+        -- rotating sequence length in reload.req. Multi-reader safe, armed-safe,
+        -- and independent of RTC timestamp or INI file size equality.
+        bumpReloadCounter()
         return true
       end
       lastErr = saveErr or "io"
