@@ -112,14 +112,9 @@ local function resolveThresholdColor(value, thresholds, defaultColor, isFahrenhe
   return defaultColor
 end
 
-local function getArcValueColor(value, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax)
+local function getArcValueColor(value, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit)
   if type(value) ~= "number" then
     return ARC_BG_COLOR
-  end
-
-  local unit = box and box.unit
-  if utils and type(utils.resolveValue) == "function" then
-    unit = utils.resolveValue(unit, box, state)
   end
 
   if unit == "%" then
@@ -128,18 +123,6 @@ local function getArcValueColor(value, state, box, themeCommon, utils, isTemp, f
     if value <= alertPct then return ARC_ALERT_COLOR end
     if value <= warnPct then return ARC_WARN_COLOR end
     return ARC_OK_COLOR
-  end
-
-  -- Fallback detection in case flags were not passed by caller
-  if isTemp == nil then
-    local source = box and box.source
-    if utils and type(utils.resolveValue) == "function" then
-      source = utils.resolveValue(source, box, state)
-    end
-    isTemp = isTempSource(source)
-  end
-  if fahrenheit == nil then
-    fahrenheit = isTemp and useFahrenheit()
   end
 
   -- Temperature sources: inverted threshold logic (high = warning/critical).
@@ -160,12 +143,16 @@ local function getArcValueColor(value, state, box, themeCommon, utils, isTemp, f
     warnTemp = warnTemp or 90
 
     -- Resolve alert threshold (°C): box property -> theme config -> default max(warn+15, 105).
+    local isDefaultAlert = false
     local alertTemp = tonumber(box and (box.alerttemp or box.alert))
     if not alertTemp then
       local cfg = state and state.themeConfig
       alertTemp = tonumber(cfg and cfg.esctemp_alert)
     end
-    alertTemp = alertTemp or math.max(warnTemp + 15, 105)
+    if not alertTemp then
+      alertTemp = math.max(warnTemp + 15, 105)
+      isDefaultAlert = true
+    end
 
     -- Ensure warn < alert.
     if warnTemp > alertTemp then
@@ -181,9 +168,9 @@ local function getArcValueColor(value, state, box, themeCommon, utils, isTemp, f
       alertTemp = cToF(alertTemp)
     end
 
-    -- Cap alert threshold at gaugeMax so alert color remains reachable even if
+    -- Cap defaulted alert threshold at gaugeMax so alert color remains reachable even if
     -- user or theme increases warnTemp beyond standard scale limits.
-    if type(gaugeMax) == "number" and gaugeMax > warnTemp then
+    if isDefaultAlert and type(gaugeMax) == "number" and gaugeMax > warnTemp then
       alertTemp = math.min(alertTemp, gaugeMax)
     end
 
@@ -619,7 +606,8 @@ end
 
 local function renderArc(nodes, rect, box, state, themeCommon, utils)
   local source = utils.resolveValue(box.source, box, state)
-  local isTemp = isTempSource(source)
+  local unit = utils.resolveValue(box.unit, box, state)
+  local isTemp = isTempSource(source) or unit == "°C" or unit == "°F"
   local fahrenheit = isTemp and useFahrenheit()
 
   local defaultMin = isTemp and 20 or 18.0
@@ -696,7 +684,7 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
       if type(box.thresholds) == "table" and #box.thresholds > 0 and curHasValue then
         arcValueColor = resolveThresholdColor(curVal, box.thresholds, ARC_OK_COLOR, fahrenheit, box)
       else
-        arcValueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax)
+        arcValueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit)
       end
     end
     cachedArcColor = arcValueColor or ARC_OK_COLOR
@@ -722,7 +710,6 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
   local valueY = cy - math.floor(thickness * 1.3) - valueCenterLift + valueYOffset
   if valueY < rect.y + 10 then valueY = rect.y + 10 end
 
-  local unit = utils.resolveValue(box.unit, box, state)
   if fahrenheit then
     unit = "°F"
   elseif isTemp and (unit == nil or unit == "") then
