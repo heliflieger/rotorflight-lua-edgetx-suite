@@ -27,6 +27,9 @@ local ARM_FILE_MAP = {
   [3] = "armed.wav"
 }
 
+-- Keyed on govState_e as the firmware numbers it (flight/governor.h, 0..9), which is what the
+-- governor sensor carries. The dashboard's text object synthesises 100 and 101 for its own
+-- label (widgets/dashboard/objects/text/governor.lua); neither reaches this path.
 local GOVERNOR_FILE_MAP = {
   [0] = "off.wav",
   [1] = "idle.wav",
@@ -37,9 +40,31 @@ local GOVERNOR_FILE_MAP = {
   [6] = "lost-hs.wav",
   [7] = "autorot.wav",
   [8] = "bailout.wav",
-  [100] = "disabled.wav",
-  [101] = "disarm.wav"
+  -- GOV_STATE_BYPASS: the governor is passing the throttle straight through, which is what
+  -- the pack's disabled.wav says.
+  [9] = "disabled.wav"
 }
+
+-- The per-state enables under the `governor_state` master switch, one key per entry above.
+-- An absent key counts as on, so a preferences.ini written before these existed announces
+-- every state, as it did.
+local GOVERNOR_PREF_KEYS = {
+  [0] = "governor_state_off",
+  [1] = "governor_state_idle",
+  [2] = "governor_state_spoolup",
+  [3] = "governor_state_recovery",
+  [4] = "governor_state_active",
+  [5] = "governor_state_thr_off",
+  [6] = "governor_state_lost_hs",
+  [7] = "governor_state_autorot",
+  [8] = "governor_state_bailout",
+  [9] = "governor_state_bypass"
+}
+
+-- How long a governor state has to stand before it is spoken. A spool-up crosses several
+-- states inside a second, and the file for a state the machine has already left would
+-- otherwise still be playing, or be skipped by the cooldown, when the next one is due.
+local GOVERNOR_HOLD_SECONDS = 0.3
 
 local function nowSeconds()
   if getTime then
@@ -472,24 +497,45 @@ local function announceArmEvent(self, opts)
   tryPlayEventFile(audioState, now, "evt/" .. file, opts)
 end
 
-local function announceGovernorEvent(self, opts)
+local function announceGovernorEvent(self, events, opts)
   local value = roundProfileValue(self.state.governor)
   if value == nil then return false end
 
-  local rounded = value
   local audioState = self.audioState
-  if audioState.lastValues.governor_state == rounded then
+  if audioState.lastValues.governor_state == value then
+    -- Back on the state last spoken, so whatever was seen in between was a transient.
+    audioState.governorPending = nil
     return false
   end
 
-  audioState.lastValues.governor_state = rounded
   if not audioState.initialized then
+    audioState.lastValues.governor_state = value
     return false
   end
 
-  local file = GOVERNOR_FILE_MAP[rounded]
-  if type(file) ~= "string" then return false end
+  -- A new state is a candidate first. It is spoken once it has stood for the hold time; a
+  -- state that changes again before that is replaced without a word.
   local now = nowSeconds()
+  if audioState.governorPending ~= value then
+    audioState.governorPending = value
+    audioState.governorPendingSince = now
+    return false
+  end
+  if now - (tonumber(audioState.governorPendingSince) or now) < GOVERNOR_HOLD_SECONDS then
+    return false
+  end
+
+  audioState.lastValues.governor_state = value
+  audioState.governorPending = nil
+
+  local key = GOVERNOR_PREF_KEYS[value]
+  if key and not prefEnabled(events, key, true) then
+    emitLog(opts, "governor state " .. tostring(value) .. " not announced: " .. key .. " is off", "debug")
+    return false
+  end
+
+  local file = GOVERNOR_FILE_MAP[value]
+  if type(file) ~= "string" then return false end
   return tryPlayEventFile(audioState, now, "gov/" .. file, opts)
 end
 
@@ -594,6 +640,8 @@ function Audio.resetConnectionState(audioState)
 
   audioState.initialized = false
   audioState.modelAnnounced = false
+  audioState.governorPending = nil
+  audioState.governorPendingSince = nil
   audioState.batteryCapacityAnnounced = false
   audioState.initialFuelAnnounced = false
   audioState.nextAllowedAt = 0
@@ -696,7 +744,7 @@ function Audio.process(self, opts)
   end
 
   if governorEnabled then
-    announceGovernorEvent(self, opts)
+    announceGovernorEvent(self, events, opts)
   end
 
   announceProfileEvent(self, "pid_profile", self.state.profile, "evt/profile.wav", opts)

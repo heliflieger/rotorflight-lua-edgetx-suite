@@ -164,6 +164,15 @@ return {
         table = "Rate-Tabelle"
       },
       audio_events = { name = "Ereignisse" },
+      audio_events_arming = { name = "Arming" },
+      audio_events_governor = { name = "Governor" },
+      audio_events_voltage = { name = "Spannung" },
+      audio_events_profiles = { name = "Profile" },
+      audio_events_esc = { name = "ESC" },
+      audio_events_adjustment = { name = "Einstellungen" },
+      audio_events_fuel = { name = "Kraftstoff" },
+      audio_events_battery = { name = "Akku" },
+      audio_events_other = { name = "Sonstiges" },
       msp_speed = { name = "MSP-Geschwindigkeit" },
       api_tester = { name = "API Tester" },
       msp_experiments = { name = "MSP Experimente" },
@@ -721,6 +730,17 @@ return {
         section_other = "Sonstiges",
         arming_flags = "Arming-Flags",
         governor_state = "Governor-Status",
+        section_governor_states = "Angesagte Zustaende",
+        governor_state_off = "Aus",
+        governor_state_idle = "Leerlauf",
+        governor_state_spoolup = "Hochlauf",
+        governor_state_recovery = "Erholung",
+        governor_state_active = "Aktiv",
+        governor_state_thr_off = "Gas aus",
+        governor_state_lost_hs = "Drehzahl verloren",
+        governor_state_autorot = "Autorotation",
+        governor_state_bailout = "Bailout",
+        governor_state_bypass = "Bypass",
         voltage_alert = "Spannung",
         pid_profile = "PID-Profil",
         rate_profile = "Raten-Profil",
@@ -747,6 +767,33 @@ return {
         saved_message = "Audio-Ereignisse gespeichert",
         save_error_title = "Fehler",
         save_error_message = "Speichern fehlgeschlagen"
+      },
+      settings_audio_events_arming = {
+        help_message = "Ansage, wenn das Modell scharf geschaltet oder entschaerft wird."
+      },
+      settings_audio_events_governor = {
+        help_message = "Ansage des Governor-Status. Der Hauptschalter schaltet die Ansagen ein; darunter waehlst du, welche Zustaende gesprochen werden. Ein Zustand wird erst angesagt, wenn er einen Moment anliegt, damit die Zustaende eines Hochlaufs nicht nacheinander vorgelesen werden."
+      },
+      settings_audio_events_voltage = {
+        help_message = "Ansage, wenn die Akkuspannung auf die in der Akkukonfiguration eingestellte Warnschwelle faellt. Die Warnung wiederholt sich alle 10 Sekunden, bis sich die Spannung erholt."
+      },
+      settings_audio_events_profiles = {
+        help_message = "Ansage des PID-Profils und des Raten-Profils bei einem Wechsel, mit der Nummer des neuen Profils."
+      },
+      settings_audio_events_esc = {
+        help_message = "Ansage, wenn die ESC-Temperatur den Schwellwert erreicht. Der Schwellwert gehoert zum Modell: mit verbundenem Flugregler wird er beim Modell gespeichert, sonst gilt der radioweite Standard."
+      },
+      settings_audio_events_adjustment = {
+        help_message = "Ansage eines Werts, der ueber eine Adjustment-Funktion geaendert wurde, so wie der Flugregler ihn meldet."
+      },
+      settings_audio_events_fuel = {
+        help_message = "Ansage des Restkraftstoffs beim Unterschreiten der gewaehlten Stufen, mit Wiederholung der Leer-Warnung unter 0% und optionalem Vibrationsimpuls."
+      },
+      settings_audio_events_battery = {
+        help_message = "Ansage der Akku-Kapazitaet bei einem Wechsel des Akkuprofils und des Kraftstoffstands einmal beim Verbinden des Modells."
+      },
+      settings_audio_events_other = {
+        help_message = "Ansage des Modellnamens beim Verbinden. Die Ansage ist eine WAV-Datei mit dem Namen des Modells im Ordner SOUNDS."
       },
       setup_power_smartfuel = {
         section_mode = "SmartFuel Modus",

@@ -164,6 +164,15 @@ return {
         table = "Rate Table"
       },
       audio_events = { name = "Events" },
+      audio_events_arming = { name = "Arming" },
+      audio_events_governor = { name = "Governor" },
+      audio_events_voltage = { name = "Voltage" },
+      audio_events_profiles = { name = "Profiles" },
+      audio_events_esc = { name = "ESC" },
+      audio_events_adjustment = { name = "Adjustments" },
+      audio_events_fuel = { name = "Fuel" },
+      audio_events_battery = { name = "Battery" },
+      audio_events_other = { name = "Other" },
       msp_speed = { name = "MSP Speed" },
       api_tester = { name = "API Tester" },
       msp_experiments = { name = "MSP Experiments" },
@@ -721,6 +730,17 @@ return {
         section_other = "Other",
         arming_flags = "Arming Flags",
         governor_state = "Governor State",
+        section_governor_states = "Announced states",
+        governor_state_off = "Off",
+        governor_state_idle = "Idle",
+        governor_state_spoolup = "Spool-up",
+        governor_state_recovery = "Recovery",
+        governor_state_active = "Active",
+        governor_state_thr_off = "Throttle off",
+        governor_state_lost_hs = "Lost headspeed",
+        governor_state_autorot = "Autorotation",
+        governor_state_bailout = "Bailout",
+        governor_state_bypass = "Bypass",
         voltage_alert = "Voltage",
         pid_profile = "PID Profile",
         rate_profile = "Rate Profile",
@@ -747,6 +767,33 @@ return {
         saved_message = "Audio events saved",
         save_error_title = "Error",
         save_error_message = "Save failed"
+      },
+      settings_audio_events_arming = {
+        help_message = "Announce when the model is armed and disarmed."
+      },
+      settings_audio_events_governor = {
+        help_message = "Announce the governor's state. The main switch turns the announcements on; below it, choose which states are spoken. A state is announced once it has held for a moment, so the states a spool-up passes through are not read out one after another."
+      },
+      settings_audio_events_voltage = {
+        help_message = "Announce when the pack voltage falls to the warning level set in the battery configuration. The alert repeats every 10 seconds until the voltage recovers."
+      },
+      settings_audio_events_profiles = {
+        help_message = "Announce the PID profile and the rate profile when they change, with the new profile's number."
+      },
+      settings_audio_events_esc = {
+        help_message = "Announce when the ESC temperature reaches the threshold. The threshold belongs to the model: with a flight controller connected it is stored with that model, otherwise it is the radio-wide default."
+      },
+      settings_audio_events_adjustment = {
+        help_message = "Announce a value changed through an adjustment function, as the flight controller reports it."
+      },
+      settings_audio_events_fuel = {
+        help_message = "Announce the remaining fuel as it falls past the chosen steps, and repeat the empty warning below 0%, with an optional haptic pulse."
+      },
+      settings_audio_events_battery = {
+        help_message = "Announce the battery capacity when the battery profile changes, and the fuel level once when the model connects."
+      },
+      settings_audio_events_other = {
+        help_message = "Announce the model's name when it connects. The announcement is a WAV file named after the model in the SOUNDS folder."
       },
       setup_power_smartfuel = {
         section_mode = "SmartFuel Mode",
