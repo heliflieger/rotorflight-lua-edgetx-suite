@@ -558,6 +558,10 @@ state = {
     lastEnabled = { governor_state = nil }
   },
   telemetryState = { profile = 1, rateProfile = 1, batteryProfile = 1, voltage = 0, bec_voltage = 0, escTemp = 0, fuel = 100, armFlags = 0, governor = 0, themeConfig = { v_min = 18.0 } },
+  -- Handed to the active page's wakeup and to the audio poll respectively, and refilled rather
+  -- than rebuilt each time. They are containers only: nothing is read back out of them here.
+  wakeupContext = {},
+  audioContext = {},
   mspLinkConfigWarningAt = 0,
   headerActions = {
     defaults = {
@@ -2729,6 +2733,9 @@ function M.run(event, touchState)
         state.telemetryState = nil
         state.audioState = nil
         state.cardHandlers = nil
+        -- Both are reused across frames and therefore still point at the tables cleared above.
+        state.wakeupContext = {}
+        state.audioContext = {}
 
         state.shouldExit = true
       end
@@ -2921,13 +2928,17 @@ function M.run(event, touchState)
         local activePage = getActivePageModule()
         local wakeupFn = activePage and (activePage.wakeup or activePage.onWake)
         if type(wakeupFn) == "function" then
-          local ok, err = pcall(wakeupFn, {
-            i18n = state.i18n,
-            preferences = state.preferences,
-            menu = state.menu,
-            manifest = state.manifest,
-            requestRebuild = requestRebuild
-          })
+          -- Filled rather than built: this runs at frame rate, and a fresh five-key table per
+          -- frame is the largest single source of garbage the tool produces while a page is
+          -- merely open. No page writes into what it is handed here, so one table serves them
+          -- all; the fields are re-read every frame, so a page still sees current state.
+          local wakeupContext = state.wakeupContext
+          wakeupContext.i18n = state.i18n
+          wakeupContext.preferences = state.preferences
+          wakeupContext.menu = state.menu
+          wakeupContext.manifest = state.manifest
+          wakeupContext.requestRebuild = requestRebuild
+          local ok, err = pcall(wakeupFn, wakeupContext)
           if not ok then
             reportHookCrash("activePage.wakeup", state.activePageMenuId, err)
           end
@@ -2974,12 +2985,11 @@ function M.run(event, touchState)
         if _G.rfsuite and _G.rfsuite.session then
           modelName = _G.rfsuite.session.modelName
         end
-        local audioContext = {
-          audioState = state.audioState,
-          preferences = state.preferences,
-          state = state.telemetryState,
-          modelName = modelName
-        }
+        local audioContext = state.audioContext
+        audioContext.audioState = state.audioState
+        audioContext.preferences = state.preferences
+        audioContext.state = state.telemetryState
+        audioContext.modelName = modelName
         Audio.process(audioContext, { log = function(msg, level) if Log then pcall(Log.emit, "rfsuite.audio", msg, level, false) end end })
       else
         if Audio and type(Audio.resetConnectionState) == "function" then

@@ -903,9 +903,14 @@ local function queueAdjustmentsWrite(requestRebuild, i18n, ctx)
       clamp(adjRange.adjStep, 0, 255)
     }
 
-    ui.progress = math.floor((slotPos - 1) * 90 / total)
-    if type(requestRebuild) == "function" then
-      requestRebuild()
+    -- The overlay is the only thing on screen while a save runs and it draws whole percent, so a
+    -- rebuild is worth a scene teardown only when the number it shows actually changes.
+    local progress = math.floor((slotPos - 1) * 90 / total)
+    if progress ~= ui.progress then
+      ui.progress = progress
+      if type(requestRebuild) == "function" then
+        requestRebuild()
+      end
     end
 
     queue:add({
@@ -1153,9 +1158,10 @@ function M.build(ctx)
     return
   end
 
-  if ui.loading then
-    local titleText = "@i18n(app.loading)@"
-    local msgText = pageText(i18n, "loading", "Loading adjustment ranges...")
+  if ui.loading or ui.saving then
+    local titleText = ui.loading and "@i18n(app.loading)@" or "@i18n(app.saving)@"
+    local msgText = ui.loading and pageText(i18n, "loading", "Loading adjustment ranges...")
+      or pageText(i18n, "saving", "Saving adjustment ranges...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
       title = titleText,
