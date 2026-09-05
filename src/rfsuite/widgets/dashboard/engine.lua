@@ -58,6 +58,20 @@ local function resolveGrid(layout)
   return cols, rows, padding
 end
 
+-- The grid hands `padding` px to the space between the tracks and emits a rect per box
+-- only, so nothing downstream ever draws in that gap. A Lua widget's own LVGL object
+-- carries no background style, so what shows through the gap is whatever the radio's
+-- theme paints behind the widget -- a different colour on every radio, and a slice of a
+-- photograph where that theme has a background image. One full-zone rectangle at the head
+-- of the node list is the surface the tiles sit on. A theme that wants the radio
+-- background to show through sets `layout.bgcolor = false`.
+local function buildBackgroundNode(zone, layout, state)
+  local bgcolor = Utils.resolveValue(layout and layout.bgcolor, nil, state)
+  if bgcolor == nil then bgcolor = BLACK end
+  if bgcolor == false then return nil end
+  return { type = "rectangle", x = zone.x, y = zone.y, w = zone.w, h = zone.h, color = bgcolor, filled = true }
+end
+
 -- A rect's geometry depends on exactly these four fields of a box; everything else a box
 -- carries is read back from `rect.box` at render time. A theme whose `boxes` is a function
 -- returns a fresh table on every build, so comparing the table itself can never match and the
@@ -239,7 +253,13 @@ function Engine.beginBuild(zone, state, theme)
     end
   end
 
-  return { rects = rects, nodes = {}, cursor = 1 }
+  -- Seeded here rather than pushed by the first step: the background has to precede every
+  -- tile, and the stepped and the single-pass path must hand LVGL the same node order.
+  local nodes = {}
+  local background = buildBackgroundNode(zone, layout, state)
+  if background then nodes[1] = background end
+
+  return { rects = rects, nodes = nodes, cursor = 1 }
 end
 
 -- Renders up to `k` boxes from the cursor into the build's node table -- pure Lua data
