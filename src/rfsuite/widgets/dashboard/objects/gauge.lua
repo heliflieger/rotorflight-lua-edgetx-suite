@@ -112,12 +112,16 @@ local function resolveThresholdColor(value, thresholds, defaultColor, isFahrenhe
   return defaultColor
 end
 
-local function getArcValueColor(value, state, box, themeCommon, utils)
+local function getArcValueColor(value, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax)
   if type(value) ~= "number" then
     return ARC_BG_COLOR
   end
 
   local unit = box and box.unit
+  if utils and type(utils.resolveValue) == "function" then
+    unit = utils.resolveValue(unit, box, state)
+  end
+
   if unit == "%" then
     local alertPct = tonumber(box and box.alertpct) or 15
     local warnPct = tonumber(box and box.warnpct) or 30
@@ -126,16 +130,24 @@ local function getArcValueColor(value, state, box, themeCommon, utils)
     return ARC_OK_COLOR
   end
 
-  -- Resolve source to detect temperature gauges.
-  local source = box and box.source
-  if utils and type(utils.resolveValue) == "function" then
-    source = utils.resolveValue(source, box, state)
+  -- Fallback detection in case flags were not passed by caller
+  if isTemp == nil then
+    local source = box and box.source
+    if utils and type(utils.resolveValue) == "function" then
+      source = utils.resolveValue(source, box, state)
+    end
+    isTemp = isTempSource(source)
+  end
+  if fahrenheit == nil then
+    fahrenheit = isTemp and useFahrenheit()
   end
 
   -- Temperature sources: inverted threshold logic (high = warning/critical).
   -- No division by battery cell count; raw value is evaluated directly.
-  if isTempSource(source) or unit == "°C" or unit == "°F" then
-    if value <= 0 then
+  if isTemp then
+    -- When telemetry has no reading, use background color.
+    -- Legitimate low/negative temperatures (<= 0 °C) remain valid (green).
+    if curHasValue == false then
       return ARC_BG_COLOR
     end
 
@@ -164,9 +176,15 @@ local function getArcValueColor(value, state, box, themeCommon, utils)
 
     -- When Fahrenheit display is active, renderArc already converts curVal to °F
     -- before calling this function, so the thresholds must be converted as well.
-    if useFahrenheit() then
+    if fahrenheit then
       warnTemp = cToF(warnTemp)
       alertTemp = cToF(alertTemp)
+    end
+
+    -- Cap alert threshold at gaugeMax so alert color remains reachable even if
+    -- user or theme increases warnTemp beyond standard scale limits.
+    if type(gaugeMax) == "number" and gaugeMax > warnTemp then
+      alertTemp = math.min(alertTemp, gaugeMax)
     end
 
     if value >= alertTemp then return ARC_ALERT_COLOR end
@@ -175,7 +193,7 @@ local function getArcValueColor(value, state, box, themeCommon, utils)
   end
 
   -- Default: battery cell voltage handling (ascending thresholds, low = bad).
-  if value <= 0 then
+  if value <= 0 or curHasValue == false then
     return ARC_BG_COLOR
   end
 
@@ -678,7 +696,7 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
       if type(box.thresholds) == "table" and #box.thresholds > 0 and curHasValue then
         arcValueColor = resolveThresholdColor(curVal, box.thresholds, ARC_OK_COLOR, fahrenheit, box)
       else
-        arcValueColor = getArcValueColor(curVal, state, box, themeCommon, utils)
+        arcValueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax)
       end
     end
     cachedArcColor = arcValueColor or ARC_OK_COLOR
