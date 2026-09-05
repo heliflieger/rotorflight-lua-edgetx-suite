@@ -389,6 +389,8 @@ local ARMED_BANNER_TEXT = "@i18n(app.model_armed_banner)@"
 -- is the same refusal it always was, in the tool's own box instead of a native modal.
 local ARMED_NOTICE_TITLE = "@i18n(app.model_armed_title)@"
 local ARMED_NOTICE_MESSAGE = "@i18n(app.model_armed_warning)@"
+local ARMED_SAVE_BLOCKED_TEXT = "@i18n(app.model_armed_save_blocked)@"
+local ARMED_SAVE_FEEDBACK_TICKS = 250
 
 local function ensureBuildDeps()
   if not GridLayout then
@@ -529,6 +531,7 @@ state = {
   saveOutcome = nil,
   saveOverlayVisible = false,
   armedNoticeVisible = false,
+  armedSaveFeedbackUntil = nil,
   lastSaveSnapshot = nil,
   mspAttached = false,
   mspLastTick = 0,
@@ -794,6 +797,7 @@ local function leaveCurrentPage(fromEvent)
   -- exit both the key and a page's own Close button take. Stamped on both paths: a press that
   -- closes the tool has to arm it exactly as a press that steps up a level does.
   local now = (type(getTime) == "function" and getTime()) or 0
+  state.armedSaveFeedbackUntil = nil
   if not (state.menu and not state.menu.isRoot()) then
     state.lastBackTick = now
     state.isClosing = true
@@ -1427,6 +1431,7 @@ end
 -- child of its own -- its key path exists only while its LVGL group is empty, and while one
 -- stands this script's run() is not reached at all.
 local function showArmedNotice()
+  state.armedSaveFeedbackUntil = nil
   state.armedNoticeVisible = true
   scheduleBuildUI(false)
 end
@@ -1559,6 +1564,9 @@ local function onSave()
   if isModelArmed() and not isLocalSettingsPage() then
     if armedWarningPref ~= false then
       showArmedNotice()
+    else
+      state.armedSaveFeedbackUntil = (getTime and getTime() or 0) + ARMED_SAVE_FEEDBACK_TICKS
+      scheduleBuildUI(false)
     end
     return
   end
@@ -1718,6 +1726,13 @@ end
 -- the message in PRIMARY1 (libui/fullscreen_dialog.cpp). The pairing this replaces was the
 -- other way round, WARNING text on PRIMARY3, which computes about 2.2:1 off the default theme
 -- table and is below every legibility floor there is.
+local function currentArmedBannerText()
+  if state.armedSaveFeedbackUntil and (getTime and getTime() or 0) < state.armedSaveFeedbackUntil then
+    return ARMED_SAVE_BLOCKED_TEXT
+  end
+  return ARMED_BANNER_TEXT
+end
+
 local function appendArmedBanner(children, x, y, w, h, text)
   children[#children + 1] = {
     type = "rectangle",
@@ -2080,13 +2095,9 @@ function M.buildUI()
     reportHookCrash = reportHookCrash
   })
 
-  -- Both actions end at the MSP queue, which the runtime clears on every tick while armed, so
-  -- neither could do anything but fail. Rendered disabled rather than merely inert: ui/header.lua
-  -- reports that through `active`, which also takes the button out of the encoder focus group.
-  if isArmed then
-    actions.save = false
-    actions.reload = false
-  end
+  -- Save and Reload remain interactive when armed on pages that declare them, so pressing
+  -- either reaches onSave / onReload to report the armed refusal (modal dialog or non-blocking
+  -- banner feedback, #136). The armed interlock is enforced safely inside the handlers.
 
   -- Clear and reuse the children table to reduce garbage collection
   local children = state.children
@@ -2153,7 +2164,7 @@ function M.buildUI()
   -- ── End help view ────────────────────────────────────────────────────────────
 
   if bannerH > 0 then
-    appendArmedBanner(children, contentX, 0, contentW, bannerH, ARMED_BANNER_TEXT)
+    appendArmedBanner(children, contentX, 0, contentW, bannerH, currentArmedBannerText())
   end
 
   if state.menu.isRoot() then
@@ -2278,7 +2289,7 @@ function M.buildUI()
         -- goes back on, and the failure takes the page body.
         wipeTable(children)
         if bannerH > 0 then
-          appendArmedBanner(children, contentX, 0, contentW, bannerH, ARMED_BANNER_TEXT)
+          appendArmedBanner(children, contentX, 0, contentW, bannerH, currentArmedBannerText())
         end
         appendPageBuildError(children, contentX, contentY, contentW, pageBodyH, state.i18n, currentMenuId, err)
       end
@@ -2423,6 +2434,7 @@ function M.init()
   state.saveOutcome = nil
   state.saveOverlayVisible = false
   state.armedNoticeVisible = false
+  state.armedSaveFeedbackUntil = nil
   state.pendingMenuOpen = nil
   state.isClosing = false
   state.closeTicks = nil
@@ -2556,6 +2568,7 @@ function M.run(event, touchState)
       if not armed then
         -- The refusal has outlived its reason; it must not stand over the tool after a disarm.
         state.armedNoticeVisible = false
+        state.armedSaveFeedbackUntil = nil
         -- And no cached reply has outlived the flight that just ended: an in-flight
         -- adjustment can have moved any of them, and this is the edge the cache's own keys
         -- cannot see. It costs no new update path -- the transition is already handled here.
@@ -2793,6 +2806,12 @@ function M.run(event, touchState)
       and (getTime and getTime() or 0) >= state.saveOutcome.clearAt then
       state.saveOutcome = nil
       state.saveOverlayVisible = false
+      scheduleBuildUI(false)
+    end
+
+    if state.armedSaveFeedbackUntil and not state.isClosing
+      and (getTime and getTime() or 0) >= state.armedSaveFeedbackUntil then
+      state.armedSaveFeedbackUntil = nil
       scheduleBuildUI(false)
     end
 

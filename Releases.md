@@ -143,6 +143,11 @@
   - Introduced a three-step runtime fallback: ① read `language` from `[localizations]` in `preferences.ini` (set via Settings › Localization); ② read the EdgeTX `LANGUAGE` global (where exposed by the firmware); ③ caller-supplied default (`"en"`). The `@i18n_language@` marker is retained as a precompile token only – packaged release builds still get the locale baked in at build time, while source/simulator runs now correctly pick up the user's chosen language.
   - Added a **Language** dropdown (English / German) to Settings › Localization so users can set their preferred UI language; the choice is persisted in `preferences.ini` under `[localizations] language` and takes effect on the next tool open.
   - Added `language = "en"` to `lib/preferences.lua` defaults so the key is always present in newly created `preferences.ini` files.
+- **Save Interlock & Non-Blocking Feedback While Armed (`ui/home.lua`, `i18n`, fixes #136)**:
+  - Fixed Save button becoming completely dead and unresponsive while the model is armed.
+  - Kept header Save and Reload actions interactive on pages that declare them instead of forcing them disabled in the header layout, ensuring button presses reliably reach `onSave` / `onReload`.
+  - When the modal warning preference is disabled (`save_armed_warning = false`), clicking Save now provides immediate non-blocking feedback by temporarily updating the top armed banner to `"Save blocked: Model is ARMED!"` for 2.5 seconds before auto-reverting, keeping the page visible and navigable.
+  - Saving while armed remains safely blocked in all cases.
 
 ### Performance, Memory & Build System
 - **Tile & Theme Icon Pre-Scaling to 40x40 (`app/pages`, `widgets/dashboard/themes`)**:
