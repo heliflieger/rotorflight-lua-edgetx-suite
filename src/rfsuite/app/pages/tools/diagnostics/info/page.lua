@@ -430,10 +430,12 @@ local function startLiveLoad()
     processReply = function(_, buf)
       local parsed = BoardInfoApi.parse(buf)
       if parsed then
-        if parsed.boardName and parsed.boardName ~= "" then
-          state.values.board_info = parsed.boardName
-        else
-          state.values.board_info = string.format("ID %d", tonumber(parsed.boardId) or 0)
+        -- The names are the ones the parser sets. They used to be read as boardName/boardId,
+        -- which it never returned, so this line showed the fallback whatever the board said.
+        if parsed.board_name and parsed.board_name ~= "" then
+          state.values.board_info = parsed.board_name
+        elseif parsed.board_identifier and parsed.board_identifier ~= "" then
+          state.values.board_info = parsed.board_identifier
         end
       end
       markStepDone()
