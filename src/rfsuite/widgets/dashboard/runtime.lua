@@ -334,9 +334,11 @@ end
 --- The files the tool writes when a preference changes, and how often they are looked at.
 -- One second is the rate the old signal was polled at, so nothing gets slower here.
 local PREFERENCES_FILE  = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
--- Sentinel written by lib/preferences.lua M.save(). The widget removes it after
--- consuming it so that a single save triggers exactly one reload even when the
--- RTC is absent (frozen mtime) or the new INI happens to be the same byte-size.
+-- Rotating sequence file written by lib/preferences.lua and lib/model_preferences.lua.
+-- The file contains between 1 and 32 bytes ('x'). Each save cycles the size by 1.
+-- The widget inspects fstat(RELOAD_REQ_FILE).size without modifying or deleting the file.
+-- This ensures multi-reader safety (all widgets see the change) and armed safety
+-- (updates occurring while armed are not consumed prematurely and remain pending until disarm).
 local RELOAD_REQ_FILE   = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 local PREFS_STAT_INTERVAL = 1.0
 
@@ -345,6 +347,19 @@ local function publishPreferencesToGlobal(prefs)
   _G.rfsuite = _G.rfsuite or {}
   _G.rfsuite.preferences = prefs or {}
 end
+
+-- Shared stand-in for "no global dashboard section", so that the absence of one is a stable
+-- value rather than a fresh table on every call. Without it the memo below can never hit.
+local EMPTY_DASHBOARD = {}
+
+-- The answer depends on three things that change rarely: the flight mode, the global dashboard
+-- preferences and the model's own. Both preference tables are replaced wholesale when their
+-- file is reloaded, so table identity is a generation marker -- the same one the background
+-- pass already uses to decide whether the model preferences have changed. Without this memo the
+-- resolver runs on every background pass, and so does the log line at the end of it.
+-- Declared here at file level so that reloadPreferencesIfNeeded can clear it on reload.
+local themePathMemo = {}
+
 
 local function logGv(fmt, ...)
   -- The reload trace, through the logging core: the ring (Session Logs) takes it, and --
@@ -514,9 +529,10 @@ end
 local function reloadPreferencesIfNeeded(self, force)
   local now = nowSeconds()
 
-  -- The stamp that a completed reload will adopt. Held back on purpose -- see the armed
+  -- The stamp and sequence that a completed reload will adopt. Held back on purpose -- see the armed
   -- guard below.
   local pendingStamp = nil
+  local pendingSeq = nil
   local signalReload = false
   if not force and (now - (self._lastPrefsStatAt or 0)) >= PREFS_STAT_INTERVAL then
     self._lastPrefsStatAt = now
@@ -535,25 +551,27 @@ local function reloadPreferencesIfNeeded(self, force)
       end
     end
 
-    -- Sentinel written by lib/preferences.lua M.save() on every save. Detected here
+    -- Rotating sequence file written by preference writers on every save. Detected here
     -- as a second, independent path: even when the RTC is absent (frozen mtime) or
-    -- the new INI happens to be the same byte-size as the old one the fstat stamp
-    -- above will be unchanged, but this sentinel will still be present.
+    -- the new INI happens to be the same byte-size as the old one, the sequence size
+    -- will have changed.
     --
-    -- EdgeTX Lua exposes no os module, so there is no os.remove(). Consuming the
-    -- sentinel is done by truncating the file to 0 bytes with io.open(path, "w").
-    -- The next poll then sees size == 0 and does not fire again, so exactly one
-    -- reload is triggered per save.
+    -- Readers only inspect info.size using fstat and NEVER write, truncate, or unlink
+    -- the file. This ensures:
+    -- 1) Multiple widgets can all observe the change (no single widget steals/consumes it).
+    -- 2) If the helicopter is armed, the reload is deferred until disarm without losing
+    --    the trigger, since self._lastReloadSeq is only updated after the armed guard passes.
     if type(fstat) == "function" then
       local ok, info = pcall(fstat, RELOAD_REQ_FILE)
-      if ok and type(info) == "table" and (info.size or 0) > 0 then
-        -- File exists with content: consume it by truncating to 0 bytes.
-        local rf = io.open(RELOAD_REQ_FILE, "w")
-        if rf then io.close(rf) end
-        logGv("reloadPreferencesIfNeeded: sentinel reload.req detected and consumed")
-        signalReload = true
-        -- Let pendingStamp stay nil: the stamp already reflects the new file, so the
-        -- next poll will see it as the baseline and not re-signal.
+      local seq = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or nil
+      if seq then
+        if self._lastReloadSeq == nil then
+          self._lastReloadSeq = seq
+        elseif seq ~= self._lastReloadSeq then
+          logGv("reloadPreferencesIfNeeded: reload.req sequence changed (%s -> %s)", tostring(self._lastReloadSeq), tostring(seq))
+          signalReload = true
+          pendingSeq = seq
+        end
       end
     end
   end
@@ -568,16 +586,15 @@ local function reloadPreferencesIfNeeded(self, force)
   -- always claimed. A forced caller asks for the reload outright and carries no `pendingStamp`
   -- to re-signal itself with, so dropping it here dropped it for good.
   --
-  -- Returning here does NOT lose the change: `pendingStamp` is not adopted, so the next
-  -- pass after disarming sees the same difference and reloads then. With the old signal
-  -- the flag had already been read and reset above this guard, so a save made while armed
-  -- was gone with nothing left to re-signal it.
+  -- Returning here does NOT lose the change: `pendingStamp` and `pendingSeq` are not adopted,
+  -- so the next pass after disarming sees the same difference and reloads then.
   if not force and (self.state.armed or (self.state.hadInflightFlight == true and not self.state.fblConnected)) then
     return
   end
 
   logGv("reloadPreferencesIfNeeded executing (force=%s signal=%s)", tostring(force), tostring(signalReload))
   if pendingStamp then self._lastPrefsStamp = pendingStamp end
+  if pendingSeq then self._lastReloadSeq = pendingSeq end
 
   local prefs = loadPreferences()
   if type(prefs) == "table" then
@@ -1130,17 +1147,6 @@ local function loadThemeModuleForState(themePath, flightMode)
   return nil
 end
 
--- Shared stand-in for "no global dashboard section", so that the absence of one is a stable
--- value rather than a fresh table on every call. Without it the memo below can never hit.
-local EMPTY_DASHBOARD = {}
-
--- The answer depends on three things that change rarely: the flight mode, the global dashboard
--- preferences and the model's own. Both preference tables are replaced wholesale when their
--- file is reloaded, so table identity is a generation marker -- the same one the background
--- pass already uses to decide whether the model preferences have changed. Without this memo the
--- resolver runs on every background pass, and so does the log line at the end of it.
-local themePathMemo = {}
-
 local function resolveThemePathForState(dashboard, modelPrefs, flightMode)
   if themePathMemo.dashboard == dashboard
     and themePathMemo.modelPrefs == modelPrefs
@@ -1398,6 +1404,7 @@ function Runtime.new(zone, options)
     -- The pending job, at most one: { kind, step } or nil. See the job steps above and
     -- the dispatcher in widget.refresh.
     _job = nil,
+    _lastReloadSeq = nil,
     themePath = "system/default",
     flightMode = "preflight",
     theme = nil,

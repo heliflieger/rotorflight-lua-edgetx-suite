@@ -1,11 +1,26 @@
 local M = {}
 
 local PREF_PATH        = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
--- Sentinel written on every save so the widget can detect a change even when
--- the RTC is absent (timestamp frozen) or the new INI is the same byte-size
--- (e.g. swapping between two themes whose path strings have the same length).
--- The widget reads and then removes this file, so it is never left on the card.
+-- Reload request file monitored by the dashboard widget via fstat size.
+-- Uses a rotating byte counter (1..32 bytes) so changes are reliably detected
+-- even without an RTC or when the INI byte-size doesn't change, without ever
+-- consuming or deleting the file (which breaks multi-reader and drops armed events).
 local RELOAD_REQ_PATH  = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
+
+local function bumpReloadCounter()
+  local n = 1
+  if type(fstat) == "function" then
+    local ok, info = pcall(fstat, RELOAD_REQ_PATH)
+    if ok and type(info) == "table" then
+      n = ((info.size or 0) % 32) + 1
+    end
+  end
+  local f = io.open(RELOAD_REQ_PATH, "w")
+  if f then
+    io.write(f, string.rep("x", n))
+    io.close(f)
+  end
+end
 
 -- How much is asked for per io.read() call. It is a chunk size, not a limit: the reader
 -- below keeps going until the file ends.
@@ -197,18 +212,10 @@ function M.save(prefs)
 
   io.close(f)
 
-  -- Signal the dashboard widget that preferences have changed. The fstat-based
-  -- stamp (size + mtime) is unreliable on radios without a battery-backed RTC
-  -- (mtime stays frozen at 2000-01-01) and fails when the new INI is the same
-  -- byte-length as the old one.  Writing a tiny sentinel that the widget can
-  -- detect — regardless of RTC state or theme-name length — is the robust
-  -- alternative.  The widget removes the file after consuming it, so it is
-  -- never left around after a reload.
-  local sf = io.open(RELOAD_REQ_PATH, "w")
-  if sf then
-    io.write(sf, "1")
-    io.close(sf)
-  end
+  -- Signal the dashboard widget that preferences have changed via rotating
+  -- sequence length in reload.req. Multi-reader safe, armed-safe, and independent
+  -- of RTC timestamp or INI file size equality.
+  bumpReloadCounter()
 
   return true
 end
