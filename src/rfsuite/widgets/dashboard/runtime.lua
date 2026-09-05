@@ -957,6 +957,13 @@ local function updateDerivedFlightState(state)
       end
     end
 
+    if type(state.bec_voltage) == "number" and state.bec_voltage > 0 then
+      local currentMinBecVoltage = state.currentFlightMinBecVoltage
+      if currentMinBecVoltage == nil or state.bec_voltage < currentMinBecVoltage then
+        state.currentFlightMinBecVoltage = state.bec_voltage
+      end
+    end
+
     if type(state.lq) == "number" and state.lq > 0 then
       local currentMinLq = state.currentFlightMinLq
       if currentMinLq == nil or state.lq < currentMinLq then
@@ -981,9 +988,11 @@ local function updateDerivedFlightState(state)
     state.lastFlightMaxMcuTemp = state.currentFlightMaxMcuTemp
     state.lastFlightMinFuel = state.currentFlightMinFuel
     state.lastMinVoltage = state.currentFlightMinVoltage
+    state.lastMinBecVoltage = state.currentFlightMinBecVoltage
     state.lastMinLq = state.currentFlightMinLq
     state.currentFlightSeconds = 0
     state.currentFlightMinVoltage = nil
+    state.currentFlightMinBecVoltage = nil
     state.currentFlightMinLq = nil
     state.fuelTelemetrySeen = false
     state.currentFlightMaxThrottlePercent = nil
@@ -1097,20 +1106,47 @@ local function loadThemeModuleForState(themePath, flightMode)
   return nil
 end
 
+-- Everything reloadActiveTheme reads out of the per-model preferences sits under `dashboard`:
+-- resolveThemePathForState below takes `model_override` and the `model_theme_*` keys, and
+-- app/pages/settings/dashboard/lib.lua's getThemeConfig takes the `cfg_<theme>_*` keys. A
+-- signature over that one flat table therefore decides whether anything a rebuild would read
+-- has actually changed.
+local function modelPreferencesSignature(modelPrefs)
+  if type(modelPrefs) ~= "table" then return nil end
+  local dashboard = modelPrefs.dashboard
+  if type(dashboard) ~= "table" then return "" end
+
+  local keys = {}
+  for k in pairs(dashboard) do
+    keys[#keys + 1] = k
+  end
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+
+  local parts = {}
+  for i = 1, #keys do
+    local k = keys[i]
+    parts[i] = tostring(k) .. "=" .. tostring(dashboard[k])
+  end
+  return table.concat(parts, "\n")
+end
+
 -- Shared stand-in for "no global dashboard section", so that the absence of one is a stable
 -- value rather than a fresh table on every call. Without it the memo below can never hit.
 local EMPTY_DASHBOARD = {}
 
 -- The answer depends on three things that change rarely: the flight mode, the global dashboard
--- preferences and the model's own. Both preference tables are replaced wholesale when their
--- file is reloaded, so table identity is a generation marker -- the same one the background
--- pass already uses to decide whether the model preferences have changed. Without this memo the
--- resolver runs on every background pass, and so does the log line at the end of it.
+-- preferences and the model's own. Keying on global dashboard table identity, the model
+-- preferences content signature (modelSig), and the flight mode ensures that cache hits avoid
+-- re-resolving and logging every pass, while picking up content changes immediately.
 local themePathMemo = {}
 
-local function resolveThemePathForState(dashboard, modelPrefs, flightMode)
+local function resolveThemePathForState(dashboard, modelPrefs, flightMode, modelSig)
+  if modelSig == nil and modelPrefs ~= nil then
+    modelSig = modelPreferencesSignature(modelPrefs)
+  end
+
   if themePathMemo.dashboard == dashboard
-    and themePathMemo.modelPrefs == modelPrefs
+    and themePathMemo.modelSig == modelSig
     and themePathMemo.flightMode == flightMode then
     return themePathMemo.chosen
   end
@@ -1160,35 +1196,11 @@ local function resolveThemePathForState(dashboard, modelPrefs, flightMode)
     tostring(key), tostring(dashboard and dashboard[key]), tostring(chosen), tostring(reason))
 
   themePathMemo.dashboard = dashboard
-  themePathMemo.modelPrefs = modelPrefs
+  themePathMemo.modelSig = modelSig
   themePathMemo.flightMode = flightMode
   themePathMemo.chosen = chosen
 
   return chosen
-end
-
--- Everything reloadActiveTheme reads out of the per-model preferences sits under `dashboard`:
--- resolveThemePathForState above takes `model_override` and the `model_theme_*` keys, and
--- app/pages/settings/dashboard/lib.lua's getThemeConfig takes the `cfg_<theme>_*` keys. A
--- signature over that one flat table therefore decides whether anything a rebuild would read
--- has actually changed.
-local function modelPreferencesSignature(modelPrefs)
-  if type(modelPrefs) ~= "table" then return nil end
-  local dashboard = modelPrefs.dashboard
-  if type(dashboard) ~= "table" then return "" end
-
-  local keys = {}
-  for k in pairs(dashboard) do
-    keys[#keys + 1] = k
-  end
-  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
-
-  local parts = {}
-  for i = 1, #keys do
-    local k = keys[i]
-    parts[i] = tostring(k) .. "=" .. tostring(dashboard[k])
-  end
-  return table.concat(parts, "\n")
 end
 
 -- Hoisted out of readTelemetry, which runs on the display's 2 Hz cadence: the per-pass cache
@@ -1404,6 +1416,7 @@ function Runtime.new(zone, options)
       currentFlightMaxEscTemp = nil,
       currentFlightMaxMcuTemp = nil,
       currentFlightMinFuel = nil,
+      currentFlightMinBecVoltage = nil,
       flights = 0,
       lq = 0,
       rss1 = 0,
@@ -1418,6 +1431,7 @@ function Runtime.new(zone, options)
       batteryTelemetrySeen = false,
       rfTelemetrySeen = false,
       lastMinVoltage = nil,
+      lastMinBecVoltage = nil,
       lastMinLq = nil,
       lastFlightMinCurrent = nil,
       lastFlightMaxCurrent = nil,
@@ -1641,7 +1655,7 @@ function Runtime.new(zone, options)
 
   local function reloadActiveTheme(self)
     local modelPrefs = self.modelPreferences or (type(_G) == "table" and _G.rfsuite and type(_G.rfsuite.session) == "table" and _G.rfsuite.session.modelPreferences) or nil
-    local selectedTheme = resolveThemePathForState((self.preferences and self.preferences.dashboard) or EMPTY_DASHBOARD, modelPrefs, self.flightMode)
+    local selectedTheme = resolveThemePathForState((self.preferences and self.preferences.dashboard) or EMPTY_DASHBOARD, modelPrefs, self.flightMode, self.lastModelPrefsSignature)
     local nextConfig = {}
     if self.dashboardLib and self.dashboardLib.getThemeConfig then
       nextConfig = self.dashboardLib.getThemeConfig(self.preferences, selectedTheme, {}, modelPrefs)
@@ -1824,7 +1838,6 @@ function Runtime.new(zone, options)
     end
 
     local modelPrefs = self.modelPreferences or (type(_G) == "table" and _G.rfsuite and type(_G.rfsuite.session) == "table" and _G.rfsuite.session.modelPreferences) or nil
-    local selectedTheme = resolveThemePathForState((self.preferences and self.preferences.dashboard) or EMPTY_DASHBOARD, modelPrefs, nextMode)
 
     -- A different table is not a different preference set. The connect chain
     -- (tasks/events/onconnect/tasks/uid.lua), the MSP publisher (tasks/msp/runtime.lua) and
@@ -1841,8 +1854,10 @@ function Runtime.new(zone, options)
       local signature = modelPreferencesSignature(modelPrefs)
       modelPrefsChanged = (signature ~= self.lastModelPrefsSignature)
       self.lastModelPrefsSignature = signature
+      self.lastModelPreferences = modelPrefs
     end
-    self.lastModelPreferences = modelPrefs
+
+    local selectedTheme = resolveThemePathForState((self.preferences and self.preferences.dashboard) or EMPTY_DASHBOARD, modelPrefs, nextMode, self.lastModelPrefsSignature)
 
     if nextMode ~= self.flightMode then
       self.flightMode = nextMode

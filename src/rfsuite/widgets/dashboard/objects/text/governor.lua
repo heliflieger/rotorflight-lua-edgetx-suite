@@ -75,15 +75,18 @@ local function armingDisableFlagsToText(state)
 
   local labels = {}
   for bitIndex = 0, 25 do
-    local label = translate(
-      state,
-      "app.modules.fblstatus.arming_disable_flag_" .. tostring(bitIndex),
-      ARMING_DISABLE_FLAG_LABELS[bitIndex] or ("FLAG" .. tostring(bitIndex))
-    )
-    if bit32 and bit32.band(flags, bit32.lshift(1, bitIndex)) ~= 0 then
-      labels[#labels + 1] = label
-    elseif not bit32 and (flags % (2 ^ (bitIndex + 1))) >= (2 ^ bitIndex) then
-      labels[#labels + 1] = label
+    local isSet = false
+    if bit32 then
+      isSet = bit32.band(flags, bit32.lshift(1, bitIndex)) ~= 0
+    else
+      isSet = (flags % (2 ^ (bitIndex + 1))) >= (2 ^ bitIndex)
+    end
+    if isSet then
+      labels[#labels + 1] = translate(
+        state,
+        "app.modules.fblstatus.arming_disable_flag_" .. tostring(bitIndex),
+        ARMING_DISABLE_FLAG_LABELS[bitIndex] or ("FLAG" .. tostring(bitIndex))
+      )
     end
   end
 

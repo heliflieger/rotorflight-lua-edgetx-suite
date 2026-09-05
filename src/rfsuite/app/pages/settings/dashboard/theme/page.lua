@@ -180,14 +180,27 @@ local function saveToPreferences(prefs)
   if type(_G) == "table" and _G.rfsuite and type(_G.rfsuite.session) == "table" then
     local session = _G.rfsuite.session
     if session.mcu_id then
-      if type(session.modelPreferences) ~= "table" then session.modelPreferences = {} end
-      if type(session.modelPreferences.dashboard) ~= "table" then session.modelPreferences.dashboard = {} end
-      local mDashboard = session.modelPreferences.dashboard
+      -- Clone modelPreferences and its dashboard section so table identity changes on save,
+      -- allowing the dashboard widget to detect changes without waiting for fstat file polling.
+      local newModelPrefs = {}
+      if type(session.modelPreferences) == "table" then
+        for k, v in pairs(session.modelPreferences) do
+          newModelPrefs[k] = v
+        end
+      end
+      local mDashboard = {}
+      if type(newModelPrefs.dashboard) == "table" then
+        for k, v in pairs(newModelPrefs.dashboard) do
+          mDashboard[k] = v
+        end
+      end
 
       mDashboard.model_override = ui.config.model_override == true
       mDashboard.model_theme_preflight = ui.config.model_theme_preflight
       mDashboard.model_theme_inflight = ui.config.model_theme_inflight
       mDashboard.model_theme_postflight = ui.config.model_theme_postflight
+      newModelPrefs.dashboard = mDashboard
+      session.modelPreferences = newModelPrefs
 
       -- Save model preferences using ModelPreferences module
       modelOk, modelErr = false, "model_preferences"
