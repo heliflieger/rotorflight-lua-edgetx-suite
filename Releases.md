@@ -35,6 +35,13 @@
   - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
 
 ### Bug Fixes & Improvements
+- **Dashboard Postflight Stats: Missing Handlers and Live-Value Fallthrough (`widgets/dashboard`) — fixes [#133](https://github.com/rotorflight/rotorflight-lua-edgetx-suite/issues/133)**:
+  - Added per-flight tracking for `currentFlightMaxVoltage`/`lastFlightMaxVoltage`, `currentFlightMaxLq`/`lastFlightMaxLq`, `currentFlightMinBecVoltage`/`lastFlightMinBecVoltage`, and `lastFlightEndingVoltage` in `runtime.lua` (`updateDerivedFlightState`).
+  - Added stat handlers in `objects/text/stats.lua` for `max`+`voltage` (MAX VOLTAGE tile in `rfstatus` theme), `max`+`link` (LINK MAX in `@rt-rc-n`), `min`+`link` (LINK MIN in `@srb-rc`), and `last`+`voltage` (ENDING VOLTAGE in `@srb-rc`).
+  - Fixed `min`+`bec_voltage` handler to use the dedicated BEC minimum accumulator (`lastFlightMinBecVoltage`) instead of incorrectly returning the main pack minimum voltage.
+  - Removed the `/2` transform workaround from `@aerc-n/postflight.lua`'s MIN BEC VOLTAGE tile; the accumulator now tracks the actual BEC minimum directly.
+  - Fixed stats handlers to prioritize current in-flight values over previous flights (`currentFlight… or last…`), and removed live sensor fallbacks so tiles render `--` before the first flight instead of leaking live readings.
+  - Made any unresolvable `(stattype, source)` pair render `--` instead of silently falling through to the live telemetry value, turning future theme typos into immediately visible blank values.
 - **Dashboard Fullscreen Menu EEPROM Commit Write Flag (`widgets/dashboard/fullscreen_menu.lua`)** (fixes #135):
   - Added explicit `isWrite = true` flag to the queued EEPROM commit after a battery profile change, ensuring the message with an empty payload is recognized as a write rather than defaulting to a read request. Dispatches as an MSP write frame (`CRSF_FRAMETYPE_MSP_WRITE`) on CRSF and properly triggers MSP response cache invalidation.
 - **Dashboard ESC Temperature Gauge Arc Coloring (`widgets/dashboard/objects/gauge.lua`)** (fixes #132):

@@ -965,7 +965,9 @@ local function updateDerivedFlightState(state)
   if isArmed and not wasArmed then
     state.currentFlightSeconds = 0
     state.currentFlightMinVoltage = nil
+    state.currentFlightMaxVoltage = nil
     state.currentFlightMinLq = nil
+    state.currentFlightMaxLq = nil
     state.currentFlightMaxThrottlePercent = nil
     state.currentFlightMaxRpm = nil
     state.currentFlightMinRpm = nil
@@ -976,6 +978,8 @@ local function updateDerivedFlightState(state)
     state.currentFlightMaxEscTemp = nil
     state.currentFlightMaxMcuTemp = nil
     state.currentFlightMinFuel = nil
+    state.currentFlightMinBecVoltage = nil
+    state.lastFlightEndingVoltage = nil
     state.hadArmedFlight = true
   end
 
@@ -1056,6 +1060,10 @@ local function updateDerivedFlightState(state)
       if currentMinVoltage == nil or state.voltage < currentMinVoltage then
         state.currentFlightMinVoltage = state.voltage
       end
+      local currentMaxVoltage = state.currentFlightMaxVoltage
+      if currentMaxVoltage == nil or state.voltage > currentMaxVoltage then
+        state.currentFlightMaxVoltage = state.voltage
+      end
     end
 
     if type(state.bec_voltage) == "number" and state.bec_voltage > 0 then
@@ -1065,10 +1073,22 @@ local function updateDerivedFlightState(state)
       end
     end
 
-    if type(state.lq) == "number" and state.lq > 0 then
+    -- Track link quality only when the active sensor reports a 0–100 % value.
+    -- Receivers without an RQly sensor fall back to 1RSS/2RSS (RSSI in dBm, always
+    -- negative); state.lq > 0 would never be true for them, so neither accumulator
+    -- would ever be written and LINK MIN/MAX would read "--" for the whole flight.
+    -- Using lqSource as the discriminator matches linkIsQuality() in lib/audio.lua.
+    local lqIsQuality = type(state.lq) == "number" and
+                        type(state.lqSource) == "string" and
+                        state.lqSource ~= "1RSS" and state.lqSource ~= "2RSS"
+    if lqIsQuality then
       local currentMinLq = state.currentFlightMinLq
       if currentMinLq == nil or state.lq < currentMinLq then
         state.currentFlightMinLq = state.lq
+      end
+      local currentMaxLq = state.currentFlightMaxLq
+      if currentMaxLq == nil or state.lq > currentMaxLq then
+        state.currentFlightMaxLq = state.lq
       end
     end
   elseif wasArmed then
@@ -1089,12 +1109,21 @@ local function updateDerivedFlightState(state)
     state.lastFlightMaxMcuTemp = state.currentFlightMaxMcuTemp
     state.lastFlightMinFuel = state.currentFlightMinFuel
     state.lastMinVoltage = state.currentFlightMinVoltage
+    state.lastFlightMaxVoltage = state.currentFlightMaxVoltage
     state.lastMinBecVoltage = state.currentFlightMinBecVoltage
+    state.lastFlightMinBecVoltage = state.currentFlightMinBecVoltage
     state.lastMinLq = state.currentFlightMinLq
+    state.lastFlightMaxLq = state.currentFlightMaxLq
+    -- Capture the ending (landing) voltage as the last known live voltage
+    if type(state.voltage) == "number" and state.voltage > 0 then
+      state.lastFlightEndingVoltage = state.voltage
+    end
     state.currentFlightSeconds = 0
     state.currentFlightMinVoltage = nil
+    state.currentFlightMaxVoltage = nil
     state.currentFlightMinBecVoltage = nil
     state.currentFlightMinLq = nil
+    state.currentFlightMaxLq = nil
     state.fuelTelemetrySeen = false
     state.currentFlightMaxThrottlePercent = nil
     state.currentFlightMaxRpm = nil
@@ -1342,6 +1371,10 @@ local function readTelemetry(state)
 
   setField("rpm", getSensor("rpm"))
   setField("lq", getSensor("link"))
+  -- Which sensor answered for `link`. The search path in lib/sensors.lua ends in 1RSS and
+  -- 2RSS, and those carry an RSSI in dBm rather than a quality in percent, which is a
+  -- difference a consumer of `lq` cannot see in the number alone.
+  setField("lqSource", Sensors.active_paths and Sensors.active_paths.link)
   setField("profile", roundInt(getSensor("pid_profile") or state.profile, state.profile or 1))
   setField("rateProfile", roundInt(getSensor("rate_profile") or state.rateProfile, state.rateProfile or 1))
   setField("batteryProfile", roundInt(getSensor("battery_profile") or state.batteryProfile, state.batteryProfile or 1))
@@ -1525,6 +1558,10 @@ function Runtime.new(zone, options)
       currentFlightMaxEscTemp = nil,
       currentFlightMaxMcuTemp = nil,
       currentFlightMinFuel = nil,
+      currentFlightMinVoltage = nil,
+      currentFlightMaxVoltage = nil,
+      currentFlightMinLq = nil,
+      currentFlightMaxLq = nil,
       currentFlightMinBecVoltage = nil,
       flights = 0,
       lq = 0,
@@ -1540,8 +1577,12 @@ function Runtime.new(zone, options)
       batteryTelemetrySeen = false,
       rfTelemetrySeen = false,
       lastMinVoltage = nil,
+      lastFlightMaxVoltage = nil,
       lastMinBecVoltage = nil,
+      lastFlightMinBecVoltage = nil,
       lastMinLq = nil,
+      lastFlightMaxLq = nil,
+      lastFlightEndingVoltage = nil,
       lastFlightMinCurrent = nil,
       lastFlightMaxCurrent = nil,
       lastFlightMaxThrottlePercent = nil,
