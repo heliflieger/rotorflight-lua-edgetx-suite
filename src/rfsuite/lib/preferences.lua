@@ -7,7 +7,26 @@ local PREF_PATH        = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
 -- without ever consuming or deleting the file (which breaks multi-reader and drops armed events).
 local RELOAD_REQ_PATH  = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 
+local function getModelPreferences()
+  if _G.rfsuite and _G.rfsuite.require then
+    return _G.rfsuite.require("lib/model_preferences.lua")
+  end
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/model_preferences.lua", mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" then return mod end
+  end
+  return nil
+end
+
 local function bumpReloadCounter(userRoot)
+  local MP = getModelPreferences()
+  if MP and type(MP.bumpReloadCounter) == "function" then
+    MP.bumpReloadCounter(userRoot)
+    return
+  end
+
   local targetPath = userRoot and (userRoot .. "/reload.req") or RELOAD_REQ_PATH
   local n = 1
   if type(fstat) == "function" then
@@ -108,6 +127,10 @@ local function defaultPreferences()
 end
 
 function M.getPath()
+  local MP = getModelPreferences()
+  if MP and type(MP.preferencesPath) == "function" then
+    return MP.preferencesPath()
+  end
   return PREF_PATH
 end
 
@@ -145,7 +168,8 @@ end
 
 function M.load()
   local prefs = defaultPreferences()
-  local content = loadFileAsString(PREF_PATH)
+  local path = M.getPath()
+  local content = loadFileAsString(path)
   if not content then
     return prefs, false
   end
@@ -190,8 +214,8 @@ local function makeDir(path)
   pcall(mkdir, path)
 end
 
-local function ensureUserDir()
-  local userRoot = string.match(PREF_PATH, "^(.*)/[^/]+$")
+local function ensureUserDir(targetPath)
+  local userRoot = string.match(targetPath or M.getPath(), "^(.*)/[^/]+$")
   if not userRoot then return end
   local toolsRoot = string.gsub(userRoot, "/rfsuite%.user$", "")
   if toolsRoot ~= "" and toolsRoot ~= userRoot then
@@ -201,9 +225,10 @@ local function ensureUserDir()
 end
 
 function M.save(prefs)
-  ensureUserDir()
+  local path = M.getPath()
+  ensureUserDir(path)
 
-  local f, err = io.open(PREF_PATH, "w")
+  local f, err = io.open(path, "w")
   if not f then return false, err end
 
   for section, values in pairs(prefs or {}) do
@@ -220,7 +245,7 @@ function M.save(prefs)
   -- Signal the dashboard widget that preferences have changed via rotating
   -- sequence length in reload.req. Multi-reader safe, armed-safe, and independent
   -- of RTC timestamp or INI file size equality.
-  local userRoot = string.match(PREF_PATH, "^(.*)/[^/]+$")
+  local userRoot = string.match(path, "^(.*)/[^/]+$")
   bumpReloadCounter(userRoot)
 
   return true

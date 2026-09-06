@@ -50,6 +50,7 @@ end
 
 local Log = requireModule("lib/log.lua")
 local PreferencesModule = requireModule("lib/preferences.lua")
+local ModelPreferences = requireModule("lib/model_preferences.lua")
 local DashboardAudio = requireModule("lib/audio.lua")
 local DashboardSplash = requireModule("widgets/dashboard/splash.lua")
 local MspRuntime = requireModule("tasks/msp/runtime.lua")
@@ -342,6 +343,23 @@ local PREFERENCES_FILE  = "/SCRIPTS/TOOLS/rfsuite.user/preferences.ini"
 local RELOAD_REQ_FILE   = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 local PREFS_STAT_INTERVAL = 1.0
 
+local function preferencesFile()
+  if ModelPreferences and type(ModelPreferences.preferencesPath) == "function" then
+    return ModelPreferences.preferencesPath()
+  end
+  if PreferencesModule and type(PreferencesModule.getPath) == "function" then
+    return PreferencesModule.getPath()
+  end
+  return PREFERENCES_FILE
+end
+
+local function reloadRequestFile(mcuId)
+  if ModelPreferences and type(ModelPreferences.reloadRequestPath) == "function" then
+    return ModelPreferences.reloadRequestPath(mcuId)
+  end
+  return RELOAD_REQ_FILE
+end
+
 local function publishPreferencesToGlobal(prefs)
   if type(_G) ~= "table" then return end
   _G.rfsuite = _G.rfsuite or {}
@@ -512,7 +530,7 @@ end
 local function preferencesStamp(modelPath)
   if type(fstat) ~= "function" then return nil end
   local out = ""
-  local okg, g = pcall(fstat, PREFERENCES_FILE)
+  local okg, g = pcall(fstat, preferencesFile())
   if okg then
     out = stampOf(g) or ""
   end
@@ -562,7 +580,8 @@ local function reloadPreferencesIfNeeded(self, force)
     -- 2) If the helicopter is armed, the reload is deferred until disarm without losing
     --    the trigger, since self._lastReloadSeq is only updated after the armed guard passes.
     if type(fstat) == "function" then
-      local ok, info = pcall(fstat, RELOAD_REQ_FILE)
+      local reqPath = reloadRequestFile(session and session.mcu_id)
+      local ok, info = pcall(fstat, reqPath)
       local seq = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or nil
       if seq then
         if self._lastReloadSeq == nil then
@@ -610,7 +629,7 @@ local function reloadPreferencesIfNeeded(self, force)
     -- Reload model-specific preferences from disk if MCU ID is available
     local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
     if session and session.mcu_id then
-      local MP = requireModule("lib/model_preferences.lua")
+      local MP = ModelPreferences or requireModule("lib/model_preferences.lua")
       if MP and type(MP.loadByMcuId) == "function" then
         local mPrefs, mPath = MP.loadByMcuId(session.mcu_id)
         if mPrefs then
