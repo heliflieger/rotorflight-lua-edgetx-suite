@@ -277,10 +277,10 @@ local function normalizeMcuId(mcuId)
   return id
 end
 
-local RELOAD_REQ_PATHS = {
-  USER_ROOTS[1] .. "/" .. RELOAD_REQ_FILE,
-  USER_ROOTS[2] .. "/" .. RELOAD_REQ_FILE
-}
+local RELOAD_REQ_PATHS = {}
+for i = 1, #USER_ROOTS do
+  RELOAD_REQ_PATHS[i] = USER_ROOTS[i] .. "/" .. RELOAD_REQ_FILE
+end
 
 function M.reloadRequestPaths()
   return RELOAD_REQ_PATHS
