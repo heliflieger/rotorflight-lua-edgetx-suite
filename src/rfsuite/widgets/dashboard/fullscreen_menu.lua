@@ -209,7 +209,8 @@ function M.build(children, widget)
                  mState.queue:add({
                     command = eepromApi.writeCommand,
                     payload = eepromApi.buildWritePayload({}),
-                    simulatorResponse = {}
+                    simulatorResponse = {},
+                    isWrite = true,
                  })
                end
             end

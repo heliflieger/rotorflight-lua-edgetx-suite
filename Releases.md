@@ -35,6 +35,8 @@
   - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
 
 ### Bug Fixes & Improvements
+- **Dashboard Fullscreen Menu EEPROM Commit Write Flag (`widgets/dashboard/fullscreen_menu.lua`)** (fixes #135):
+  - Added explicit `isWrite = true` flag to the queued EEPROM commit after a battery profile change, ensuring the message with an empty payload is recognized as a write rather than defaulting to a read request. Dispatches as an MSP write frame (`CRSF_FRAMETYPE_MSP_WRITE`) on CRSF and properly triggers MSP response cache invalidation.
 - **Dashboard ESC Temperature Gauge Arc Coloring (`widgets/dashboard/objects/gauge.lua`)** (fixes #132):
   - Fixed `getArcValueColor` falling through to the LiPo cell-voltage branch for temperature sources (`esc_temp`, `mcu_temp`), which divided the temperature value by the estimated battery cell count and applied ascending (low = bad) threshold logic — causing cold ESC temperatures to display as critical (red) and hot temperatures as OK (green).
   - Added explicit temperature source detection (`isTempSource`) or temperature unit fallback (`°C`/`°F`) with inverted threshold coloring: low/cool = green, high/hot = orange/red.
