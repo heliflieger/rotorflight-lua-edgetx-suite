@@ -803,11 +803,7 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
       end
       local valueColor = utils.resolveTextColor(box, state, WHITE)
       if unit == "%" and curHasValue then
-<<<<<<< HEAD
-        valueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit)
-=======
-        valueColor = getArcValueColor(curVal, state, box, themeCommon, utils, source)
->>>>>>> 8cfe673 (fix(dashboard): grade an arc by the per-cell rule only where the value is the pack voltage)
+        valueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit, source)
       end
       cachedValColor = valueColor
       return cachedValColor
