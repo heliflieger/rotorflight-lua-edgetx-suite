@@ -353,11 +353,11 @@ local function preferencesFile()
   return PREFERENCES_FILE
 end
 
-local function reloadRequestFile(mcuId)
-  if ModelPreferences and type(ModelPreferences.reloadRequestPath) == "function" then
-    return ModelPreferences.reloadRequestPath(mcuId)
+local function reloadRequestPaths()
+  if ModelPreferences and type(ModelPreferences.reloadRequestPaths) == "function" then
+    return ModelPreferences.reloadRequestPaths()
   end
-  return RELOAD_REQ_FILE
+  return { RELOAD_REQ_FILE }
 end
 
 local function publishPreferencesToGlobal(prefs)
@@ -547,10 +547,10 @@ end
 local function reloadPreferencesIfNeeded(self, force)
   local now = nowSeconds()
 
-  -- The stamp and sequence that a completed reload will adopt. Held back on purpose -- see the armed
+  -- The stamp and sequences that a completed reload will adopt. Held back on purpose -- see the armed
   -- guard below.
-  local pendingStamp = nil
-  local pendingSeq = nil
+  local currentStamp = nil
+  local currentSeqs = nil
   local signalReload = false
   if not force and (now - (self._lastPrefsStatAt or 0)) >= PREFS_STAT_INTERVAL then
     self._lastPrefsStatAt = now
@@ -559,13 +559,13 @@ local function reloadPreferencesIfNeeded(self, force)
     local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
     local stamp = preferencesStamp(session and session.modelPreferencesFile)
     if stamp then
+      currentStamp = stamp
       if self._lastPrefsStamp == nil then
         -- First look. The preferences in hand were loaded from these very files, so this
         -- is a baseline and never a reload.
         self._lastPrefsStamp = stamp
       elseif stamp ~= self._lastPrefsStamp then
         signalReload = true
-        pendingStamp = stamp
       end
     end
 
@@ -574,28 +574,40 @@ local function reloadPreferencesIfNeeded(self, force)
     -- (frozen mtime) or the new INI happens to be the same byte-size as the old one,
     -- the sequence size will have changed.
     --
+    -- We inspect reload.req under every known user root and treat any of them moving as
+    -- the signal. This removes any assumption that reader and writer agree on a single root.
+    --
     -- Readers only inspect info.size using fstat and NEVER write, truncate, or unlink
     -- the file. This ensures:
     -- 1) Multiple widgets can all observe the change (no single widget steals/consumes it).
     -- 2) If the helicopter is armed, the reload is deferred until disarm without losing
-    --    the trigger, since self._lastReloadSeq is only updated after the armed guard passes.
+    --    the trigger.
     if type(fstat) == "function" then
-      local reqPath = reloadRequestFile(session and session.mcu_id)
-      local ok, info = pcall(fstat, reqPath)
-      local seq = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or nil
-      if seq then
-        if self._lastReloadSeq == nil then
-          self._lastReloadSeq = seq
-        elseif seq ~= self._lastReloadSeq then
-          logGv("reloadPreferencesIfNeeded: reload.req sequence changed (%s -> %s)", tostring(self._lastReloadSeq), tostring(seq))
+      local reqPaths = reloadRequestPaths()
+      for i = 1, #reqPaths do
+        local reqPath = reqPaths[i]
+        local ok, info = pcall(fstat, reqPath)
+        local seq = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or 0
+        if not currentSeqs then currentSeqs = {} end
+        currentSeqs[reqPath] = seq
+
+        if not self._lastReloadSeqs then self._lastReloadSeqs = {} end
+        local lastSeq = self._lastReloadSeqs[reqPath]
+        if lastSeq == nil then
+          self._lastReloadSeqs[reqPath] = seq
+        elseif seq ~= lastSeq then
+          logGv("reloadPreferencesIfNeeded: %s sequence changed (%s -> %s)", reqPath, tostring(lastSeq), tostring(seq))
           signalReload = true
-          pendingSeq = seq
         end
       end
     end
   end
 
-  if not force and not signalReload then
+  if signalReload then
+    self._reloadPending = true
+  end
+
+  if not force and not signalReload and not self._reloadPending then
     return
   end
 
@@ -605,15 +617,38 @@ local function reloadPreferencesIfNeeded(self, force)
   -- always claimed. A forced caller asks for the reload outright and carries no `pendingStamp`
   -- to re-signal itself with, so dropping it here dropped it for good.
   --
-  -- Returning here does NOT lose the change: `pendingStamp` and `pendingSeq` are not adopted,
-  -- so the next pass after disarming sees the same difference and reloads then.
+  -- Returning here does NOT lose the change: `self._reloadPending` is kept until the reload
+  -- actually executes, so the next pass after disarming sees the pending reload and reloads then.
   if not force and (self.state.armed or (self.state.hadInflightFlight == true and not self.state.fblConnected)) then
     return
   end
 
-  logGv("reloadPreferencesIfNeeded executing (force=%s signal=%s)", tostring(force), tostring(signalReload))
-  if pendingStamp then self._lastPrefsStamp = pendingStamp end
-  if pendingSeq then self._lastReloadSeq = pendingSeq end
+  logGv("reloadPreferencesIfNeeded executing (force=%s signal=%s pending=%s)", tostring(force), tostring(signalReload), tostring(self._reloadPending))
+  self._reloadPending = nil
+
+  -- Adopt both the stamp and sequences together when reloading so their baselines advance synchronously.
+  if currentStamp then
+    self._lastPrefsStamp = currentStamp
+  else
+    local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
+    local stamp = preferencesStamp(session and session.modelPreferencesFile)
+    if stamp then self._lastPrefsStamp = stamp end
+  end
+
+  if currentSeqs then
+    if not self._lastReloadSeqs then self._lastReloadSeqs = {} end
+    for path, seq in pairs(currentSeqs) do
+      self._lastReloadSeqs[path] = seq
+    end
+  elseif type(fstat) == "function" then
+    local reqPaths = reloadRequestPaths()
+    if not self._lastReloadSeqs then self._lastReloadSeqs = {} end
+    for i = 1, #reqPaths do
+      local reqPath = reqPaths[i]
+      local ok, info = pcall(fstat, reqPath)
+      self._lastReloadSeqs[reqPath] = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or 0
+    end
+  end
 
   local prefs = loadPreferences()
   if type(prefs) == "table" then
@@ -649,12 +684,9 @@ local function reloadPreferencesIfNeeded(self, force)
     self.built = false
     self.renderKey = nil
     self._cachedRenderKey = nil
-    -- Invalidate the theme-path memo. The memo keys on table identity, so when
-    -- self.preferences is replaced with a fresh table the memo's references point
-    -- to the old, discarded tables and resolveThemePathForState would return the
-    -- stale cached theme path without re-evaluating. Clearing it ensures the next
-    -- render picks up the correct theme even if the new preferences table happens
-    -- to contain the same values (e.g. a different theme at the same path length).
+    -- Invalidate the theme-path memo. Table identity comparison means discarded
+    -- tables will miss the cache automatically, but resetting the memo on reload
+    -- releases references to dead preference tables and keeps the table bounded.
     themePathMemo = {}
     -- NOTE: do NOT clear lastModelPreferences here. Clearing it disarms the
     -- content-signature guard in refresh() so that the next identical table
@@ -1443,7 +1475,8 @@ function Runtime.new(zone, options)
     -- The pending job, at most one: { kind, step } or nil. See the job steps above and
     -- the dispatcher in widget.refresh.
     _job = nil,
-    _lastReloadSeq = nil,
+    _lastReloadSeqs = nil,
+    _reloadPending = nil,
     themePath = "system/default",
     flightMode = "preflight",
     theme = nil,

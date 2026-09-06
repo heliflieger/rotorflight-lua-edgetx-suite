@@ -218,7 +218,14 @@ local function dirExists(path)
   return false
 end
 
+local memoizedRoots = {}
+
 local function orderedRoots(safeId)
+  local cacheKey = safeId or "__default"
+  if memoizedRoots[cacheKey] then
+    return memoizedRoots[cacheKey]
+  end
+
   local prioritized = {}
   local used = {}
 
@@ -256,6 +263,7 @@ local function orderedRoots(safeId)
     add(USER_ROOTS[i])
   end
 
+  memoizedRoots[cacheKey] = prioritized
   return prioritized
 end
 
@@ -267,6 +275,15 @@ local function normalizeMcuId(mcuId)
   id = string.gsub(id, "[^%w_-]", "_")
   if id == "" then return nil end
   return id
+end
+
+local RELOAD_REQ_PATHS = {
+  USER_ROOTS[1] .. "/" .. RELOAD_REQ_FILE,
+  USER_ROOTS[2] .. "/" .. RELOAD_REQ_FILE
+}
+
+function M.reloadRequestPaths()
+  return RELOAD_REQ_PATHS
 end
 
 function M.getUserRoots()
@@ -338,6 +355,7 @@ function M.clearCache()
   cachedMcuId = nil
   cachedPrefs = nil
   cachedPath = nil
+  memoizedRoots = {}
 end
 
 function M.buildPath(mcuId)
@@ -429,6 +447,7 @@ function M.saveByMcuId(mcuId, prefs)
     end
   end
 
+  memoizedRoots = {}
   return false, lastErr
 end
 
