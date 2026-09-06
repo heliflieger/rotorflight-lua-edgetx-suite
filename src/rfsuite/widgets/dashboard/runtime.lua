@@ -1058,6 +1058,13 @@ local function updateDerivedFlightState(state)
       end
     end
 
+    if type(state.bec_voltage) == "number" and state.bec_voltage > 0 then
+      local currentMinBecVoltage = state.currentFlightMinBecVoltage
+      if currentMinBecVoltage == nil or state.bec_voltage < currentMinBecVoltage then
+        state.currentFlightMinBecVoltage = state.bec_voltage
+      end
+    end
+
     if type(state.lq) == "number" and state.lq > 0 then
       local currentMinLq = state.currentFlightMinLq
       if currentMinLq == nil or state.lq < currentMinLq then
@@ -1082,9 +1089,11 @@ local function updateDerivedFlightState(state)
     state.lastFlightMaxMcuTemp = state.currentFlightMaxMcuTemp
     state.lastFlightMinFuel = state.currentFlightMinFuel
     state.lastMinVoltage = state.currentFlightMinVoltage
+    state.lastMinBecVoltage = state.currentFlightMinBecVoltage
     state.lastMinLq = state.currentFlightMinLq
     state.currentFlightSeconds = 0
     state.currentFlightMinVoltage = nil
+    state.currentFlightMinBecVoltage = nil
     state.currentFlightMinLq = nil
     state.fuelTelemetrySeen = false
     state.currentFlightMaxThrottlePercent = nil
@@ -1516,6 +1525,7 @@ function Runtime.new(zone, options)
       currentFlightMaxEscTemp = nil,
       currentFlightMaxMcuTemp = nil,
       currentFlightMinFuel = nil,
+      currentFlightMinBecVoltage = nil,
       flights = 0,
       lq = 0,
       rss1 = 0,
@@ -1530,6 +1540,7 @@ function Runtime.new(zone, options)
       batteryTelemetrySeen = false,
       rfTelemetrySeen = false,
       lastMinVoltage = nil,
+      lastMinBecVoltage = nil,
       lastMinLq = nil,
       lastFlightMinCurrent = nil,
       lastFlightMaxCurrent = nil,

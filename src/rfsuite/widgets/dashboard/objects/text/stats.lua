@@ -112,36 +112,36 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
       local statValue = nil
       if stattype == "max" then
         if source == "throttle_percent" then
-          statValue = state and (state.lastFlightMaxThrottlePercent or state.currentFlightMaxThrottlePercent or state.throttlePercent)
+          statValue = state and (state.currentFlightMaxThrottlePercent or state.lastFlightMaxThrottlePercent or state.throttlePercent)
         elseif source == "rpm" then
-          statValue = state and (state.lastFlightMaxRpm or state.currentFlightMaxRpm or state.rpm)
+          statValue = state and (state.currentFlightMaxRpm or state.lastFlightMaxRpm or state.rpm)
         elseif source == "current" then
-          statValue = state and (state.lastFlightMaxCurrent or state.currentFlightMaxCurrent or state.current)
+          statValue = state and (state.currentFlightMaxCurrent or state.lastFlightMaxCurrent or state.current)
           if statValue == nil and statSource then
             statValue = readDerived(state, statSource)
           end
         elseif source == "mcu_temp" then
-          statValue = state and (state.lastFlightMaxMcuTemp or state.currentFlightMaxMcuTemp or state.mcuTemp)
+          statValue = state and (state.currentFlightMaxMcuTemp or state.lastFlightMaxMcuTemp or state.mcuTemp)
         elseif source == "watts" then
-          statValue = state and (state.lastFlightMaxWatts or state.currentFlightMaxWatts or state.watts)
+          statValue = state and (state.currentFlightMaxWatts or state.lastFlightMaxWatts or state.watts)
         elseif source == "altitude" then
-          statValue = state and (state.lastFlightMaxAltitude or state.currentFlightMaxAltitude or state.altitude)
+          statValue = state and (state.currentFlightMaxAltitude or state.lastFlightMaxAltitude or state.altitude)
         elseif source == "esc_temp" then
-          statValue = state and (state.lastFlightMaxEscTemp or state.currentFlightMaxEscTemp or state.escTemp)
+          statValue = state and (state.currentFlightMaxEscTemp or state.lastFlightMaxEscTemp or state.escTemp)
         elseif source == "smartconsumption" then
           statValue = state and state.consumedMah
         end
       elseif stattype == "min" then
         if source == "fuel" or source == "smartfuel" then
-          statValue = state and (state.lastFlightMinFuel or state.currentFlightMinFuel or state.fuel)
+          statValue = state and (state.currentFlightMinFuel or state.lastFlightMinFuel or state.fuel)
         elseif source == "rpm" then
-          statValue = state and (state.lastFlightMinRpm or state.currentFlightMinRpm or state.rpm)
+          statValue = state and (state.currentFlightMinRpm or state.lastFlightMinRpm or state.rpm)
         elseif source == "current" then
-          statValue = state and (state.lastFlightMinCurrent or state.currentFlightMinCurrent or state.current)
+          statValue = state and (state.currentFlightMinCurrent or state.lastFlightMinCurrent or state.current)
         elseif source == "voltage" then
-          statValue = state and (state.lastMinVoltage or state.currentFlightMinVoltage or state.voltage)
+          statValue = state and (state.currentFlightMinVoltage or state.lastMinVoltage or state.voltage)
         elseif source == "bec_voltage" then
-          statValue = state and (state.lastMinVoltage or state.currentFlightMinVoltage or state.bec_voltage)
+          statValue = state and (state.currentFlightMinBecVoltage or state.lastMinBecVoltage or state.bec_voltage)
         end
       elseif stattype == "consumed" then
         if source == "current" then
