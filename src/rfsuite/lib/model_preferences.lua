@@ -97,20 +97,10 @@ local function loadFileAsString(path)
   local f = io.open(path, "r")
   if not f then return nil end
 
-  -- io.read() hands back at most the number of bytes asked for and "" once the file is
-  -- exhausted, so a single call stops wherever that count lands. Stopping there is not
-  -- merely a short read: saveIni() writes the whole table back, so everything the parser
-  -- never saw is dropped from the file by the next save.
-  local parts = {}
-  while true do
-    local chunk = io.read(f, READ_CHUNK)
-    if chunk == nil or chunk == "" then break end
-    parts[#parts + 1] = chunk
-  end
+  local content = io.read(f, "*a")
   io.close(f)
 
-  local content = table.concat(parts)
-  if content == "" then return nil end
+  if type(content) ~= "string" or content == "" then return nil end
   return content
 end
 
@@ -377,6 +367,31 @@ function M.loadByMcuId(mcuId, force)
 
   local defaults = defaultModelPreferences()
   local roots = orderedRoots(safeId)
+
+  -- Fast path: if model preferences file already exists on disk, read directly without directory setup overhead
+  for i = 1, #roots do
+    local userRoot = roots[i]
+    local path = buildPathForRoot(userRoot, safeId)
+
+    if fileExists(path) then
+      local onDisk = parseIni(loadFileAsString(path))
+      local merged = deepCopyTable(onDisk)
+      deepMerge(merged, defaults)
+
+      if not tablesEqual(onDisk, merged) then
+        local ok = saveIni(path, merged)
+        if not ok then
+          -- Save errors are non-fatal
+        end
+      end
+
+      cachedMcuId = safeId
+      cachedPrefs = deepCopyTable(merged)
+      cachedPath = path
+
+      return merged, path
+    end
+  end
 
   for i = 1, #roots do
     local userRoot = roots[i]

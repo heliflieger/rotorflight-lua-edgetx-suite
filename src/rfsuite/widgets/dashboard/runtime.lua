@@ -630,7 +630,6 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
   end
 
   logGv("reloadPreferencesIfNeeded executing (force=%s signal=%s pending=%s)", tostring(force), tostring(signalReload), tostring(self._reloadPending))
-  self._reloadPending = nil
 
   -- Adopt both the stamp and sequences together when reloading so their baselines advance synchronously.
   if currentStamp then
@@ -655,6 +654,18 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
       self._lastReloadSeqs[reqPath] = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or 0
     end
   end
+
+  -- Invalidate current theme and memoization state BEFORE heavy disk reads.
+  -- If EdgeTX aborts execution mid-load (e.g. CPU limit fault), self.theme is already nil,
+  -- so performBackgroundWork on the next tick will be forced to call reloadActiveTheme().
+  self.theme = nil
+  self.themePath = nil
+  self.built = false
+  self.renderKey = nil
+  self._cachedRenderKey = nil
+  self.lastModelPreferences = nil
+  self.lastModelPrefsSignature = nil
+  themePathMemo = {}
 
   local prefs = loadPreferences()
   if type(prefs) == "table" then
@@ -684,23 +695,10 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
       logGv("No session.mcu_id available during reloadPreferencesIfNeeded")
     end
 
-    -- Invalidate current theme and force immediate reload
-    self.theme = nil
-    self.themePath = nil
-    self.built = false
-    self.renderKey = nil
-    self._cachedRenderKey = nil
-    -- Invalidate the theme-path memo. Table identity comparison means discarded
-    -- tables will miss the cache automatically, but resetting the memo on reload
-    -- releases references to dead preference tables and keeps the table bounded.
-    themePathMemo = {}
-    -- NOTE: do NOT clear lastModelPreferences here. Clearing it disarms the
-    -- content-signature guard in refresh() so that the next identical table
-    -- instance (allocated by a concurrent publisher) would trigger a redundant
-    -- full scene rebuild and blow the EdgeTX instruction budget.
     self._lastUIRefresh = 0
   end
 
+  self._reloadPending = nil
   self.preferencesLastLoadedAt = now
 end
 
