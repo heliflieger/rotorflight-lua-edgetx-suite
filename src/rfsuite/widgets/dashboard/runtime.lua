@@ -703,6 +703,9 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
           session.modelPreferences = mPrefs
           session.modelPreferencesFile = mPath
           self.modelPreferences = mPrefs
+          if MspRuntime and type(MspRuntime.setModelPreferences) == "function" then
+            MspRuntime.setModelPreferences(mPrefs, mPath)
+          end
           local d = mPrefs.dashboard or {}
           logGv("Loaded model prefs from disk: %s (override=%s preflight=%s inflight=%s postflight=%s)", tostring(mPath), tostring(d.model_override), tostring(d.model_theme_preflight), tostring(d.model_theme_inflight), tostring(d.model_theme_postflight))
         else
@@ -718,6 +721,7 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
 
   self._reloadPending = nil
   self.preferencesLastLoadedAt = now
+  return true
 end
 
 local function updateConnectionState(self)
@@ -1877,7 +1881,7 @@ function Runtime.new(zone, options)
     end
     tickMspRuntime(self)
     
-    reloadPreferencesIfNeeded(self, false, isBackground)
+    local reloaded = (reloadPreferencesIfNeeded(self, false, isBackground) == true)
     self.state.zoneW = self.zone and self.zone.w or 0
     self.state.zoneH = self.zone and self.zone.h or 0
     local wasFblConnected = self.lastFblConnected == true
@@ -1996,6 +2000,17 @@ function Runtime.new(zone, options)
       self.lastModelPrefsSignature = signature
     end
     self.lastModelPreferences = modelPrefs
+
+    if reloaded then
+      -- If preferences were reloaded from disk in this pass, defer theme module loading
+      -- to the next pass to prevent EdgeTX CPU limit faults. reloadPreferencesIfNeeded
+      -- already invalidated self.theme = nil and self.built = false. The next pass
+      -- will run reloadActiveTheme on a dedicated fresh instruction budget.
+      if type(_G) == "table" and _G.rfsuite and _G.rfsuite.session then
+        _G.rfsuite.session.event_context = nil
+      end
+      return ready
+    end
 
     if nextMode ~= self.flightMode then
       self.flightMode = nextMode

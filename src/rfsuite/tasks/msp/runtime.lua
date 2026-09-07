@@ -208,8 +208,13 @@ local function publish()
   session.fcVersion = state.values.fcVersion
   session.rfVersion = state.values.rfVersion
   session.mcu_id = state.values.mcuId
-  session.modelPreferences = state.values.modelPreferences
-  session.modelPreferencesFile = state.values.modelPreferencesFile
+  if state.values.mcuId == nil then
+    session.modelPreferences = nil
+    session.modelPreferencesFile = nil
+  elseif session.modelPreferences == nil then
+    session.modelPreferences = state.values.modelPreferences
+    session.modelPreferencesFile = state.values.modelPreferencesFile
+  end
   session.apiSupported = not state.unsupportedApi
   session.apiLimited = state.limitedApi == true
   session.mspLastError = state.mspLastError
@@ -401,6 +406,10 @@ local function applyModelPreferencesForMcu(mcuId)
   if type(mcuId) ~= "string" or mcuId == "" then
     state.values.modelPreferences = nil
     state.values.modelPreferencesFile = nil
+    if _G and _G.rfsuite and _G.rfsuite.session then
+      _G.rfsuite.session.modelPreferences = nil
+      _G.rfsuite.session.modelPreferencesFile = nil
+    end
     return
   end
 
@@ -417,6 +426,10 @@ local function applyModelPreferencesForMcu(mcuId)
   local prefs, filePath = ModelPreferences.loadByMcuId(mcuId, true)
   state.values.modelPreferences = prefs
   state.values.modelPreferencesFile = filePath
+  if _G and _G.rfsuite and _G.rfsuite.session then
+    _G.rfsuite.session.modelPreferences = prefs
+    _G.rfsuite.session.modelPreferencesFile = filePath
+  end
 end
 
 local function enqueueVersionReads(now)
@@ -856,6 +869,15 @@ end
 
 function Runtime.isFblConnected()
   return computeFblConnected(state)
+end
+
+function Runtime.setModelPreferences(prefs, filePath)
+  state.values.modelPreferences = prefs
+  state.values.modelPreferencesFile = filePath
+  if _G and _G.rfsuite and _G.rfsuite.session then
+    _G.rfsuite.session.modelPreferences = prefs
+    _G.rfsuite.session.modelPreferencesFile = filePath
+  end
 end
 
 function Runtime.getState()
