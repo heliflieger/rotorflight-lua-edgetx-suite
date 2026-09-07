@@ -9,6 +9,37 @@ local RELOAD_REQ_PATH  = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 
 local cachedModelPreferences = nil
 
+local Log = nil
+local function getLog()
+  if Log ~= nil then return Log end
+  if _G.rfsuite and _G.rfsuite.require then
+    local ok, mod = pcall(_G.rfsuite.require, "lib/log.lua")
+    if ok and type(mod) == "table" and type(mod.emit) == "function" then
+      Log = mod
+      return Log
+    end
+  end
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/log.lua", mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" and type(mod.emit) == "function" then
+      Log = mod
+      return Log
+    end
+  end
+  Log = false
+  return nil
+end
+
+local function logD(fmt, ...)
+  local logger = getLog()
+  if not (logger and type(logger.emit) == "function") then return end
+  local msg = tostring(fmt)
+  if select("#", ...) > 0 then msg = string.format(msg, ...) end
+  pcall(logger.emit, "rfsuite.reload", msg, "debug")
+end
+
 local function getModelPreferences()
   if cachedModelPreferences then
     return cachedModelPreferences
@@ -37,17 +68,22 @@ local function bumpReloadCounter(userRoot)
   end
 
   local targetPath = userRoot and (userRoot .. "/reload.req") or RELOAD_REQ_PATH
+  local prevN = 0
   local n = 1
   if type(fstat) == "function" then
     local ok, info = pcall(fstat, targetPath)
     if ok and type(info) == "table" then
-      n = ((info.size or 0) % 32) + 1
+      prevN = (info.size or 0)
+      n = (prevN % 32) + 1
     end
   end
   local f = io.open(targetPath, "w")
   if f then
     io.write(f, string.rep("x", n))
     io.close(f)
+    logD("Preferences.bumpReloadCounter: wrote %d bytes (was %d) to %s", n, prevN, targetPath)
+  else
+    logD("Preferences.bumpReloadCounter: FAILED to open %s for write", targetPath)
   end
 end
 
@@ -258,7 +294,10 @@ function M.save(prefs)
   ensureUserDir(path)
 
   local f, err = io.open(path, "w")
-  if not f then return false, err end
+  if not f then
+    logD("Preferences.save: FAILED to open %s for write: %s", path, tostring(err))
+    return false, err
+  end
 
   for section, values in pairs(prefs or {}) do
     if type(values) == "table" then
@@ -276,6 +315,7 @@ function M.save(prefs)
   -- of RTC timestamp or INI file size equality.
   local userRoot = string.match(path, "^(.*)/[^/]+$")
   bumpReloadCounter(userRoot)
+  logD("Preferences.save: saved to %s", path)
 
   return true
 end

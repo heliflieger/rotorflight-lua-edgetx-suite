@@ -18,6 +18,37 @@ local function bumpReloadCounter(userRoot)
   M.bumpReloadCounter(userRoot)
 end
 
+local Log = nil
+local function getLog()
+  if Log ~= nil then return Log end
+  if _G.rfsuite and _G.rfsuite.require then
+    local ok, mod = pcall(_G.rfsuite.require, "lib/log.lua")
+    if ok and type(mod) == "table" and type(mod.emit) == "function" then
+      Log = mod
+      return Log
+    end
+  end
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/log.lua", mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" and type(mod.emit) == "function" then
+      Log = mod
+      return Log
+    end
+  end
+  Log = false
+  return nil
+end
+
+local function logD(fmt, ...)
+  local logger = getLog()
+  if not (logger and type(logger.emit) == "function") then return end
+  local msg = tostring(fmt)
+  if select("#", ...) > 0 then msg = string.format(msg, ...) end
+  pcall(logger.emit, "rfsuite.reload", msg, "debug")
+end
+
 -- How much is asked for per io.read() call. It is a chunk size, not a limit: the reader
 -- below keeps going until the file ends.
 local READ_CHUNK = 2048
@@ -320,17 +351,22 @@ end
 
 function M.bumpReloadCounter(userRoot)
   local targetPath = M.reloadRequestPath(userRoot)
+  local prevN = 0
   local n = 1
   if type(fstat) == "function" then
     local ok, info = pcall(fstat, targetPath)
     if ok and type(info) == "table" then
-      n = ((info.size or 0) % 32) + 1
+      prevN = (info.size or 0)
+      n = (prevN % 32) + 1
     end
   end
   local f = io.open(targetPath, "w")
   if f then
     io.write(f, string.rep("x", n))
     io.close(f)
+    logD("bumpReloadCounter: wrote %d bytes (was %d) to %s", n, prevN, targetPath)
+  else
+    logD("bumpReloadCounter: FAILED to open %s for write", targetPath)
   end
 end
 
@@ -387,12 +423,15 @@ function M.loadByMcuId(mcuId, force)
         end
       end
 
+      local d = merged.dashboard or {}
+      logD("loadByMcuId: loaded from disk %s (force=%s, override=%s, preflight=%s)", path, tostring(force), tostring(d.model_override), tostring(d.model_theme_preflight))
       return merged, path
     end
   end
 
   -- Could not create/load file on any root; still return defaults in-memory.
   local fallback = deepCopyTable(defaults)
+  logD("loadByMcuId: fallback defaults for mcuId=%s", safeId)
   return fallback, nil
 end
 
@@ -419,11 +458,15 @@ function M.saveByMcuId(mcuId, prefs)
         -- rotating sequence length in reload.req. Multi-reader safe, armed-safe,
         -- and independent of RTC timestamp or INI file size equality.
         bumpReloadCounter(userRoot)
+        local d = data.dashboard or {}
+        logD("saveByMcuId: saved to %s (override=%s, preflight=%s)", path, tostring(d.model_override), tostring(d.model_theme_preflight))
         return true
       end
       lastErr = saveErr or "io"
+      logD("saveByMcuId: saveIni failed for %s: %s", path, tostring(saveErr))
     else
       lastErr = touchErr or "io"
+      logD("saveByMcuId: ensureFileExists failed for %s: %s", path, tostring(touchErr))
     end
   end
 

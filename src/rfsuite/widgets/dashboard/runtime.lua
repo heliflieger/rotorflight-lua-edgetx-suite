@@ -564,7 +564,9 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
         -- First look. The preferences in hand were loaded from these very files, so this
         -- is a baseline and never a reload.
         self._lastPrefsStamp = stamp
+        logGv("reloadPreferencesIfNeeded: baseline stamp set: '%s'", tostring(stamp))
       elseif stamp ~= self._lastPrefsStamp then
+        logGv("reloadPreferencesIfNeeded: stamp changed ('%s' -> '%s')", tostring(self._lastPrefsStamp), tostring(stamp))
         signalReload = true
       end
     end
@@ -595,11 +597,14 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
         local lastSeq = self._lastReloadSeqs[reqPath]
         if lastSeq == nil then
           self._lastReloadSeqs[reqPath] = seq
+          logGv("reloadPreferencesIfNeeded: baseline seq for %s is %d (fstat_ok=%s)", reqPath, seq, tostring(ok))
         elseif seq ~= lastSeq then
           logGv("reloadPreferencesIfNeeded: %s sequence changed (%s -> %s)", reqPath, tostring(lastSeq), tostring(seq))
           signalReload = true
         end
       end
+    else
+      logGv("reloadPreferencesIfNeeded: fstat unavailable")
     end
   end
 
@@ -620,16 +625,19 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
   -- Returning here does NOT lose the change: `self._reloadPending` is kept until the reload
   -- actually executes, so the next pass after disarming sees the pending reload and reloads then.
   if not force and (self.state.armed or (self.state.hadInflightFlight == true and not self.state.fblConnected)) then
+    logGv("reloadPreferencesIfNeeded: deferred due to armed/offline (armed=%s, hadInflightFlight=%s, fblConnected=%s)", tostring(self.state.armed), tostring(self.state.hadInflightFlight), tostring(self.state.fblConnected))
     return
   end
 
   if isBackground and not force then
     -- During background passes (when widget is off-screen), defer heavy file I/O and theme
     -- compilation until widget returns to screen (refresh pass) to avoid EdgeTX CPU limit faults.
+    logGv("reloadPreferencesIfNeeded: deferred due to background pass (pending=%s)", tostring(self._reloadPending))
     return
   end
 
-  logGv("reloadPreferencesIfNeeded executing (force=%s signal=%s pending=%s)", tostring(force), tostring(signalReload), tostring(self._reloadPending))
+  logGv("reloadPreferencesIfNeeded executing (force=%s signal=%s pending=%s armed=%s)", tostring(force), tostring(signalReload), tostring(self._reloadPending), tostring(self.state and self.state.armed))
+  self._reloadPending = nil
 
   -- Adopt both the stamp and sequences together when reloading so their baselines advance synchronously.
   if currentStamp then
@@ -695,7 +703,10 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
           session.modelPreferences = mPrefs
           session.modelPreferencesFile = mPath
           self.modelPreferences = mPrefs
-          logGv("Loaded model prefs from disk: %s", tostring(mPath))
+          local d = mPrefs.dashboard or {}
+          logGv("Loaded model prefs from disk: %s (override=%s preflight=%s inflight=%s postflight=%s)", tostring(mPath), tostring(d.model_override), tostring(d.model_theme_preflight), tostring(d.model_theme_inflight), tostring(d.model_theme_postflight))
+        else
+          logGv("MP.loadByMcuId(%s, true) returned nil", tostring(session.mcu_id))
         end
       end
     else
@@ -1284,12 +1295,13 @@ local function resolveThemePathForState(dashboard, modelPrefs, flightMode)
     reason = "default_fallback"
   end
 
-  logGv("resolveTheme: mode=%s, modelOverride=%s, modelKey=%s, modelVal=%s, modelPreflight=%s, globalKey=%s, globalVal=%s, globalPreflight=%s => chosen=%s (%s)",
+  logGv("resolveTheme: mode=%s, modelOverride=%s, modelPreflight=%s, globalPreflight=%s, modelKey=%s, modelValue=%s, globalKey=%s, globalValue=%s => chosen=%s (%s)",
     tostring(flightMode), tostring(modelOverride),
-    tostring(modelKey), tostring(modelKey and modelDashboard and modelDashboard[modelKey]),
     tostring(modelDashboard and modelDashboard.model_theme_preflight),
-    tostring(key), tostring(key and dashboard and dashboard[key]),
     tostring(dashboard and dashboard.theme_preflight),
+    tostring(modelKey),
+    tostring(modelKey and modelDashboard and modelDashboard[modelKey]),
+    tostring(key), tostring(key and dashboard and dashboard[key]),
     tostring(chosen), tostring(reason))
 
   themePathMemo.dashboard = dashboard
