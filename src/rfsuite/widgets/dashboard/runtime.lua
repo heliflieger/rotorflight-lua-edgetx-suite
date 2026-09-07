@@ -64,6 +64,10 @@ end
 
 local RSS1_SOURCES = { "1RSS", "RSS1", "rssi1" }
 local RSS2_SOURCES = { "2RSS", "RSS2", "rssi2" }
+local RSSI_LINK_SOURCES = {
+  ["1RSS"] = true,
+  ["2RSS"] = true,
+}
 local THROTTLE_INFLIGHT_THRESHOLD = 35
 local THROTTLE_INFLIGHT_THRESHOLD_DIRECT = 8
 local RPM_INFLIGHT_THRESHOLD_DIRECT = 500
@@ -1075,20 +1079,22 @@ local function updateDerivedFlightState(state)
 
     -- Track link quality only when the active sensor reports a 0–100 % value.
     -- Receivers without an RQly sensor fall back to 1RSS/2RSS (RSSI in dBm, always
-    -- negative); state.lq > 0 would never be true for them, so neither accumulator
-    -- would ever be written and LINK MIN/MAX would read "--" for the whole flight.
+    -- negative); if the sensor is known to be an RSSI source or the value falls
+    -- outside 0 < lq <= 100 (e.g. 0 on sensor age-out), skip tracking.
     -- Using lqSource as the discriminator matches linkIsQuality() in lib/audio.lua.
-    local lqIsQuality = type(state.lq) == "number" and
-                        type(state.lqSource) == "string" and
-                        state.lqSource ~= "1RSS" and state.lqSource ~= "2RSS"
+    local lq = state.lq
+    local lqIsQuality = type(lq) == "number" and lq > 0 and lq <= 100
+    if lqIsQuality and type(state.lqSource) == "string" and RSSI_LINK_SOURCES[state.lqSource] then
+      lqIsQuality = false
+    end
     if lqIsQuality then
       local currentMinLq = state.currentFlightMinLq
-      if currentMinLq == nil or state.lq < currentMinLq then
-        state.currentFlightMinLq = state.lq
+      if currentMinLq == nil or lq < currentMinLq then
+        state.currentFlightMinLq = lq
       end
       local currentMaxLq = state.currentFlightMaxLq
-      if currentMaxLq == nil or state.lq > currentMaxLq then
-        state.currentFlightMaxLq = state.lq
+      if currentMaxLq == nil or lq > currentMaxLq then
+        state.currentFlightMaxLq = lq
       end
     end
   elseif wasArmed then
