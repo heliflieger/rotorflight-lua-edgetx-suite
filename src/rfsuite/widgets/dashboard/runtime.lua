@@ -544,7 +544,7 @@ local function preferencesStamp(modelPath)
   return out
 end
 
-local function reloadPreferencesIfNeeded(self, force)
+local function reloadPreferencesIfNeeded(self, force, isBackground)
   local now = nowSeconds()
 
   -- The stamp and sequences that a completed reload will adopt. Held back on purpose -- see the armed
@@ -620,6 +620,12 @@ local function reloadPreferencesIfNeeded(self, force)
   -- Returning here does NOT lose the change: `self._reloadPending` is kept until the reload
   -- actually executes, so the next pass after disarming sees the pending reload and reloads then.
   if not force and (self.state.armed or (self.state.hadInflightFlight == true and not self.state.fblConnected)) then
+    return
+  end
+
+  if isBackground and not force then
+    -- During background passes (when widget is off-screen), defer heavy file I/O and theme
+    -- compilation until widget returns to screen (refresh pass) to avoid EdgeTX CPU limit faults.
     return
   end
 
@@ -1829,7 +1835,7 @@ function Runtime.new(zone, options)
     end
   end
 
-  local function performBackgroundWork(self)
+  local function performBackgroundWork(self, isBackground)
     local now = nowSeconds()
     if self._lastWorkTick == now then return self.connectionReady end
     self._lastWorkTick = now
@@ -1851,7 +1857,7 @@ function Runtime.new(zone, options)
     end
     tickMspRuntime(self)
     
-    reloadPreferencesIfNeeded(self, false)
+    reloadPreferencesIfNeeded(self, false, isBackground)
     self.state.zoneW = self.zone and self.zone.w or 0
     self.state.zoneH = self.zone and self.zone.h or 0
     local wasFblConnected = self.lastFblConnected == true
@@ -2064,7 +2070,7 @@ function Runtime.new(zone, options)
     end
 
     -- STATE pass: the background half, then invalidation checks that only enqueue.
-    local ready = performBackgroundWork(self)
+    local ready = performBackgroundWork(self, false)
 
     if not ready and self.flightMode ~= "postflight" then
       local statusLine = self.statusLine or "Please wait..."
@@ -2120,7 +2126,7 @@ function Runtime.new(zone, options)
   end
 
   function widget.background(self)
-    performBackgroundWork(self)
+    performBackgroundWork(self, true)
     return 0
   end
 

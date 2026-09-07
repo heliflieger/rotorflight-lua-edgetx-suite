@@ -235,6 +235,7 @@ local function saveToPreferences(prefs)
         if loaded and type(MP) == "table" and type(MP.saveByMcuId) == "function" then
           modelOk, modelErr = MP.saveByMcuId(session.mcu_id, session.modelPreferences)
           if MP.clearCache then MP.clearCache() end
+          session.modelPreferences = nil
         end
       end
     end

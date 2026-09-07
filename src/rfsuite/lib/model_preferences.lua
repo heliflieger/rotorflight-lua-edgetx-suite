@@ -432,9 +432,10 @@ function M.saveByMcuId(mcuId, prefs)
     if okTouch then
       local okSave, saveErr = saveIni(path, data)
       if okSave then
-        cachedMcuId = safeId
-        cachedPrefs = deepCopyTable(data)
-        cachedPath = path
+        cachedMcuId = nil
+        cachedPrefs = nil
+        cachedPath = nil
+        memoizedRoots = {}
         -- Signal the dashboard widget that model preferences have changed via
         -- rotating sequence length in reload.req. Multi-reader safe, armed-safe,
         -- and independent of RTC timestamp or INI file size equality.
