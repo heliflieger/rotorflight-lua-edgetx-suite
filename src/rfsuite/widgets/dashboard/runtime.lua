@@ -656,8 +656,9 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
   end
 
   -- Invalidate current theme and memoization state BEFORE heavy disk reads.
-  -- If EdgeTX aborts execution mid-load (e.g. CPU limit fault), self.theme is already nil,
-  -- so performBackgroundWork on the next tick will be forced to call reloadActiveTheme().
+  -- If EdgeTX aborts execution mid-load (e.g. CPU limit fault), all stale
+  -- references are already cleared, so the next tick is forced to retry
+  -- the full reload rather than rendering with leftover stale data.
   self.theme = nil
   self.themePath = nil
   self.built = false
@@ -665,6 +666,12 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
   self._cachedRenderKey = nil
   self.lastModelPreferences = nil
   self.lastModelPrefsSignature = nil
+  -- Clear self.modelPreferences NOW, before the disk reads below. reloadActiveTheme
+  -- reads self.modelPreferences with priority over session.modelPreferences. If a
+  -- CPU-limit fault fires between here and the assignment on line ~690, this nil
+  -- prevents reloadActiveTheme from picking up the previous stale model prefs and
+  -- rendering the wrong theme on the next pass.
+  self.modelPreferences = nil
   themePathMemo = {}
 
   local prefs = loadPreferences()
