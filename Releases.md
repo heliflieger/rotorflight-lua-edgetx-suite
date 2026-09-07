@@ -39,6 +39,9 @@
   - Fixed an issue where changing theme selection or model preference overrides in the suite did not update the active dashboard widget until a transmitter power cycle due to stale in-memory preferences and RAM cache lookups.
   - Decoupled disk I/O from theme module loading during preference reloads (`reloadPreferencesIfNeeded`) so reading INI files and building the theme occur on separate passes, eliminating EdgeTX CPU limit instruction budget faults.
   - Hardened reload lifecycle against mid-load faults: pre-cleared theme and memo state before disk reads, deferred baseline stamp/sequence adoption and pending flag clearance until after successful I/O, and protected active session preferences against stale MSP runtime republishes.
+- **Initial Fuel Announcement Preference & Flag Resolution (`lib/audio.lua`)**:
+  - Fixed `initialFuelWanted()` in `lib/audio.lua` which previously suppressed radio-side `preferences.audio_events.initial_fuel` when connected to a flight controller with default `model_flags = 0` (`FLAG_TELL_CAPACITY = false`).
+  - The initial fuel announcement now correctly plays when enabled in radio preferences (`preferences.audio_events.initial_fuel = true`, default) or when explicitly requested by the flight controller via `FLAG_TELL_CAPACITY`.
 - **Dashboard Postflight Stats: Missing Handlers and Live-Value Fallthrough (`widgets/dashboard`) — fixes [#133](https://github.com/rotorflight/rotorflight-lua-edgetx-suite/issues/133)**:
   - Added per-flight tracking for `currentFlightMaxVoltage`/`lastFlightMaxVoltage`, `currentFlightMaxLq`/`lastFlightMaxLq`, `currentFlightMinBecVoltage`/`lastFlightMinBecVoltage`, and `lastFlightEndingVoltage` in `runtime.lua` (`updateDerivedFlightState`).
   - Added stat handlers in `objects/text/stats.lua` for `max`+`voltage` (MAX VOLTAGE tile in `rfstatus` theme), `max`+`link` (LINK MAX in `@rt-rc-n`), `min`+`link` (LINK MIN in `@srb-rc`), and `last`+`voltage` (ENDING VOLTAGE in `@srb-rc`).

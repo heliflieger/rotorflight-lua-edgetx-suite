@@ -292,27 +292,14 @@ local function getPilotConfigApi()
 end
 
 -- WHO decides that the remaining capacity is announced, and it is not always the radio.
---
--- From MSP API 12.09 the flight controller carries a MODEL_TELL_CAPACITY bit in its pilot
--- config (`src/main/pg/pilot.h`), where the enum is introduced as indicating "what features on
--- the radio should be enabled for this model". Once the board reports the word, that bit is the
--- answer in both directions, the way `model_name_sync` already reads MODEL_SET_NAME: the craft
--- says whether it wants the announcement, so the same helicopter behaves the same way on any
--- transmitter. The `model_params_sync` task reads the word on connect and parks it in the
--- session.
---
--- A CLEAR bit therefore silences it, and it has to. Once `model_flags` is present,
--- `app/pages/setup/model/page.lua` offers this bit as the only control for the feature -- there
--- is no radio-side counterpart shown beside it -- so a bit that could only ever say yes would
--- leave that switch unable to turn the callout off for a craft.
---
--- Below 12.09 there is no such field -- `model_flags` is nil rather than zero, which is why the
--- API wrapper keeps those apart -- and the radio-side setting is then the only thing that can
--- decide. It stays, as the fallback it now is.
---
--- The announcement itself is the fuel level spoken once per connection: that IS the capacity
--- this model has left, and until now it was reachable only through the radio-side setting.
+-- The initial fuel announcement is enabled if either the radio preference
+-- (`preferences.audio_events.initial_fuel`, default true) is enabled or the flight controller
+-- explicitly requests it via `FLAG_TELL_CAPACITY` in `model_flags`.
 local function initialFuelWanted(events)
+  if prefEnabled(events, "initial_fuel", true) then
+    return true
+  end
+
   local root = type(_G) == "table" and _G.rfsuite or nil
   local session = type(root) == "table" and root.session or nil
   local pilot = type(session) == "table" and session.pilotConfig or nil
@@ -322,13 +309,13 @@ local function initialFuelWanted(events)
     local Api = getPilotConfigApi()
     if type(Api) == "table" and type(Api.flagSet) == "function" then
       local wanted = Api.flagSet(flags, Api.FLAG_TELL_CAPACITY)
-      if wanted ~= nil then
-        return wanted
+      if wanted == true then
+        return true
       end
     end
   end
 
-  return prefEnabled(events, "initial_fuel", true)
+  return false
 end
 
 local function getLocaleModule()
