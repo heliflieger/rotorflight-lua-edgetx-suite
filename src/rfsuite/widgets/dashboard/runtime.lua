@@ -666,7 +666,7 @@ local function reloadPreferencesIfNeeded(self, force)
     if session and session.mcu_id then
       local MP = ModelPreferences or requireModule("lib/model_preferences.lua")
       if MP and type(MP.loadByMcuId) == "function" then
-        local mPrefs, mPath = MP.loadByMcuId(session.mcu_id)
+        local mPrefs, mPath = MP.loadByMcuId(session.mcu_id, true)
         if mPrefs then
           session.modelPreferences = mPrefs
           session.modelPreferencesFile = mPath

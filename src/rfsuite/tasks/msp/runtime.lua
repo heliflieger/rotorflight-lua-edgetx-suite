@@ -414,7 +414,7 @@ local function applyModelPreferencesForMcu(mcuId)
     return
   end
 
-  local prefs, filePath = ModelPreferences.loadByMcuId(mcuId)
+  local prefs, filePath = ModelPreferences.loadByMcuId(mcuId, true)
   state.values.modelPreferences = prefs
   state.values.modelPreferencesFile = filePath
 end

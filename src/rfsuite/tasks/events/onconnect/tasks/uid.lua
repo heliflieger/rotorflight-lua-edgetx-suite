@@ -28,7 +28,7 @@ function M.wakeup()
   if session.mcu_id and session.mcu_id ~= "" then
     if not ModelPreferences then ModelPreferences = loadModule("lib/model_preferences.lua") end
     if not session.modelPreferences and ModelPreferences and type(ModelPreferences.loadByMcuId) == "function" then
-      local prefs, filePath = ModelPreferences.loadByMcuId(session.mcu_id)
+      local prefs, filePath = ModelPreferences.loadByMcuId(session.mcu_id, true)
       session.modelPreferences = prefs
       session.modelPreferencesFile = filePath
     end
@@ -67,7 +67,7 @@ function M.wakeup()
           session.mcu_id = mcuId
           if type(root.diagnostics) == "table" then root.diagnostics.mcu_id = mcuId end
           if ModelPreferences and type(ModelPreferences.loadByMcuId) == "function" then
-            local prefs, filePath = ModelPreferences.loadByMcuId(mcuId)
+            local prefs, filePath = ModelPreferences.loadByMcuId(mcuId, true)
             session.modelPreferences = prefs
             session.modelPreferencesFile = filePath
           end
