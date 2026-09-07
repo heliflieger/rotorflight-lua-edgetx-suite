@@ -1277,10 +1277,13 @@ local function resolveThemePathForState(dashboard, modelPrefs, flightMode)
     reason = "default_fallback"
   end
 
-  logGv("resolveTheme: mode=%s, modelOverride=%s, modelKey=%s, modelValue=%s, globalKey=%s, globalValue=%s => chosen=%s (%s)",
-    tostring(flightMode), tostring(modelOverride), tostring(modelKey),
-    tostring(modelKey and modelDashboard[modelKey]),
-    tostring(key), tostring(key and dashboard and dashboard[key]), tostring(chosen), tostring(reason))
+  logGv("resolveTheme: mode=%s, modelOverride=%s, modelKey=%s, modelVal=%s, modelPreflight=%s, globalKey=%s, globalVal=%s, globalPreflight=%s => chosen=%s (%s)",
+    tostring(flightMode), tostring(modelOverride),
+    tostring(modelKey), tostring(modelKey and modelDashboard and modelDashboard[modelKey]),
+    tostring(modelDashboard and modelDashboard.model_theme_preflight),
+    tostring(key), tostring(key and dashboard and dashboard[key]),
+    tostring(dashboard and dashboard.theme_preflight),
+    tostring(chosen), tostring(reason))
 
   themePathMemo.dashboard = dashboard
   themePathMemo.modelPrefs = modelPrefs

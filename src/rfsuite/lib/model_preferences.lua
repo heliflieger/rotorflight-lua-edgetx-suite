@@ -337,14 +337,7 @@ local function ensureFileExists(path)
   return true
 end
 
-local cachedMcuId = nil
-local cachedPrefs = nil
-local cachedPath = nil
-
 function M.clearCache()
-  cachedMcuId = nil
-  cachedPrefs = nil
-  cachedPath = nil
   memoizedRoots = {}
 end
 
@@ -360,10 +353,6 @@ end
 function M.loadByMcuId(mcuId, force)
   local safeId = normalizeMcuId(mcuId)
   if not safeId then return nil, nil end
-
-  if not force and cachedMcuId == safeId and cachedPrefs and cachedPath then
-    return deepCopyTable(cachedPrefs), cachedPath
-  end
 
   local defaults = defaultModelPreferences()
   local roots = orderedRoots(safeId)
@@ -384,10 +373,6 @@ function M.loadByMcuId(mcuId, force)
           -- Save errors are non-fatal
         end
       end
-
-      cachedMcuId = safeId
-      cachedPrefs = deepCopyTable(merged)
-      cachedPath = path
 
       return merged, path
     end
@@ -413,19 +398,12 @@ function M.loadByMcuId(mcuId, force)
         end
       end
 
-      cachedMcuId = safeId
-      cachedPrefs = deepCopyTable(merged)
-      cachedPath = path
-
       return merged, path
     end
   end
 
   -- Could not create/load file on any root; still return defaults in-memory.
   local fallback = deepCopyTable(defaults)
-  cachedMcuId = safeId
-  cachedPrefs = deepCopyTable(fallback)
-  cachedPath = nil
   return fallback, nil
 end
 
@@ -447,9 +425,6 @@ function M.saveByMcuId(mcuId, prefs)
     if okTouch then
       local okSave, saveErr = saveIni(path, data)
       if okSave then
-        cachedMcuId = nil
-        cachedPrefs = nil
-        cachedPath = nil
         memoizedRoots = {}
         -- Signal the dashboard widget that model preferences have changed via
         -- rotating sequence length in reload.req. Multi-reader safe, armed-safe,
