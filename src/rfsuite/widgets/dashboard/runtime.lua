@@ -637,31 +637,6 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
   end
 
   logGv("reloadPreferencesIfNeeded executing (force=%s signal=%s pending=%s armed=%s)", tostring(force), tostring(signalReload), tostring(self._reloadPending), tostring(self.state and self.state.armed))
-  self._reloadPending = nil
-
-  -- Adopt both the stamp and sequences together when reloading so their baselines advance synchronously.
-  if currentStamp then
-    self._lastPrefsStamp = currentStamp
-  else
-    local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
-    local stamp = preferencesStamp(session and session.modelPreferencesFile)
-    if stamp then self._lastPrefsStamp = stamp end
-  end
-
-  if currentSeqs then
-    if not self._lastReloadSeqs then self._lastReloadSeqs = {} end
-    for path, seq in pairs(currentSeqs) do
-      self._lastReloadSeqs[path] = seq
-    end
-  elseif type(fstat) == "function" then
-    local reqPaths = reloadRequestPaths()
-    if not self._lastReloadSeqs then self._lastReloadSeqs = {} end
-    for i = 1, #reqPaths do
-      local reqPath = reqPaths[i]
-      local ok, info = pcall(fstat, reqPath)
-      self._lastReloadSeqs[reqPath] = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or 0
-    end
-  end
 
   -- Invalidate current theme and memoization state BEFORE heavy disk reads.
   -- If EdgeTX aborts execution mid-load (e.g. CPU limit fault), all stale
@@ -717,6 +692,30 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
     end
 
     self._lastUIRefresh = 0
+  end
+
+  -- Adopt both the stamp and sequences together when reloading succeeds so their baselines advance synchronously.
+  if currentStamp then
+    self._lastPrefsStamp = currentStamp
+  else
+    local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
+    local stamp = preferencesStamp(session and session.modelPreferencesFile)
+    if stamp then self._lastPrefsStamp = stamp end
+  end
+
+  if currentSeqs then
+    if not self._lastReloadSeqs then self._lastReloadSeqs = {} end
+    for path, seq in pairs(currentSeqs) do
+      self._lastReloadSeqs[path] = seq
+    end
+  elseif type(fstat) == "function" then
+    local reqPaths = reloadRequestPaths()
+    if not self._lastReloadSeqs then self._lastReloadSeqs = {} end
+    for i = 1, #reqPaths do
+      local reqPath = reqPaths[i]
+      local ok, info = pcall(fstat, reqPath)
+      self._lastReloadSeqs[reqPath] = (ok and type(info) == "table" and (info.size or 0) > 0) and info.size or 0
+    end
   end
 
   self._reloadPending = nil
