@@ -637,8 +637,6 @@ return {
         sync_params = "Synchronize Model Parameters",
         radio_wide = "Stored on this radio, for every model",
         flag_set_name = "Set Model Name on the Radio",
-        flag_tell_capacity = "Announce Remaining Capacity",
-        flags_unsupported = "No model flags on this firmware: no capacity announcement",
         loading_title = "Model Configuration",
         loading_message = "Reading from the flight controller",
         help_message = "Settings the flight controller stores for this model: three parameters it applies to the radio's timers or global variables on connect, and the radio-side features it asks for. Whether those are applied is decided here too. From RF 2.3 the craft itself carries the model-name decision; on older firmware the radio does, and the switch then applies to every model on this radio."

@@ -269,53 +269,11 @@ local function emitLog(opts, msg, level)
   end
 end
 
-local pilotConfigApi = nil
-local pilotConfigApiLoaded = false
-
--- Loaded once and kept. Audio.process runs several times a second, so a loadScript per pass is
--- the shape the event tasks were taken apart for; the flag it reads changes only on connect.
-local function getPilotConfigApi()
-  if pilotConfigApiLoaded then
-    return pilotConfigApi
-  end
-  pilotConfigApiLoaded = true
-
-  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/tasks/msp/api/pilot_config.lua", "t")
-  if chunk then
-    local ok, mod = pcall(chunk)
-    if ok and type(mod) == "table" then
-      pilotConfigApi = mod
-    end
-  end
-
-  return pilotConfigApi
-end
-
--- WHO decides that the remaining capacity is announced, and it is not always the radio.
--- The initial fuel announcement is enabled if either the radio preference
--- (`preferences.audio_events.initial_fuel`, default true) is enabled or the flight controller
--- explicitly requests it via `FLAG_TELL_CAPACITY` in `model_flags`.
+-- WHO decides that the initial fuel / capacity is announced:
+-- The radio preference `preferences.audio_events.initial_fuel` (default true)
+-- governs this event exclusively.
 local function initialFuelWanted(events)
-  if prefEnabled(events, "initial_fuel", true) then
-    return true
-  end
-
-  local root = type(_G) == "table" and _G.rfsuite or nil
-  local session = type(root) == "table" and root.session or nil
-  local pilot = type(session) == "table" and session.pilotConfig or nil
-  local flags = type(pilot) == "table" and pilot.model_flags or nil
-
-  if flags ~= nil then
-    local Api = getPilotConfigApi()
-    if type(Api) == "table" and type(Api.flagSet) == "function" then
-      local wanted = Api.flagSet(flags, Api.FLAG_TELL_CAPACITY)
-      if wanted == true then
-        return true
-      end
-    end
-  end
-
-  return false
+  return prefEnabled(events, "initial_fuel", true)
 end
 
 local function getLocaleModule()
@@ -1295,8 +1253,7 @@ function Audio.process(self, opts)
     audioState.fuelSeenPositive = false
   end
 
-  -- Once the callout has fired it stays fired for the session, so the cheapest of the three
-  -- tests goes first: no later pass then walks into `session.pilotConfig` at all.
+  -- Once the callout has fired it stays fired for the session.
   if not audioState.initialFuelAnnounced and audioState.initialized and initialFuelWanted(events) then
     local fuel = tonumber(self.state and self.state.fuel)
     -- Same reason as the battery capacity above: this announcement is meant once per

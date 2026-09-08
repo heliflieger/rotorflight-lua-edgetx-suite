@@ -2,9 +2,8 @@
 -- for. Read and written over MSP_PILOT_CONFIG / MSP_SET_PILOT_CONFIG.
 --
 -- Three (type, value) slots let a craft carry its own settings and have the radio apply them on
--- connect: a slot can name one of the radio's three flight timers or one of GV1..GV9. Two flag
--- bits, from API 12.09 onwards, let the craft say which radio-side features it wants — whether
--- it renames the radio's model, and whether its remaining battery capacity is announced.
+-- connect: a slot can name one of the radio's three flight timers or one of GV1..GV9. A flag
+-- bit, from API 12.09 onwards, lets the craft say whether it renames the radio's model.
 --
 -- These belong here rather than in the suite's own settings because they are stored on the
 -- BOARD: they travel with the helicopter, not with the radio, and a second radio flying the
@@ -282,8 +281,7 @@ end
 -- already settled. `model_flags` is nil exactly when the board did not report the word, which is
 -- the same test the task itself branches on.
 --
--- The capacity announcement has no radio-side counterpart, so it appears only where the board can
--- carry it.
+-- Initial fuel announcement is governed by the radio preference under Audio Events settings.
 local function buildFeatures(cursorY, children, x, w, i18n)
   local boardDecides = ui.config.model_flags ~= nil
 
@@ -291,9 +289,6 @@ local function buildFeatures(cursorY, children, x, w, i18n)
     cursorY = cursorY + flagSwitch(children, x, cursorY, w,
       pageText(i18n, "flag_set_name", "Set Model Name on the Radio"),
       PilotConfigApi.FLAG_SET_NAME)
-    cursorY = cursorY + flagSwitch(children, x, cursorY, w,
-      pageText(i18n, "flag_tell_capacity", "Announce Remaining Capacity"),
-      PilotConfigApi.FLAG_TELL_CAPACITY)
     return cursorY
   end
 
@@ -301,14 +296,7 @@ local function buildFeatures(cursorY, children, x, w, i18n)
     pageText(i18n, "flag_set_name", "Set Model Name on the Radio"), "syncname")
   cursorY = appendRadioWideNote(children, x, cursorY, w, i18n)
 
-  children[#children + 1] = {
-    type = "label", x = x + 10, y = cursorY, w = w - 10,
-    text = pageText(i18n, "flags_unsupported",
-                    "No model flags on this firmware: no capacity announcement"),
-    color = COLOR_THEME_SECONDARY1,
-    font = SMLSIZE,
-  }
-  return cursorY + 24
+  return cursorY
 end
 
 local SECTIONS = {
