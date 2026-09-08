@@ -2,7 +2,7 @@ local Render = {}
 
 -- Sensor-backed values come out of the derived snapshot, never from a probe: this runs
 -- per frame in the reactive sweep, where a probe is forbidden (see GEMINI.md, "Dashboard
--- reactive closures"). The `+`/`-` min/max variants are part of the snapshot too.
+-- reactive closures").
 local function readDerived(state, source)
   local derived = type(state) == "table" and state.derived or nil
   if derived == nil or source == nil then return nil end
@@ -66,7 +66,7 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
     local raw = nil
 
     if source == "min_link" then
-      local val = state and state.lastMinLq
+      local val = state and (state.currentFlightMinLq or state.lastMinLq)
       if source == lastSource and val == lastStatInput and cachedText ~= nil then
         return cachedText
       end
@@ -80,7 +80,7 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
         raw = (val ~= nil) and (tostring(math.floor(tonumber(val) or 0)) .. "%") or "--"
       end
     elseif source == "min_voltage_cell" then
-      local val = state and state.lastMinVoltage
+      local val = state and (state.currentFlightMinVoltage or state.lastMinVoltage)
       if source == lastSource and val == lastStatInput and cachedText ~= nil then
         return cachedText
       end
@@ -100,48 +100,49 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
       end
     else
       local stattype = utils.resolveValue(box.stattype, box, state)
-      local statSource = nil
-      if type(source) == "string" and source ~= "" then
-        if stattype == "max" then
-          statSource = source .. "+"
-        elseif stattype == "min" then
-          statSource = source .. "-"
-        end
-      end
 
       local statValue = nil
       if stattype == "max" then
         if source == "throttle_percent" then
-          statValue = state and (state.currentFlightMaxThrottlePercent or state.lastFlightMaxThrottlePercent or state.throttlePercent)
+          statValue = state and (state.currentFlightMaxThrottlePercent or state.lastFlightMaxThrottlePercent)
         elseif source == "rpm" then
-          statValue = state and (state.currentFlightMaxRpm or state.lastFlightMaxRpm or state.rpm)
+          statValue = state and (state.currentFlightMaxRpm or state.lastFlightMaxRpm)
         elseif source == "current" then
-          statValue = state and (state.currentFlightMaxCurrent or state.lastFlightMaxCurrent or state.current)
-          if statValue == nil and statSource then
-            statValue = readDerived(state, statSource)
-          end
+          statValue = state and (state.currentFlightMaxCurrent or state.lastFlightMaxCurrent)
         elseif source == "mcu_temp" then
-          statValue = state and (state.currentFlightMaxMcuTemp or state.lastFlightMaxMcuTemp or state.mcuTemp)
+          statValue = state and (state.currentFlightMaxMcuTemp or state.lastFlightMaxMcuTemp)
         elseif source == "watts" then
-          statValue = state and (state.currentFlightMaxWatts or state.lastFlightMaxWatts or state.watts)
+          statValue = state and (state.currentFlightMaxWatts or state.lastFlightMaxWatts)
         elseif source == "altitude" then
-          statValue = state and (state.currentFlightMaxAltitude or state.lastFlightMaxAltitude or state.altitude)
+          statValue = state and (state.currentFlightMaxAltitude or state.lastFlightMaxAltitude)
         elseif source == "esc_temp" then
-          statValue = state and (state.currentFlightMaxEscTemp or state.lastFlightMaxEscTemp or state.escTemp)
+          statValue = state and (state.currentFlightMaxEscTemp or state.lastFlightMaxEscTemp)
         elseif source == "smartconsumption" then
           statValue = state and state.consumedMah
+        elseif source == "voltage" then
+          statValue = state and (state.currentFlightMaxVoltage or state.lastFlightMaxVoltage)
+        elseif source == "link" then
+          statValue = state and (state.currentFlightMaxLq or state.lastFlightMaxLq)
         end
       elseif stattype == "min" then
         if source == "fuel" or source == "smartfuel" then
-          statValue = state and (state.currentFlightMinFuel or state.lastFlightMinFuel or state.fuel)
+          statValue = state and (state.currentFlightMinFuel or state.lastFlightMinFuel)
         elseif source == "rpm" then
-          statValue = state and (state.currentFlightMinRpm or state.lastFlightMinRpm or state.rpm)
+          statValue = state and (state.currentFlightMinRpm or state.lastFlightMinRpm)
         elseif source == "current" then
-          statValue = state and (state.currentFlightMinCurrent or state.lastFlightMinCurrent or state.current)
+          statValue = state and (state.currentFlightMinCurrent or state.lastFlightMinCurrent)
         elseif source == "voltage" then
-          statValue = state and (state.currentFlightMinVoltage or state.lastMinVoltage or state.voltage)
+          statValue = state and (state.currentFlightMinVoltage or state.lastMinVoltage)
         elseif source == "bec_voltage" then
-          statValue = state and (state.currentFlightMinBecVoltage or state.lastMinBecVoltage or state.bec_voltage)
+          -- lastMinBecVoltage == lastFlightMinBecVoltage (same source in runtime.lua:1105-1106);
+          -- the third term is unreachable but kept so user themes reading state directly do not break.
+          statValue = state and (state.currentFlightMinBecVoltage or state.lastFlightMinBecVoltage or state.lastMinBecVoltage)
+        elseif source == "link" then
+          statValue = state and (state.currentFlightMinLq or state.lastMinLq)
+        end
+      elseif stattype == "last" then
+        if source == "voltage" then
+          statValue = state and state.lastFlightEndingVoltage
         end
       elseif stattype == "consumed" then
         if source == "current" then
@@ -161,10 +162,13 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
         statValue = readDerived(state, source)
       end
 
-      if statValue == nil and statSource then
-        statValue = readDerived(state, statSource)
-      end
-      if statValue == nil and type(source) == "string" then
+      -- Allow the derived-snapshot fallback for stattype-less tiles and for count/time,
+      -- which already have a dedicated readDerived call above (harmless second read).
+      -- For any other (stattype, source) pair that had no dedicated handler, render "--"
+      -- so a missing handler is immediately visible instead of silently showing a live value.
+      local allowsLiveFallback = stattype == "count" or stattype == "time" or
+                                 stattype == nil or stattype == ""
+      if statValue == nil and allowsLiveFallback and type(source) == "string" then
         statValue = readDerived(state, source)
       end
 

@@ -106,10 +106,6 @@ end
 -- runs in the widget's own pass, inside its pcall, on the telemetry-read cadence -- and
 -- illegal in a reactive closure, which runs per frame on the refresh's leftover budget
 -- outside any pcall (see GEMINI.md, "Dashboard reactive closures").
---
--- Beside each plain source, its `+` and `-` variants are resolved too: the stats objects
--- read the min/max sensors under those names, and a variant that does not exist simply
--- resolves to nil, exactly as its probe would have.
 function Derived.build(state, sources)
   if type(state) ~= "table" then return end
   if not (Utils and type(Utils.mapTelemetrySource) == "function") then return end
@@ -120,8 +116,6 @@ function Derived.build(state, sources)
       local source = sources[i]
       if type(source) == "string" and source ~= "" then
         snap[source] = Utils.mapTelemetrySource(source, state)
-        snap[source .. "+"] = Utils.mapTelemetrySource(source .. "+", state)
-        snap[source .. "-"] = Utils.mapTelemetrySource(source .. "-", state)
       end
     end
   end

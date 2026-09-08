@@ -64,6 +64,10 @@ end
 
 local RSS1_SOURCES = { "1RSS", "RSS1", "rssi1" }
 local RSS2_SOURCES = { "2RSS", "RSS2", "rssi2" }
+local RSSI_LINK_SOURCES = {
+  ["1RSS"] = true,
+  ["2RSS"] = true,
+}
 local THROTTLE_INFLIGHT_THRESHOLD = 35
 local THROTTLE_INFLIGHT_THRESHOLD_DIRECT = 8
 local RPM_INFLIGHT_THRESHOLD_DIRECT = 500
@@ -990,7 +994,9 @@ local function updateDerivedFlightState(state)
   if isArmed and not wasArmed then
     state.currentFlightSeconds = 0
     state.currentFlightMinVoltage = nil
+    state.currentFlightMaxVoltage = nil
     state.currentFlightMinLq = nil
+    state.currentFlightMaxLq = nil
     state.currentFlightMaxThrottlePercent = nil
     state.currentFlightMaxRpm = nil
     state.currentFlightMinRpm = nil
@@ -1001,6 +1007,8 @@ local function updateDerivedFlightState(state)
     state.currentFlightMaxEscTemp = nil
     state.currentFlightMaxMcuTemp = nil
     state.currentFlightMinFuel = nil
+    state.currentFlightMinBecVoltage = nil
+    state.lastFlightEndingVoltage = nil
     state.hadArmedFlight = true
   end
 
@@ -1081,6 +1089,10 @@ local function updateDerivedFlightState(state)
       if currentMinVoltage == nil or state.voltage < currentMinVoltage then
         state.currentFlightMinVoltage = state.voltage
       end
+      local currentMaxVoltage = state.currentFlightMaxVoltage
+      if currentMaxVoltage == nil or state.voltage > currentMaxVoltage then
+        state.currentFlightMaxVoltage = state.voltage
+      end
     end
 
     if type(state.bec_voltage) == "number" and state.bec_voltage > 0 then
@@ -1090,10 +1102,24 @@ local function updateDerivedFlightState(state)
       end
     end
 
-    if type(state.lq) == "number" and state.lq > 0 then
+    -- Track link quality only when the active sensor reports a 0–100 % value.
+    -- Receivers without an RQly sensor fall back to 1RSS/2RSS (RSSI in dBm, always
+    -- negative); if the sensor is known to be an RSSI source or the value falls
+    -- outside 0 < lq <= 100 (e.g. 0 on sensor age-out), skip tracking.
+    -- Using lqSource as the discriminator matches linkIsQuality() in lib/audio.lua.
+    local lq = state.lq
+    local lqIsQuality = type(lq) == "number" and lq > 0 and lq <= 100
+    if lqIsQuality and type(state.lqSource) == "string" and RSSI_LINK_SOURCES[state.lqSource] then
+      lqIsQuality = false
+    end
+    if lqIsQuality then
       local currentMinLq = state.currentFlightMinLq
-      if currentMinLq == nil or state.lq < currentMinLq then
-        state.currentFlightMinLq = state.lq
+      if currentMinLq == nil or lq < currentMinLq then
+        state.currentFlightMinLq = lq
+      end
+      local currentMaxLq = state.currentFlightMaxLq
+      if currentMaxLq == nil or lq > currentMaxLq then
+        state.currentFlightMaxLq = lq
       end
     end
   elseif wasArmed then
@@ -1114,12 +1140,21 @@ local function updateDerivedFlightState(state)
     state.lastFlightMaxMcuTemp = state.currentFlightMaxMcuTemp
     state.lastFlightMinFuel = state.currentFlightMinFuel
     state.lastMinVoltage = state.currentFlightMinVoltage
+    state.lastFlightMaxVoltage = state.currentFlightMaxVoltage
     state.lastMinBecVoltage = state.currentFlightMinBecVoltage
+    state.lastFlightMinBecVoltage = state.currentFlightMinBecVoltage
     state.lastMinLq = state.currentFlightMinLq
+    state.lastFlightMaxLq = state.currentFlightMaxLq
+    -- Capture the ending (landing) voltage as the last known live voltage
+    if type(state.voltage) == "number" and state.voltage > 0 then
+      state.lastFlightEndingVoltage = state.voltage
+    end
     state.currentFlightSeconds = 0
     state.currentFlightMinVoltage = nil
+    state.currentFlightMaxVoltage = nil
     state.currentFlightMinBecVoltage = nil
     state.currentFlightMinLq = nil
+    state.currentFlightMaxLq = nil
     state.fuelTelemetrySeen = false
     state.currentFlightMaxThrottlePercent = nil
     state.currentFlightMaxRpm = nil
@@ -1558,6 +1593,10 @@ function Runtime.new(zone, options)
       currentFlightMaxEscTemp = nil,
       currentFlightMaxMcuTemp = nil,
       currentFlightMinFuel = nil,
+      currentFlightMinVoltage = nil,
+      currentFlightMaxVoltage = nil,
+      currentFlightMinLq = nil,
+      currentFlightMaxLq = nil,
       currentFlightMinBecVoltage = nil,
       flights = 0,
       lq = 0,
@@ -1573,8 +1612,12 @@ function Runtime.new(zone, options)
       batteryTelemetrySeen = false,
       rfTelemetrySeen = false,
       lastMinVoltage = nil,
+      lastFlightMaxVoltage = nil,
       lastMinBecVoltage = nil,
+      lastFlightMinBecVoltage = nil,
       lastMinLq = nil,
+      lastFlightMaxLq = nil,
+      lastFlightEndingVoltage = nil,
       lastFlightMinCurrent = nil,
       lastFlightMaxCurrent = nil,
       lastFlightMaxThrottlePercent = nil,

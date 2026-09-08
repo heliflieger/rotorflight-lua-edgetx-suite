@@ -20,7 +20,7 @@ Theme.boxes = {
 
   -- Column 3: Voltage and altitude (right)
   { col = 5, row = 1, colspan = 2, rowspan = 4, type = "text", subtype = "telemetry", source = "bec_voltage", decimals = 2, unit = "V", title = "@i18n(widgets.dashboard.voltage)@", titlepos = "top", titlecolor = COLOR_THEME_DISABLED, textcolor = "orange", bgcolor = BLACK },
-  { col = 5, row = 5, colspan = 2, rowspan = 4, type = "text", subtype = "stats", stattype = "min", source = "bec_voltage", decimals = 2, unit = "V", title = "@i18n(widgets.dashboard.min_voltage)@", titlepos = "top", transform = function(v) return v / 2 end, titlecolor = COLOR_THEME_DISABLED, textcolor = "orange", bgcolor = BLACK },
+  { col = 5, row = 5, colspan = 2, rowspan = 4, type = "text", subtype = "stats", stattype = "min", source = "bec_voltage", decimals = 2, unit = "V", title = "@i18n(widgets.dashboard.min_voltage)@", titlepos = "top", titlecolor = COLOR_THEME_DISABLED, textcolor = "orange", bgcolor = BLACK },
   { col = 5, row = 9, colspan = 2, rowspan = 4, type = "text", subtype = "stats", stattype = "max", source = "altitude", unit = "m", title = "@i18n(widgets.dashboard.altitude_max)@", titlepos = "top", transform = "floor", titlecolor = COLOR_THEME_DISABLED, textcolor = "orange", bgcolor = BLACK }
 }
 
