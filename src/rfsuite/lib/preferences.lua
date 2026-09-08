@@ -9,35 +9,11 @@ local RELOAD_REQ_PATH  = "/SCRIPTS/TOOLS/rfsuite.user/reload.req"
 
 local cachedModelPreferences = nil
 
-local Log = nil
-local function getLog()
-  if Log ~= nil then return Log end
-  if _G.rfsuite and _G.rfsuite.require then
-    local ok, mod = pcall(_G.rfsuite.require, "lib/log.lua")
-    if ok and type(mod) == "table" and type(mod.emit) == "function" then
-      Log = mod
-      return Log
-    end
-  end
-  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
-  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/log.lua", mode)
-  if chunk then
-    local ok, mod = pcall(chunk)
-    if ok and type(mod) == "table" and type(mod.emit) == "function" then
-      Log = mod
-      return Log
-    end
-  end
-  Log = false
-  return nil
-end
-
 local function logD(fmt, ...)
-  local logger = getLog()
-  if not (logger and type(logger.emit) == "function") then return end
-  local msg = tostring(fmt)
-  if select("#", ...) > 0 then msg = string.format(msg, ...) end
-  pcall(logger.emit, "rfsuite.reload", msg, "debug")
+  local L = _G.rfsuite and _G.rfsuite.Log
+  if L and type(L.emitf) == "function" then
+    L.emitf("rfsuite.reload", "debug", fmt, ...)
+  end
 end
 
 local function getModelPreferences()
