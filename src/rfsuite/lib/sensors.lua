@@ -576,8 +576,12 @@ function Sensors.reset()
       Sensors.probe_times[k] = nil
     end
   end
-  for k in pairs(valueMisses) do
-    valueMisses[k] = nil
+  -- `valueMisses` is a module-local table initialised at declaration time and therefore
+  -- never nil.  The guard is added purely for style consistency with the blocks above.
+  if valueMisses then
+    for k in pairs(valueMisses) do
+      valueMisses[k] = nil
+    end
   end
 end
 

@@ -1296,6 +1296,9 @@ function Audio.process(self, opts)
               if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
             end
             audioState.initialFuelAnnounced = true
+            -- Clear the zero-grace timer even when fuel==0 and the grace window has
+            -- expired (fuelReady==true): the announcement has just fired, so a stale
+            -- fuelZeroSince timestamp must not carry over to the next connection.
             audioState.fuelZeroSince = nil
           end
         end
