@@ -206,11 +206,16 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
       if statValue == nil and allowsLiveFallback and type(source) == "string" then
         statValue = readDerived(state, source)
       end
+      local isTemp = (source == "esc_temp" or source == "mcu_temp" or source == "temp_esc" or source == "temp_mcu")
+      local isFahr = isTemp and useFahrenheit()
+      if isTemp and isFahr and type(statValue) == "number" then
+        statValue = (statValue * 9 / 5) + 32
+      end
       if statValue == lastColorInput and cachedColor ~= nil then
         return cachedColor
       end
       lastColorInput = statValue
-      cachedColor = utils.resolveTextColor(box, state, WHITE, statValue)
+      cachedColor = utils.resolveTextColor(box, state, WHITE, statValue, isFahr)
       return cachedColor
     end
   end

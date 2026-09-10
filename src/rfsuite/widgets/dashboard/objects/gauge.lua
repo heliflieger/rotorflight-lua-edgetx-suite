@@ -69,63 +69,10 @@ local function readDerived(state, source)
   return derived[source]
 end
 
--- Compiled once per box and kept on a weak-keyed cache (a theme whose `boxes` is a
--- function hands out fresh box tables per resolve; a strong key would leak one compiled
--- list per resolve): the comparison values with their unit conversion already applied and
--- the fill color picked, in the theme's own order. The per-frame pick is then a walk over
--- a list whose length is a build-time constant.
---
--- A threshold's `value` may also be a function, exactly like a box's `min` and `max`: a theme
--- whose limits live on its configure page has nothing else to key them on. Such a list is
--- resolved per call and never cached, because what it resolves to can change while the box
--- table it belongs to stays the same one.
-local thresholdCache = setmetatable({}, { __mode = "k" })
-
-local function compiledThresholds(box, thresholds, isFahrenheit, state, utils)
-  local cached = box and thresholdCache[box] or nil
-  if cached and cached.src == thresholds and cached.fahrenheit == isFahrenheit then
-    return cached.list
-  end
-  local list = {}
-  local dynamic = false
-  for i = 1, #thresholds do
-    local threshold = thresholds[i]
-    if type(threshold) == "table" then
-      local limit = threshold.value
-      if type(limit) == "function" then
-        dynamic = true
-        limit = utils and utils.resolveValue(limit, box, state) or nil
-      end
-      if type(limit) == "number" then
-        list[#list + 1] = {
-          value = isFahrenheit and cToF(limit) or limit,
-          color = threshold.fillcolor or threshold.color
-        }
-      end
-    end
-  end
-  if box and not dynamic then
-    thresholdCache[box] = { src = thresholds, fahrenheit = isFahrenheit, list = list }
-  end
-  return list
-end
-
 local function resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state, utils)
   if utils and type(utils.resolveThresholdColor) == "function" then
-    return utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state)
+    return utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state, "fillcolor")
   end
-
-  if type(value) ~= "number" or type(thresholds) ~= "table" or #thresholds == 0 then
-    return defaultColor
-  end
-
-  local list = compiledThresholds(box, thresholds, isFahrenheit == true, state, utils)
-  for i = 1, #list do
-    if value <= list[i].value then
-      return list[i].color or defaultColor
-    end
-  end
-
   return defaultColor
 end
 
@@ -805,9 +752,16 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
       if fahrenheit and curHasValue then
         curVal = cToF(curVal)
       end
-      local valueColor = utils.resolveTextColor(box, state, WHITE, curHasValue and curVal or nil)
-      if unit == "%" and curHasValue and (type(box.thresholds) ~= "table" or #box.thresholds == 0) then
-        valueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit, source)
+      local valueColor = nil
+      if curHasValue and type(box.thresholds) == "table" and #box.thresholds > 0 then
+        valueColor = utils.resolveThresholdColor(curVal, box.thresholds, nil, fahrenheit, box, state, "textcolor")
+      end
+      if valueColor == nil then
+        if unit == "%" and curHasValue then
+          valueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit, source)
+        else
+          valueColor = utils.resolveTextColor(box, state, WHITE)
+        end
       end
       cachedValColor = valueColor
       return cachedValColor
