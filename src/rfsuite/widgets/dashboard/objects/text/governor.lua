@@ -140,20 +140,37 @@ local function governorText(state)
   return translate(state, "widgets.governor." .. key, key)
 end
 
-local function governorColor(state, box)
+local function governorColor(state, box, utils)
   local armed = resolveArmedState(state)
   local value = tonumber(state and state.governor)
   if armFlagsToIsArmed(state and state.armFlags) == false then
     value = 101
   end
-  local defaultText = box.textcolor or WHITE
-  local warningColor = box.warningcolor or COLOR_THEME_WARNING or RED or defaultText
-  local activeColor = box.activecolor or COLOR_THEME_PRIMARY1 or GREEN or defaultText
 
-  if box.bgcolor ~= nil and warningColor == box.bgcolor then
+  if type(box and box.thresholds) == "table" and #box.thresholds > 0 and utils and type(utils.resolveThresholdColor) == "function" then
+    local govText = governorText(state)
+    local govKey = GOVERNOR_LABELS[value]
+    local threshColor = utils.resolveThresholdColor(govText, box.thresholds, nil, false, box, state)
+    if threshColor == nil and govKey ~= nil then
+      threshColor = utils.resolveThresholdColor(govKey, box.thresholds, nil, false, box, state)
+    end
+    if threshColor ~= nil then
+      return threshColor
+    end
+  end
+
+  local defaultText = (utils and utils.resolveTextColor and utils.resolveTextColor(box, state, WHITE)) or (box and box.textcolor) or WHITE
+  local warningColor = box and box.warningcolor or COLOR_THEME_WARNING or RED or defaultText
+  local activeColor = box and box.activecolor or COLOR_THEME_PRIMARY1 or GREEN or defaultText
+  if utils and utils.normalizeColor then
+    warningColor = utils.normalizeColor(warningColor, defaultText)
+    activeColor = utils.normalizeColor(activeColor, defaultText)
+  end
+
+  if box and box.bgcolor ~= nil and warningColor == box.bgcolor then
     warningColor = defaultText
   end
-  if box.bgcolor ~= nil and activeColor == box.bgcolor then
+  if box and box.bgcolor ~= nil and activeColor == box.bgcolor then
     activeColor = defaultText
   end
 
@@ -169,7 +186,7 @@ local function governorColor(state, box)
     return warningColor
   end
 
-  return box.textcolor or WHITE
+  return defaultText
 end
 
 function Render.render(nodes, rect, box, state, _, utils)
@@ -218,7 +235,7 @@ function Render.render(nodes, rect, box, state, _, utils)
     lastColorArmed = armed
     lastColorGov = gov
 
-    cachedColor = governorColor(state, box)
+    cachedColor = governorColor(state, box, utils)
     return cachedColor
   end
 

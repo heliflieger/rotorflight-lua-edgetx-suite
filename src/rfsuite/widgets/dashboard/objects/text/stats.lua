@@ -192,8 +192,26 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
 
   local colorRef = utils.staticTextColor(box, state, WHITE)
   if colorRef == nil then
+    local lastColorInput = nil
+    local cachedColor = nil
     colorRef = function()
-      return utils.resolveTextColor(box, state, WHITE)
+      local source = box and box.source
+      local stattype = box and box.stattype
+      local statValue = nil
+      if type(source) == "string" and type(stattype) == "string" and stattype ~= "" then
+        statValue = readStat(state, source, stattype)
+      end
+      local allowsLiveFallback = (themeCommon and themeCommon.allowStatsLiveFallback and themeCommon.allowStatsLiveFallback(source, stattype)) or
+                                 stattype == nil or stattype == ""
+      if statValue == nil and allowsLiveFallback and type(source) == "string" then
+        statValue = readDerived(state, source)
+      end
+      if statValue == lastColorInput and cachedColor ~= nil then
+        return cachedColor
+      end
+      lastColorInput = statValue
+      cachedColor = utils.resolveTextColor(box, state, WHITE, statValue)
+      return cachedColor
     end
   end
 

@@ -205,6 +205,21 @@ function Stubs.install(root)
     return Stubs.prefsStat
   end
 
+  local realIoRead = io.read
+  local realIoWrite = io.write
+  io.read = function(f, n)
+    if type(f) == "userdata" or type(f) == "table" then
+      return f:read(n)
+    end
+    return realIoRead(f, n)
+  end
+  io.write = function(f, str)
+    if type(f) == "userdata" or type(f) == "table" then
+      return f:write(str)
+    end
+    return realIoWrite(f, str)
+  end
+
   _G.system = {
     getVersion = function()
       return { version = "2.12.0", simulation = false }

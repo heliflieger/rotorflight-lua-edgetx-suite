@@ -76,11 +76,24 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
     colorRef = utils.staticTextColor(box, state, WHITE)
   end
   if colorRef == nil then
+    local lastColorPct = nil
+    local cachedColor = nil
     colorRef = function()
-      if utils and type(utils.resolveTextColor) == "function" then
-        return utils.resolveTextColor(box, state, WHITE)
+      local pct = nil
+      local df = state and state.dataflash
+      if df and type(df.total) == "number" and df.total > 0 then
+        pct = ((df.used or 0) / df.total) * 100
       end
-      return (box and box.textcolor) or WHITE
+      if pct == lastColorPct and cachedColor ~= nil then
+        return cachedColor
+      end
+      lastColorPct = pct
+      if utils and type(utils.resolveTextColor) == "function" then
+        cachedColor = utils.resolveTextColor(box, state, WHITE, pct)
+        return cachedColor
+      end
+      cachedColor = (box and box.textcolor) or WHITE
+      return cachedColor
     end
   end
 

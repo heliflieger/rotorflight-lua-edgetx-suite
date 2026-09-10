@@ -42,11 +42,20 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
     colorRef = utils.staticTextColor(box, state, WHITE)
   end
   if colorRef == nil then
+    local lastColorCount = nil
+    local cachedColor = nil
     colorRef = function()
-      if utils and type(utils.resolveTextColor) == "function" then
-        return utils.resolveTextColor(box, state, WHITE)
+      local count = (state and state.sessionFlights) or 0
+      if count == lastColorCount and cachedColor ~= nil then
+        return cachedColor
       end
-      return (box and box.textcolor) or WHITE
+      lastColorCount = count
+      if utils and type(utils.resolveTextColor) == "function" then
+        cachedColor = utils.resolveTextColor(box, state, WHITE, count)
+        return cachedColor
+      end
+      cachedColor = (box and box.textcolor) or WHITE
+      return cachedColor
     end
   end
 

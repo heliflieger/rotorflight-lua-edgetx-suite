@@ -111,6 +111,10 @@ local function compiledThresholds(box, thresholds, isFahrenheit, state, utils)
 end
 
 local function resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state, utils)
+  if utils and type(utils.resolveThresholdColor) == "function" then
+    return utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state)
+  end
+
   if type(value) ~= "number" or type(thresholds) ~= "table" or #thresholds == 0 then
     return defaultColor
   end
@@ -801,8 +805,8 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
       if fahrenheit and curHasValue then
         curVal = cToF(curVal)
       end
-      local valueColor = utils.resolveTextColor(box, state, WHITE)
-      if unit == "%" and curHasValue then
+      local valueColor = utils.resolveTextColor(box, state, WHITE, curHasValue and curVal or nil)
+      if unit == "%" and curHasValue and (type(box.thresholds) ~= "table" or #box.thresholds == 0) then
         valueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit, source)
       end
       cachedValColor = valueColor

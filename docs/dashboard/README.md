@@ -14,7 +14,7 @@ is the starting point; these files carry the detail.
 | `widget-setup.md` | Adding the widget to a screen, sizing it, and what it shows in each of the three flight phases. | README | to write |
 | `themes.md` | The shipped themes (Default, RF Status, @AERC, @AERC Nitro, @RT-RC, @RT-RC Nitro, @SRB-RC) and choosing one under *System* → *Settings* → *Dashboard* → *Design*, per model and per flight phase. | in-app help of the Design page | to write |
 | `theme-settings.md` | The per-theme settings page under *Dashboard* → *Settings*: the voltage range a theme's gauges span, stored per model. | theme `configure.lua` sources | to write |
-| `user-themes.md` | Copying a shipped theme into `/SCRIPTS/TOOLS/rfsuite.user/dashboard/`, editing it, and why a copy keeps its own settings. | nowhere yet | to write |
+| [user-themes.md](user-themes.md) | Copying a shipped theme into `/SCRIPTS/TOOLS/rfsuite.user/dashboard/`, editing it, box styling, named colors, dynamic thresholds, and why a copy keeps its own settings. | nowhere yet | written |
 | `quick-menu.md` | The fullscreen quick menu: erasing the blackbox and picking the battery profile. | nowhere yet | to write |
 | `model-image.md` | Where the model picture comes from, the per-cell-count variant and the accepted file types. | README | to write |
 | `service-widget.md` | What *RFSuite Service* keeps alive when the tool is closed, and where to place it. | README | to write |

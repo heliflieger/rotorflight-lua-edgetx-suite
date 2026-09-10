@@ -69,16 +69,23 @@ function Wrapper.render(nodes, rect, box, state)
       cachedText = tostring(v)
       return cachedText
     end
-    local colorGetter = function()
-      local c = (box and type(box.textcolor) == "function") and box.textcolor(box, state) or (box and box.textcolor)
-      return (c ~= nil) and c or WHITE
+    local colorRef = (utils and type(utils.staticTextColor) == "function") and utils.staticTextColor(box, state, WHITE) or nil
+    if colorRef == nil then
+      colorRef = function()
+        local v = (box and type(box.value) == "function") and box.value(box, state) or (box and box.value)
+        if utils and type(utils.resolveTextColor) == "function" then
+          return utils.resolveTextColor(box, state, WHITE, v)
+        end
+        local c = (box and type(box.textcolor) == "function") and box.textcolor(box, state) or (box and box.textcolor)
+        return (c ~= nil) and c or WHITE
+      end
     end
     local align = (box and box.valuealign) or (box and box.titlealign) or CENTER
     local fontGetter = function()
       local f = (box and type(box.font) == "function") and box.font(box, state) or (box and box.font or MIDSIZE)
       return f
     end
-    utils.pushLabel(nodes, rect.x + 4, utils.defaultValueY(rect, box), rect.w - 8, textGetter, colorGetter, align, fontGetter)
+    utils.pushLabel(nodes, rect.x + 4, utils.defaultValueY(rect, box), rect.w - 8, textGetter, colorRef, align, fontGetter)
   end
 end
 

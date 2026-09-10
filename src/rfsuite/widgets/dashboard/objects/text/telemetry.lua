@@ -196,8 +196,31 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
 
   local colorRef = utils.staticTextColor(box, state, WHITE)
   if colorRef == nil then
+    local lastColorRaw = nil
+    local cachedColor = nil
     colorRef = function()
-      return utils.resolveTextColor(box, state, WHITE)
+      local source = cfg.source
+      if cfg.sourceDynamic then
+        source = utils.resolveValue(source, box, state)
+      end
+      local raw = source ~= nil and mapSourceFast(source, state, utils) or nil
+      local isTemp = (source == "esc_temp" or source == "mcu_temp")
+      local isFahr = isTemp and useFahrenheit()
+      if isTemp and isFahr and type(raw) == "number" then
+        raw = (raw * 9 / 5) + 32
+      end
+      local transform = cfg.transform
+      if cfg.transformDynamic then
+        transform = utils.resolveValue(transform, box, state)
+      end
+      raw = utils.applyTransform(raw, transform)
+
+      if raw == lastColorRaw and cachedColor ~= nil then
+        return cachedColor
+      end
+      lastColorRaw = raw
+      cachedColor = utils.resolveTextColor(box, state, WHITE, raw)
+      return cachedColor
     end
   end
 

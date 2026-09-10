@@ -354,10 +354,100 @@ function Utils.normalizeColor(color, fallback)
   return WHITE
 end
 
-function Utils.resolveTextColor(box, state, fallback)
+function Utils.cToF(c)
+  if type(c) == "number" then
+    return (c * 9 / 5) + 32
+  end
+  return c
+end
+
+local thresholdCache = setmetatable({}, { __mode = "k" })
+
+function Utils.compiledThresholds(box, thresholds, isFahrenheit, state)
+  local cached = box and thresholdCache[box] or nil
+  if cached and cached.src == thresholds and cached.fahrenheit == isFahrenheit then
+    return cached.list
+  end
+  local list = {}
+  local dynamic = false
+  for i = 1, #thresholds do
+    local threshold = thresholds[i]
+    if type(threshold) == "table" then
+      local limit = threshold.value
+      if type(limit) == "function" then
+        dynamic = true
+        limit = Utils.resolveValue(limit, box, state)
+      end
+      local rawCol = threshold.textcolor or threshold.color or threshold.fillcolor
+      if type(rawCol) == "function" then
+        dynamic = true
+      end
+      local col = nil
+      if rawCol ~= nil then
+        col = Utils.normalizeColor(rawCol, nil)
+      end
+      if type(limit) == "number" then
+        list[#list + 1] = {
+          value = (isFahrenheit == true) and Utils.cToF(limit) or limit,
+          color = col
+        }
+      elseif type(limit) == "string" then
+        local normalizedLimit = Utils.normalizeTitle(limit, state and state.i18n) or limit
+        list[#list + 1] = {
+          value = normalizedLimit,
+          isString = true,
+          color = col
+        }
+      end
+    end
+  end
+  if box and not dynamic then
+    thresholdCache[box] = { src = thresholds, fahrenheit = isFahrenheit, list = list }
+  end
+  return list
+end
+
+function Utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state)
+  if value == nil or type(thresholds) ~= "table" or #thresholds == 0 then
+    return defaultColor
+  end
+
+  local list = Utils.compiledThresholds(box, thresholds, isFahrenheit == true, state)
+  for i = 1, #list do
+    local item = list[i]
+    local matched = false
+    if type(value) == "number" and type(item.value) == "number" then
+      if value <= item.value then
+        matched = true
+      end
+    elseif item.isString or type(value) == "string" or type(item.value) == "string" then
+      if tostring(value) == tostring(item.value) then
+        matched = true
+      end
+    end
+
+    if matched then
+      return item.color or defaultColor
+    end
+  end
+
+  return defaultColor
+end
+
+function Utils.resolveTextColor(box, state, fallback, value)
+  if value ~= nil and type(box) == "table" and type(box.thresholds) == "table" and #box.thresholds > 0 then
+    local threshColor = Utils.resolveThresholdColor(value, box.thresholds, nil, false, box, state)
+    if threshColor ~= nil then
+      return threshColor
+    end
+  end
+
   local color = Utils.resolveValue(box and box.textcolor, box, state)
-  if type(color) == "number" then
-    return color
+  if color ~= nil then
+    local normalized = Utils.normalizeColor(color, nil)
+    if type(normalized) == "number" then
+      return normalized
+    end
   end
 
   local bgColor = Utils.resolveValue(box and box.bgcolor, box, state)
@@ -387,11 +477,15 @@ end
 
 --- The text colour, resolved once, or nil if it can move.
 --
--- resolveTextColor reads box.textcolor and box.bgcolor and nothing else. When neither is a
--- function both are literals in the theme's box table, and the answer holds for as long as that
--- table is the one being drawn.
+-- resolveTextColor reads box.textcolor and box.bgcolor and evaluates box.thresholds if present.
+-- When neither textcolor nor bgcolor is a function and no thresholds are declared, the answer holds
+-- for as long as that table is the one being drawn.
 function Utils.staticTextColor(box, state, fallback)
-  if type(box) == "table" and (type(box.textcolor) == "function" or type(box.bgcolor) == "function") then
+  if type(box) == "table" and (
+    type(box.textcolor) == "function" or
+    type(box.bgcolor) == "function" or
+    (type(box.thresholds) == "table" and #box.thresholds > 0)
+  ) then
     return nil
   end
   return Utils.resolveTextColor(box, state, fallback)

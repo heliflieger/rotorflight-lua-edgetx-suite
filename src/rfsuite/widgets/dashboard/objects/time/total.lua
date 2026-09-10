@@ -45,11 +45,20 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
     colorRef = utils.staticTextColor(box, state, WHITE)
   end
   if colorRef == nil then
+    local lastColorSecs = nil
+    local cachedColor = nil
     colorRef = function()
-      if utils and type(utils.resolveTextColor) == "function" then
-        return utils.resolveTextColor(box, state, WHITE)
+      local totalSecs = (state and state.totalFlightSeconds) or 0
+      if totalSecs == lastColorSecs and cachedColor ~= nil then
+        return cachedColor
       end
-      return (box and box.textcolor) or WHITE
+      lastColorSecs = totalSecs
+      if utils and type(utils.resolveTextColor) == "function" then
+        cachedColor = utils.resolveTextColor(box, state, WHITE, totalSecs)
+        return cachedColor
+      end
+      cachedColor = (box and box.textcolor) or WHITE
+      return cachedColor
     end
   end
 
