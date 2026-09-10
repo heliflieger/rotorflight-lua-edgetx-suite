@@ -59,7 +59,9 @@ For numeric sources (e.g. `rpm`, `bec_voltage`, `temp_esc`, `altitude`, `flight_
 }
 ```
 
-Thresholds are evaluated in order (`value <= threshold.value`). When a threshold matches, its `textcolor` or `color` is applied; if no threshold matches, the default `textcolor` is used.
+Thresholds are evaluated in order (`value <= threshold.value`). Gauge fill thresholds use `fillcolor` (or `color`), while text and value labels use `textcolor` (or `color`). An entry can declare either or both. If no threshold matches, the default `textcolor` is used.
+
+For temperature sources (`esc_temp`, `temp_esc`, `mcu_temp`, `temp_mcu`), threshold values are defined in Celsius (°C) in the theme and automatically converted when the radio is configured for Fahrenheit (°F).
 
 #### Governor state thresholds
 For governor status boxes (`type = "text"`, `source = "governor"`), thresholds can match against governor state labels:

@@ -95,7 +95,7 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
       unit = utils.resolveValue(unit, box, state)
     end
 
-    local isTemp = (source == "esc_temp" or source == "mcu_temp")
+    local isTemp = (source == "esc_temp" or source == "mcu_temp" or source == "temp_esc" or source == "temp_mcu")
     local isFahr = isTemp and useFahrenheit()
     if isTemp then
       if isFahr and type(raw) == "number" then
@@ -204,7 +204,7 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
         source = utils.resolveValue(source, box, state)
       end
       local raw = source ~= nil and mapSourceFast(source, state, utils) or nil
-      local isTemp = (source == "esc_temp" or source == "mcu_temp")
+      local isTemp = (source == "esc_temp" or source == "mcu_temp" or source == "temp_esc" or source == "temp_mcu")
       local isFahr = isTemp and useFahrenheit()
       if isTemp and isFahr and type(raw) == "number" then
         raw = (raw * 9 / 5) + 32
@@ -219,7 +219,7 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
         return cachedColor
       end
       lastColorRaw = raw
-      cachedColor = utils.resolveTextColor(box, state, WHITE, raw)
+      cachedColor = utils.resolveTextColor(box, state, WHITE, raw, isFahr)
       return cachedColor
     end
   end

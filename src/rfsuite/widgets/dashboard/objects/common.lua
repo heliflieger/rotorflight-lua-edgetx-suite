@@ -363,6 +363,21 @@ end
 
 local thresholdCache = setmetatable({}, { __mode = "k" })
 
+local function hasTextThresholds(thresholds)
+  if type(thresholds) ~= "table" then return false end
+  for i = 1, #thresholds do
+    local t = thresholds[i]
+    if type(t) == "table" and (t.textcolor ~= nil or t.color ~= nil) then
+      return true
+    end
+  end
+  return false
+end
+
+function Utils.hasTextThresholds(thresholds)
+  return hasTextThresholds(thresholds)
+end
+
 function Utils.compiledThresholds(box, thresholds, isFahrenheit, state)
   local cached = box and thresholdCache[box] or nil
   if cached and cached.src == thresholds and cached.fahrenheit == isFahrenheit then
@@ -378,25 +393,39 @@ function Utils.compiledThresholds(box, thresholds, isFahrenheit, state)
         dynamic = true
         limit = Utils.resolveValue(limit, box, state)
       end
-      local rawCol = threshold.textcolor or threshold.color or threshold.fillcolor
-      if type(rawCol) == "function" then
+      local rawFill = threshold.fillcolor or threshold.color
+      local rawText = threshold.textcolor or threshold.color
+      if type(rawFill) == "function" then
         dynamic = true
+        rawFill = Utils.resolveValue(rawFill, box, state)
       end
-      local col = nil
-      if rawCol ~= nil then
-        col = Utils.normalizeColor(rawCol, nil)
+      if type(rawText) == "function" then
+        dynamic = true
+        rawText = Utils.resolveValue(rawText, box, state)
+      end
+      local fillCol = nil
+      if rawFill ~= nil then
+        fillCol = Utils.normalizeColor(rawFill, nil)
+      end
+      local textCol = nil
+      if rawText ~= nil then
+        textCol = Utils.normalizeColor(rawText, nil)
       end
       if type(limit) == "number" then
         list[#list + 1] = {
           value = (isFahrenheit == true) and Utils.cToF(limit) or limit,
-          color = col
+          fillcolor = fillCol,
+          textcolor = textCol,
+          color = textCol or fillCol
         }
       elseif type(limit) == "string" then
         local normalizedLimit = Utils.normalizeTitle(limit, state and state.i18n) or limit
         list[#list + 1] = {
           value = normalizedLimit,
           isString = true,
-          color = col
+          fillcolor = fillCol,
+          textcolor = textCol,
+          color = textCol or fillCol
         }
       end
     end
@@ -407,7 +436,7 @@ function Utils.compiledThresholds(box, thresholds, isFahrenheit, state)
   return list
 end
 
-function Utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state)
+function Utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state, colorKey)
   if value == nil or type(thresholds) ~= "table" or #thresholds == 0 then
     return defaultColor
   end
@@ -427,16 +456,24 @@ function Utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenhe
     end
 
     if matched then
-      return item.color or defaultColor
+      local col = nil
+      if colorKey == "fillcolor" or colorKey == "fill" then
+        col = item.fillcolor
+      elseif colorKey == "textcolor" or colorKey == "text" then
+        col = item.textcolor
+      else
+        col = item.textcolor or item.fillcolor or item.color
+      end
+      return col or defaultColor
     end
   end
 
   return defaultColor
 end
 
-function Utils.resolveTextColor(box, state, fallback, value)
+function Utils.resolveTextColor(box, state, fallback, value, isFahrenheit)
   if value ~= nil and type(box) == "table" and type(box.thresholds) == "table" and #box.thresholds > 0 then
-    local threshColor = Utils.resolveThresholdColor(value, box.thresholds, nil, false, box, state)
+    local threshColor = Utils.resolveThresholdColor(value, box.thresholds, nil, isFahrenheit == true, box, state, "textcolor")
     if threshColor ~= nil then
       return threshColor
     end
@@ -484,7 +521,7 @@ function Utils.staticTextColor(box, state, fallback)
   if type(box) == "table" and (
     type(box.textcolor) == "function" or
     type(box.bgcolor) == "function" or
-    (type(box.thresholds) == "table" and #box.thresholds > 0)
+    (type(box.thresholds) == "table" and hasTextThresholds(box.thresholds))
   ) then
     return nil
   end
