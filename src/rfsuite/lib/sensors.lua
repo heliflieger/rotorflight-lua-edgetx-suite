@@ -125,6 +125,19 @@ local function readTelemetryValue(name)
   return nil
 end
 
+-- getValue() answers 0 for a sensor the model still carries but the radio does not send, and 0
+-- is a number, so such a sensor would be taken for a reading. getSourceValue() returns nothing
+-- for exactly that sensor and its last value otherwise, which tells a dead sensor apart from a
+-- live one that happens to read zero. Only asked before a search path is adopted, and only about
+-- a zero, so neither a settled source nor a reading of its own costs anything.
+local function telemetryValueIsLive(name)
+  local getSrcV = _G.getSourceValue
+  if type(getSrcV) ~= "function" then return true end
+  local ok, sourceValue = pcall(getSrcV, name)
+  if not ok then return true end
+  return sourceValue ~= nil
+end
+
 local SIM_SENSOR_PATHS = {
   "/SCRIPTS/TOOLS/rfsuite-core/sim/sensors/",
   "/SCRIPTS/TOOLS/rfsuite.user/sim/sensors/",
@@ -502,7 +515,7 @@ function Sensors.getValue(source)
       if now - lastProbe >= 3.0 then
         Sensors.probe_times[source] = now
         local primaryVal = readTelemetryValue(primaryPath)
-        if type(primaryVal) == "number" then
+        if type(primaryVal) == "number" and (primaryVal ~= 0 or telemetryValueIsLive(primaryPath)) then
           Sensors.active_paths = Sensors.active_paths or {}
           Sensors.active_paths[source] = primaryPath
           if debugWanted() then debugLog("telemetry-promote:" .. source, "promoted " .. primaryPath .. " = " .. tostring(primaryVal)) end
@@ -528,7 +541,7 @@ function Sensors.getValue(source)
   if paths then
     for i = 1, #paths do
       local val = readTelemetryValue(paths[i])
-      if type(val) == "number" then
+      if type(val) == "number" and (val ~= 0 or telemetryValueIsLive(paths[i])) then
         Sensors.active_paths = Sensors.active_paths or {}
         Sensors.active_paths[source] = paths[i]
         if debugWanted() then debugLog("telemetry-hit:" .. source, "hit " .. paths[i] .. " = " .. tostring(val)) end
@@ -574,6 +587,11 @@ function Sensors.reset()
   if Sensors.probe_times then
     for k in pairs(Sensors.probe_times) do
       Sensors.probe_times[k] = nil
+    end
+  end
+  if fieldInfoCache then
+    for k in pairs(fieldInfoCache) do
+      fieldInfoCache[k] = nil
     end
   end
   -- `valueMisses` is a module-local table initialised at declaration time and therefore

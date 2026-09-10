@@ -3169,6 +3169,7 @@ function M.run(event, touchState)
         state.telemetryState.batteryProfile = nil
         state.telemetryState.voltage = nil
         state.telemetryState.bec_voltage = nil
+        state.telemetryState.previousSessionFuel = state.telemetryState.fuel
         state.telemetryState.fuel = nil
         state.telemetryState.fuelTelemetrySeen = nil
         state.telemetryState.rpm = nil

@@ -820,7 +820,7 @@ function Audio.resetConnectionState(audioState)
   audioState.lqLevel = nil
   audioState.lqNotQualityLogged = nil
   audioState.packCheckDone = false
-  audioState.fuelZeroSince = nil
+  audioState.fuelDeferUntil = nil
 
   if type(audioState.lastValues) == "table" then
     for k in pairs(audioState.lastValues) do
@@ -1264,30 +1264,34 @@ function Audio.process(self, opts)
       if type(fuel) == "number" and audioState.seedInitialFuel then
         audioState.seedInitialFuel = nil
         audioState.initialFuelAnnounced = true
-        audioState.fuelZeroSince = nil
+        audioState.fuelDeferUntil = nil
       elseif type(fuel) == "number" then
-        if fuel < 0 then fuel = 0 end
-        if fuel > 100 then fuel = 100 end
-
         local now = nowSeconds()
-        -- An early fuel reading of 0 may be a transient reading from an RC link (e.g. Bat%)
-        -- while SmartFuel / telemetry is still stabilising (~2-4 s).
-        -- Treat 0 as "not yet ready" for a short grace window, so we do not announce "Battery 0%"
-        -- if a real fuel level arrives shortly after. If the pack is genuinely empty, announce
-        -- once the timeout expires.
-        local fuelReady = true
-        if fuel == 0 then
-          if not audioState.fuelZeroSince then
-            audioState.fuelZeroSince = now
+        if not audioState.fuelDeferUntil then
+          local stabilizeDelay = 1.5
+          local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
+          local bc = session and (session.batteryConfig or session.battery_config) or nil
+          if type(bc) == "table" and tonumber(bc.stabilize_delay) then
+            local sd = tonumber(bc.stabilize_delay)
+            if sd > 100 then sd = sd / 1000 end
+            if sd >= 0 and sd <= 10 then stabilizeDelay = sd end
           end
-          if (now - audioState.fuelZeroSince) < 5.0 then
-            fuelReady = false
-          end
-        else
-          audioState.fuelZeroSince = nil
+          audioState.fuelDeferUntil = now + math.max(8.0, stabilizeDelay + 3.5)
         end
 
-        if fuelReady and now >= (audioState.nextAllowedAt or 0) then
+        local expired = now >= audioState.fuelDeferUntil
+        local isReady = false
+        if expired then
+          isReady = true
+        else
+          local prevFuel = tonumber(self.state and self.state.previousSessionFuel)
+          local isCarriedOver = (prevFuel ~= nil and fuel == prevFuel)
+          if fuel > 0 and not isCarriedOver then
+            isReady = true
+          end
+        end
+
+        if isReady and now >= (audioState.nextAllowedAt or 0) then
           local isElectricModel = resolveSmartfuelModel(self)
           local calloutSound = isElectricModel and "evt/battery.wav" or "stat/alerts/fuel.wav"
           if tryPlayEventFile(audioState, now, calloutSound, opts) then
@@ -1296,10 +1300,8 @@ function Audio.process(self, opts)
               if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
             end
             audioState.initialFuelAnnounced = true
-            -- Clear the zero-grace timer even when fuel==0 and the grace window has
-            -- expired (fuelReady==true): the announcement has just fired, so a stale
-            -- fuelZeroSince timestamp must not carry over to the next connection.
-            audioState.fuelZeroSince = nil
+            audioState.fuelDeferUntil = nil
+            if self.state then self.state.previousSessionFuel = nil end
           end
         end
       end

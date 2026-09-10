@@ -2104,6 +2104,7 @@ function Runtime.new(zone, options)
       self.state.batteryTelemetrySeen = false
       self.state.rfTelemetrySeen = false
       self.state.fuelTelemetrySeen = false
+      self.state.previousSessionFuel = self.state.fuel
       self.state.fuel = 0
       if Sensors and type(Sensors.reset) == "function" then
         Sensors.reset()
