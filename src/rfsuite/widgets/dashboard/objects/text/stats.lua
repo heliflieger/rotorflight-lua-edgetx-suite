@@ -42,7 +42,7 @@ function Render.render(nodes, rect, box, state, themeCommon, utils)
     local adjustedValue = value
     local unit = utils.resolveValue(box.unit, box, state)
 
-    if src == "esc_temp" or src == "mcu_temp" then
+    if src == "esc_temp" or src == "mcu_temp" or src == "temp_esc" or src == "temp_mcu" then
       if useFahrenheit() and type(adjustedValue) == "number" then
         adjustedValue = (adjustedValue * 9 / 5) + 32
         unit = "°F"

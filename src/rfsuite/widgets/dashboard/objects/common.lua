@@ -456,7 +456,7 @@ function Utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenhe
     end
 
     if matched then
-      local col = nil
+      local col
       if colorKey == "fillcolor" or colorKey == "fill" then
         col = item.fillcolor
       elseif colorKey == "textcolor" or colorKey == "text" then
