@@ -144,6 +144,26 @@ local SCHEMA = {
     -- keeps what it is handed rather than holding a second copy of that list.
     open = true,
   },
+  audio = {
+    keys = {
+      -- WAV volume level passed to playFile / playNumber. 0 = radio default (today's behaviour),
+      -- 1..5 = every RFSuite callout at that explicit level.
+      level                = 0,
+      -- When set, `level` applies only while a model is connected, so bench work
+      -- and menu interaction stays at the radio's own volume.
+      level_connected_only = false,
+      -- Global variable that carries the master level for layer B. 0 = off (the default);
+      -- otherwise 1..9 (the GV slot on the radio). With a matching logical switch and
+      -- special function on the model, this lets the suite override the pot while flying
+      -- and release it on disconnect.
+      master_gvar          = 0,
+      -- The master level written to the GVAR while connected and no critical alert is active.
+      master_normal        = 80,
+      -- The master level written to the GVAR while a sustained critical alert is active
+      -- (low voltage, ESC over-temperature, empty tank).
+      master_alert         = 100,
+    },
+  },
   flightlog = {
     keys = {
       -- Off by default, and deliberately so: a suite that starts writing files to every pilot's

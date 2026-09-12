@@ -29,6 +29,7 @@ local entries = {
   settings_audio_events_battery_page = definePage("settings/audio/events/battery"),
   settings_audio_events_link_page = definePage("settings/audio/events/link"),
   settings_audio_events_other_page = definePage("settings/audio/events/other"),
+  settings_audio_volume_page = definePage("settings/audio/volume"),
   setup_wizard_page = definePage("setup_wizard"),
   -- The same page, entered under three names. Which name it was opened under is what bounds the
   -- run to one section, and the page reads that off the menu rather than being told.

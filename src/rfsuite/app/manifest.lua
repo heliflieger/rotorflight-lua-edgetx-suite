@@ -418,6 +418,7 @@ local manifest = {
     settings_audio_page = {
       title = "@i18n(app.modules.audio.name)@",
       pages = {
+        { id = "audio_volume", title = "@i18n(app.modules.audio_volume.name)@", menuId = "settings_audio_volume_page" },
         { id = "audio_events", title = "@i18n(app.modules.audio_events.name)@", menuId = "settings_audio_events_page" }
       }
     },
@@ -500,6 +501,10 @@ local manifest = {
     },
     settings_audio_events_other_page = {
       title = "@i18n(app.modules.audio_events_other.name)@",
+      pages = {}
+    },
+    settings_audio_volume_page = {
+      title = "@i18n(app.modules.audio_volume.name)@",
       pages = {}
     },
     diagnostics_fblsensors_page = {

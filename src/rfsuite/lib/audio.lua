@@ -1,4 +1,5 @@
 local Audio = {}
+local audio_master = require("rfsuite.lib.audio_master")
 
 -- Globaler Throttle für Low-Voltage-Alarm (reload-sicher)
 local function getGlobalLowVoltageAt()
@@ -26,6 +27,22 @@ local ARM_FILE_MAP = {
   [2] = "disarm.wav",
   [3] = "armed.wav"
 }
+
+-- Resolve the WAV volume level from preferences. Returns nil when nothing should change,
+-- or an integer 1..5 that playFile and playNumber accept as an optional trailing argument.
+local function resolveAudioLevel(opts)
+  local prefs = opts and opts.preferences
+  local audio = prefs and prefs.audio
+  if not audio then return nil end
+  local level = tonumber(audio.level) or 0
+  if level < 1 or level > 5 then return nil end
+  if audio.level_connected_only then
+    -- Only apply when connected to a model
+    local session = _G.rfsuite and _G.rfsuite.session
+    if not (session and session.isConnected) then return nil end
+  end
+  return level
+end
 
 -- Keyed on govState_e as the firmware numbers it (flight/governor.h, 0..9), which is what the
 -- governor sensor carries. The dashboard's text object synthesises 100 and 101 for its own
@@ -457,7 +474,13 @@ local function playVoltage(volts, decimals, opts)
   else
     spoken = math.floor((volts * 10) + 0.5)
   end
-  local ok, err = pcall(playNumber, spoken, unitVolts(), attribute)
+  local ok, err
+  local lvl = resolveAudioLevel(opts)
+  if lvl then
+    ok, err = pcall(playNumber, spoken, unitVolts(), attribute, lvl)
+  else
+    ok, err = pcall(playNumber, spoken, unitVolts(), attribute)
+  end
   if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
 end
 
@@ -538,17 +561,29 @@ local function playResolvedEventFile(relativePath, opts)
     return false
   end
   if type(playFile) == "function" then
-    emitLog(opts, "playFile -> " .. tostring(path), "debug")
-    local ok, err = pcall(playFile, path)
+    local level = resolveAudioLevel(opts)
+    emitLog(opts, "playFile -> " .. tostring(path) .. (level and (" @" .. level) or ""), "debug")
+    local ok, err
+    if level then
+      ok, err = pcall(playFile, path, level)
+    else
+      ok, err = pcall(playFile, path)
+    end
     if not ok then emitLog(opts, "playFile error: " .. tostring(err), "error") end
     return ok
   end
   return false
 end
 
-local function playRawFile(path)
+local function playRawFile(path, opts)
   if type(playFile) == "function" then
-    local ok, _ = pcall(playFile, path)
+    local level = resolveAudioLevel(opts)
+    local ok, _
+    if level then
+      ok, _ = pcall(playFile, path, level)
+    else
+      ok, _ = pcall(playFile, path)
+    end
     return ok
   end
   return false
@@ -669,7 +704,7 @@ local function announceModelName(audioState, modelName, opts)
     if f then
       io.close(f)
       emitLog(opts, "model announcement -> " .. path, "info")
-      if playRawFile(path) then
+      if playRawFile(path, opts) then
         return
       end
     else
@@ -709,7 +744,13 @@ local function announceProfileEvent(self, eventKey, value, soundFile, opts)
     tryPlayEventFile(audioState, now, soundFile, opts)
     if type(playNumber) == "function" then
       emitLog(opts, "playNumber -> " .. tostring(rounded), "info")
-      local ok, err = pcall(playNumber, rounded, 0)
+      local lvl = resolveAudioLevel(opts)
+      local ok, err
+      if lvl then
+        ok, err = pcall(playNumber, rounded, 0, lvl)
+      else
+        ok, err = pcall(playNumber, rounded, 0)
+      end
       if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
     end
     audioState.lastValues[eventKey] = rounded
@@ -847,14 +888,26 @@ local function announceBatteryCapacityEvent(self, opts)
     tryPlayEventFile(audioState, now, "evt/battery.wav", opts)
     if type(playNumber) == "function" then
       emitLog(opts, "playNumber -> " .. tostring(capacity) .. " mAh", "info")
-      local ok, err = pcall(playNumber, capacity, unitMah())
+      local lvl = resolveAudioLevel(opts)
+      local ok, err
+      if lvl then
+        ok, err = pcall(playNumber, capacity, unitMah(), lvl)
+      else
+        ok, err = pcall(playNumber, capacity, unitMah())
+      end
       if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
     end
   else
     emitLog(opts, "battery profile change value=" .. tostring(profile) .. " file=evt/battery.wav", "info")
     tryPlayEventFile(audioState, now, "evt/battery.wav", opts)
     if type(playNumber) == "function" then
-      local ok, err = pcall(playNumber, configIndex, 0)
+      local lvl = resolveAudioLevel(opts)
+      local ok, err
+      if lvl then
+        ok, err = pcall(playNumber, configIndex, 0, lvl)
+      else
+        ok, err = pcall(playNumber, configIndex, 0)
+      end
       if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
     end
   end
@@ -1116,6 +1169,12 @@ end
 function Audio.resetConnectionState(audioState)
   if type(audioState) ~= "table" then
     return
+  end
+
+  local isCritical = false
+  if audioState.voltageLowSince ~= nil then isCritical = true end
+  if audio_master and type(audio_master.reset) == "function" then
+    audio_master.reset(isCritical)
   end
 
   audioState.initialized = false
@@ -1381,7 +1440,13 @@ function Audio.process(self, opts)
       if alertMaySpeak(audioState, events, "mcu_temperature", now) then
         if tryPlayEventFile(audioState, now, "stat/alerts/mcu.wav", opts) then
           if type(playNumber) == "function" then
-            local ok, err = pcall(playNumber, math.floor(mcuTemp + 0.5), unitCelsius())
+            local lvl = resolveAudioLevel(opts)
+            local ok, err
+            if lvl then
+              ok, err = pcall(playNumber, math.floor(mcuTemp + 0.5), unitCelsius(), lvl)
+            else
+              ok, err = pcall(playNumber, math.floor(mcuTemp + 0.5), unitCelsius())
+            end
             if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
           end
           alertSpoken(audioState, events, "mcu_temperature", now)
@@ -1434,7 +1499,13 @@ function Audio.process(self, opts)
         if alertMaySpeak(audioState, events, "lq", now) then
           if tryPlayEventFile(audioState, now, "stat/alerts/lq.wav", opts) then
             if type(playNumber) == "function" then
-              local ok, err = pcall(playNumber, math.floor(lq + 0.5), unitPercent())
+              local lvl = resolveAudioLevel(opts)
+              local ok, err
+              if lvl then
+                ok, err = pcall(playNumber, math.floor(lq + 0.5), unitPercent(), lvl)
+              else
+                ok, err = pcall(playNumber, math.floor(lq + 0.5), unitPercent())
+              end
               if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
             end
             -- The warning level does not buzz even when the category is set to, which is the
@@ -1611,7 +1682,13 @@ function Audio.process(self, opts)
               if tryPlayEventFile(audioState, now, calloutSound, opts) then
                 if type(playNumber) == "function" then
                   emitLog(opts, "fuel callout playNumber -> " .. tostring(lowestCrossed), "info")
-                  local ok, err = pcall(playNumber, lowestCrossed, unitPercent())
+                  local lvl = resolveAudioLevel(opts)
+                  local ok, err
+                  if lvl then
+                    ok, err = pcall(playNumber, lowestCrossed, unitPercent(), lvl)
+                  else
+                    ok, err = pcall(playNumber, lowestCrossed, unitPercent())
+                  end
                   if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
                 end
               end
@@ -1673,7 +1750,13 @@ function Audio.process(self, opts)
           local calloutSound = isElectricModel and "evt/battery.wav" or "stat/alerts/fuel.wav"
           if tryPlayEventFile(audioState, now, calloutSound, opts) then
             if type(playNumber) == "function" then
-              local ok, err = pcall(playNumber, fuel, unitPercent())
+              local lvl = resolveAudioLevel(opts)
+              local ok, err
+              if lvl then
+                ok, err = pcall(playNumber, fuel, unitPercent(), lvl)
+              else
+                ok, err = pcall(playNumber, fuel, unitPercent())
+              end
               if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
             end
             audioState.initialFuelAnnounced = true
@@ -1683,6 +1766,27 @@ function Audio.process(self, opts)
         end
       end
     end
+  end
+
+  local isCritical = false
+  if audioState.voltageLowSince ~= nil then isCritical = true end
+  if prefEnabled(events, "esc_temperature", false) then
+    local escThreshold = tonumber((self.preferences and self.preferences.audio_events and self.preferences.audio_events.esc_threshold) or 90)
+    if type(self.state) == "table" and type(self.state.escTemp) == "number" and self.state.escTemp >= escThreshold then
+      isCritical = true
+    end
+  end
+  if prefEnabled(events, "fuel_empty", false) then
+    if type(self.state) == "table" and type(self.state.fuel) == "number" and self.state.fuel <= 0 then
+      isCritical = true
+    end
+  end
+
+  local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session
+  local isConnected = session and session.isConnected or false
+
+  if audio_master and type(audio_master.update) == "function" then
+    audio_master.update(self.preferences, isConnected, isCritical)
   end
 
   if not audioState.initialized then
