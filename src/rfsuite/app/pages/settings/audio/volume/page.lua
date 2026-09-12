@@ -182,7 +182,10 @@ function M.build(ctx)
     t(i18n, "master_gvar", "GVAR"),
     getMasterGvarOptions(i18n),
     ui.config.master_gvar,
-    ui.runtime.getValueSetter("master_gvar")
+    function(value)
+      ui.config.master_gvar = value
+      ui.runtime.markDirty()
+    end
   )
 
   if ui.config.master_gvar > 0 then
@@ -213,23 +216,13 @@ function M.build(ctx)
     )
 
     if type(model) == "table" and type(model.getGlobalVariableDetails) == "function" then
-      local ok, details = pcall(model.getGlobalVariableDetails, ui.config.master_gvar - 1, 0)
+      local ok, details = pcall(model.getGlobalVariableDetails, ui.config.master_gvar - 1)
       if ok and type(details) == "table" then
         if details.popup and details.popup ~= 0 and details.popup ~= false then
           children[#children + 1] = {
             type = "label",
             x = x, y = cursorY, w = w,
             text = t(i18n, "gvar_popup_warning", "Warning: GVAR popup is enabled"),
-            color = COLOR_THEME_PRIMARY1,
-            font = SMLSIZE
-          }
-          cursorY = cursorY + Controls.LABEL_H + 4
-        end
-        if details.min and details.min > -1024 then
-          children[#children + 1] = {
-            type = "label",
-            x = x, y = cursorY, w = w,
-            text = t(i18n, "gvar_min_error", "Warning: GVAR min > -1024"),
             color = COLOR_THEME_PRIMARY1,
             font = SMLSIZE
           }
