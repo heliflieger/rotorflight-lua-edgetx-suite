@@ -532,13 +532,16 @@ function Controls.appendNumberField(children, x, y, w, labelText, opts)
     color = COLOR_THEME_PRIMARY1,
     font  = SMLSIZE
   }
+  local maxSteps = math.ceil((maxVal - minVal) / stepVal)
+  if maxSteps < 0 then maxSteps = 0 end
+
   children[#children + 1] = {
     type = "numberEdit",
     x = fieldX,
     y = fieldY,
     w = fieldW,
-    min = math.floor(minVal / stepVal),
-    max = math.ceil(maxVal / stepVal),
+    min = 0,
+    max = maxSteps,
     active = function()
       return enabledGetter()
     end,
@@ -546,10 +549,14 @@ function Controls.appendNumberField(children, x, y, w, labelText, opts)
       local current = tonumber(getter()) or minVal
       if current < minVal then current = minVal end
       if current > maxVal then current = maxVal end
-      return math.floor(current / stepVal)
+      local idx = math.floor(((current - minVal) / stepVal) + 0.5)
+      if idx < 0 then idx = 0 end
+      if idx > maxSteps then idx = maxSteps end
+      return idx
     end,
     set = function(val)
-      local nextVal = (tonumber(val) or math.floor(minVal / stepVal)) * stepVal
+      local stepIdx = tonumber(val) or 0
+      local nextVal = minVal + (stepIdx * stepVal)
       if nextVal < minVal then nextVal = minVal end
       if nextVal > maxVal then nextVal = maxVal end
       if getter() == nextVal then
@@ -558,7 +565,10 @@ function Controls.appendNumberField(children, x, y, w, labelText, opts)
       setter(nextVal)
     end,
     display = function(val)
-      local shown = (tonumber(val) or math.floor(minVal / stepVal)) * stepVal
+      local stepIdx = tonumber(val) or 0
+      local shown = minVal + (stepIdx * stepVal)
+      if shown < minVal then shown = minVal end
+      if shown > maxVal then shown = maxVal end
       if type(displayFn) == "function" then
         local ok, text = pcall(displayFn, shown)
         if ok and type(text) == "string" then

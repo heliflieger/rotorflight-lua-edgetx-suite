@@ -60,6 +60,10 @@
 - **Configuration stores survive a full card (`lib/config_store.lua`, `lib/log_sink.lua`, `docs/reference/configuration-files.md`) (fixes #276)**:
   - `Store:save` checks the return value of `io.write`. On a short write or full card, the incomplete temporary file is removed and the original store is left untouched, preventing settings from reverting to defaults on next load.
   - `LogSink.writeFile` checks the return value of `io.write` instead of assuming success once `io.open` succeeds, so a full card does not silently discard unwritten log lines from memory or reset the lost line counter.
+- **Controls: `Controls.appendNumberField` anchors stepped quantization on `min` rather than zero (`ui/controls.lua`) (fixes #271)**:
+  - Fixed an offset defect where number fields with a step size whose minimum is not a multiple of `step` (such as AM32 Motor KV with `min = 20, step = 40` and YGE Current Limit with `min = 1, step = 100`) mapped values onto `{0, step, 2*step, ...}` instead of `{min, min + step, min + 2*step, ...}`.
+  - An ESC holding 1380 KV previously rendered as 1360 KV and stepping by one click wrote 1400 KV to the page and 1420 KV to the ESC.
+  - The native `numberEdit` widget index range is now anchored at `0 .. ceil((max - min) / step)` with `min + index * step`. Both `display` and `set` apply identical clamping to `[min, max]`, and `get` rounds to the nearest step grid point.
 - **Configuration saves require a completed read (ui/home.lua, app/pages/flight_tuning/, app/pages/setup/, docs/reference/saving.md) (fixes #273)**:
   - Thirty configuration pages refuse Save until their complete read sequence has succeeded. A pending read, a failed step or a rejected parser response cannot turn initial defaults into FC writes.
   - Reload invalidates the previous completion. The shared Save handler checks again after confirmation and before dispatch, reports why the save was refused, and queues no EEPROM commit for that refusal. Local radio settings keep their existing save behaviour.
