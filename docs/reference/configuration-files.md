@@ -106,7 +106,8 @@ finish. The tool and the background decoder are not stopped that way.
   makes the dashboard re-read its settings.
 - `preferences.lua.tmp`, `<mcu id>.lua.tmp` or `model_name_restore.lua.tmp` — a save that was
   interrupted, by a power cut at exactly the wrong moment. The next read finishes it; you should
-  never see one for long.
+  never see one for long. If a write fails or the card is full, the temporary file is removed
+  immediately and the existing configuration is kept intact.
 
 ## Related
 

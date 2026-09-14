@@ -57,6 +57,9 @@
   - Both settings pages lay their explanatory notes out for the room they take. A label narrower than its text wraps rather than clipping, and the pages advanced by a constant after each note, so the longest of them was drawn over by the line that follows it. The action button on the flight controller page is wider for the same reason: a button label is clipped rather than wrapped, and 240 pixels cut a character off each end of its English text.
 
 ### Bug Fixes & Improvements
+- **Configuration stores survive a full card (`lib/config_store.lua`, `lib/log_sink.lua`, `docs/reference/configuration-files.md`) (fixes #276)**:
+  - `Store:save` checks the return value of `io.write`. On a short write or full card, the incomplete temporary file is removed and the original store is left untouched, preventing settings from reverting to defaults on next load.
+  - `LogSink.writeFile` checks the return value of `io.write` instead of assuming success once `io.open` succeeds, so a full card does not silently discard unwritten log lines from memory or reset the lost line counter.
 - **Configuration saves require a completed read (ui/home.lua, app/pages/flight_tuning/, app/pages/setup/, docs/reference/saving.md) (fixes #273)**:
   - Thirty configuration pages refuse Save until their complete read sequence has succeeded. A pending read, a failed step or a rejected parser response cannot turn initial defaults into FC writes.
   - Reload invalidates the previous completion. The shared Save handler checks again after confirmation and before dispatch, reports why the save was refused, and queues no EEPROM commit for that refusal. Local radio settings keep their existing save behaviour.

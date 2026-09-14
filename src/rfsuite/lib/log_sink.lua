@@ -88,9 +88,9 @@ end
 local function writeFile(path, mode, text)
   local ok, handle = pcall(io.open, path, mode)
   if not ok or not handle then return false end
-  pcall(io.write, handle, text)
+  local okWrite, res = pcall(io.write, handle, text)
   pcall(io.close, handle)
-  return true
+  return okWrite and res ~= nil and res ~= false
 end
 
 local function readFile(path)

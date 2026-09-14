@@ -705,8 +705,16 @@ function Store:save(path, tbl, opts)
     emit("error", "%s: could not be opened for writing: %s", tostring(target), tostring(err))
     return false, err or "io"
   end
-  io.write(f, body)
+  local wrote, writeErr = io.write(f, body)
   io.close(f)
+
+  if not wrote then
+    if atomic and fileExists(tmp) then
+      removeFile(tmp)
+    end
+    emit("error", "%s: could not be written: %s", tostring(target), tostring(writeErr or "short write"))
+    return false, writeErr or "write"
+  end
 
   if atomic then
     -- FatFs refuses a rename onto a name that exists, so the old file goes first. The window
