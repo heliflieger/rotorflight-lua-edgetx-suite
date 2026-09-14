@@ -256,7 +256,7 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
   if gaugeMax <= gaugeMin then gaugeMax = 100 end
   
   local ratio = 0
-  if gaugeMax > gaugeMin then
+  if hasValue and gaugeMax > gaugeMin then
     ratio = utils.clamp((gaugeValue - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
   end
   
@@ -277,6 +277,8 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
     local barH = panelH
     
     local thresholds = box.thresholds or {}
+    local hasDynamicColor = (type(thresholds) == "table" and #thresholds > 0)
+      or type(box.fillcolor) == "function"
     local barColor = box.fillcolor or BAR_OK_COLOR
     if hasValue then
       barColor = resolveThresholdColor(gaugeValue, thresholds, barColor, fahrenheit, box, state, utils, compiledThresholds)
@@ -292,19 +294,66 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       color = box.fillbgcolor or BAR_BG_COLOR,
       filled = true
     }
-    
-    -- Filled bar (from bottom, grows upward)
-    if ratio > 0 then
-      nodes[#nodes + 1] = {
-        type = "rectangle",
-        x = barX,
-        y = barY + (barH - math.max(1, math.floor(barH * ratio))),
-        w = barWidth,
-        h = math.max(1, math.floor(barH * ratio)),
-        color = barColor,
-        filled = true
-      }
+
+    local lastRawBar = nil
+    local cachedFillH = nil
+    local cachedFillY = nil
+    local cachedBarColor = nil
+
+    local function updateVerticalBar()
+      local curRaw = readDerived(state, source)
+      if curRaw == lastRawBar and cachedFillH ~= nil then
+        return
+      end
+      lastRawBar = curRaw
+      local curHasValue = type(curRaw) == "number"
+      local curVal = utils.toNumber(curRaw, 0)
+      if fahrenheit and curHasValue then
+        curVal = cToF(curVal)
+      end
+      local curRatio = 0
+      if curHasValue and gaugeMax > gaugeMin then
+        curRatio = utils.clamp((curVal - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
+      end
+      cachedFillH = (curRatio > 0) and math.max(1, math.floor(barH * curRatio)) or 0
+      cachedFillY = barY + (barH - cachedFillH)
+      if curHasValue then
+        cachedBarColor = resolveThresholdColor(curVal, thresholds, box.fillcolor or BAR_OK_COLOR, fahrenheit, box, state, utils, compiledThresholds)
+      else
+        cachedBarColor = box.fillcolor or BAR_OK_COLOR
+      end
     end
+
+    local valuePosGetter = function()
+      updateVerticalBar()
+      return barX, cachedFillY
+    end
+
+    local valueSizeGetter = function()
+      updateVerticalBar()
+      return barWidth, cachedFillH
+    end
+
+    local valueColorGetter = hasDynamicColor and function()
+      updateVerticalBar()
+      return cachedBarColor
+    end or nil
+
+    local initialH = (hasValue and ratio > 0) and math.max(1, math.floor(barH * ratio)) or 0
+    local initialY = barY + (barH - initialH)
+
+    -- Filled bar (from bottom, grows upward)
+    nodes[#nodes + 1] = {
+      type = "rectangle",
+      x = barX,
+      y = initialY,
+      w = barWidth,
+      h = initialH,
+      pos = valuePosGetter,
+      size = valueSizeGetter,
+      color = valueColorGetter or barColor,
+      filled = true
+    }
 
     -- Optional segmented battery look for vertical bars.
     if box.battery then
@@ -404,6 +453,8 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
     local barY = panelY + math.floor((panelH - barHeight) / 2)
     
     local thresholds = box.thresholds or {}
+    local hasDynamicColor = (type(thresholds) == "table" and #thresholds > 0)
+      or type(box.fillcolor) == "function"
     local barColor = box.fillcolor or BAR_OK_COLOR
     if hasValue then
       barColor = resolveThresholdColor(gaugeValue, thresholds, barColor, fahrenheit, box, state, utils, compiledThresholds)
@@ -419,19 +470,57 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       color = box.fillbgcolor or BAR_BG_COLOR,
       filled = true
     }
-    
-    -- Filled bar
-    if ratio > 0 then
-      nodes[#nodes + 1] = {
-        type = "rectangle",
-        x = barX,
-        y = barY,
-        w = math.max(1, math.floor(barW * ratio)),
-        h = barHeight,
-        color = barColor,
-        filled = true
-      }
+
+    local lastRawBar = nil
+    local cachedBarW = nil
+    local cachedBarColor = nil
+
+    local function updateHorizontalBar()
+      local curRaw = readDerived(state, source)
+      if curRaw == lastRawBar and cachedBarW ~= nil then
+        return
+      end
+      lastRawBar = curRaw
+      local curHasValue = type(curRaw) == "number"
+      local curVal = utils.toNumber(curRaw, 0)
+      if fahrenheit and curHasValue then
+        curVal = cToF(curVal)
+      end
+      local curRatio = 0
+      if curHasValue and gaugeMax > gaugeMin then
+        curRatio = utils.clamp((curVal - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
+      end
+      cachedBarW = (curRatio > 0) and math.max(1, math.floor(barW * curRatio)) or 0
+      if curHasValue then
+        cachedBarColor = resolveThresholdColor(curVal, thresholds, box.fillcolor or BAR_OK_COLOR, fahrenheit, box, state, utils, compiledThresholds)
+      else
+        cachedBarColor = box.fillcolor or BAR_OK_COLOR
+      end
     end
+
+    local valueSizeGetter = function()
+      updateHorizontalBar()
+      return cachedBarW, barHeight
+    end
+
+    local valueColorGetter = hasDynamicColor and function()
+      updateHorizontalBar()
+      return cachedBarColor
+    end or nil
+
+    local initialW = (hasValue and ratio > 0) and math.max(1, math.floor(barW * ratio)) or 0
+
+    -- Filled bar
+    nodes[#nodes + 1] = {
+      type = "rectangle",
+      x = barX,
+      y = barY,
+      w = initialW,
+      h = barHeight,
+      size = valueSizeGetter,
+      color = valueColorGetter or barColor,
+      filled = true
+    }
     
     local unit = unit
     if fahrenheit then
