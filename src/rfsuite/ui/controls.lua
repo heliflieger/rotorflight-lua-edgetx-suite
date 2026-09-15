@@ -508,6 +508,7 @@ function Controls.appendNumberField(children, x, y, w, labelText, opts)
   local minVal = tonumber(opts.min) or 0
   local maxVal = tonumber(opts.max) or 100
   local stepVal = tonumber(opts.step) or 1
+  if stepVal <= 0 then stepVal = 1 end
   local getter = opts.get or function() return minVal end
   local setter = opts.set or function() end
 
