@@ -1248,7 +1248,10 @@ return {
         loading_message = "Lese Telemetrie-Konfiguration",
         save_error_title = "Fehler",
         saved_title = "Gespeichert",
-        saved_message = "Telemetrie-Sensoren gespeichert"
+        saved_message = "Telemetrie-Sensoren gespeichert",
+        mode_native = "CRSF-Telemetrie: Nativ",
+        mode_custom = "CRSF-Telemetrie: Benutzerdefiniert",
+        native_mode_warn = "Nativer CRSF-Modus aktiv. Eigene Sensoren werden nur im Custom-Modus uebertragen; native Sensoren bleiben erhalten."
       },
       setup_gps = {
         title = "GPS",

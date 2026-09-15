@@ -185,6 +185,7 @@ local ui = {
   },
   config = {},
   telemetryBuffer = nil,
+  crsfTelemetryMode = nil,
   runtime = newRuntime(),
   loading = false,
   progress = 0
@@ -273,9 +274,11 @@ local function loadFromSession()
   if cfg then
     for i = 1, 40 do
       local sensorId = tonumber(cfg["telem_sensor_slot_" .. tostring(i)])
-      if sensorId and sensorId ~= 0 and SENSOR_BY_ID[sensorId] then
-        ui.config[sensorId] = true
+      if sensorId and sensorId ~= 0 then
         hasSlots = true
+        if SENSOR_BY_ID[sensorId] then
+          ui.config[sensorId] = true
+        end
       end
     end
   end
@@ -295,6 +298,14 @@ local function loadFromSession()
     ui.telemetryBuffer = copyBuffer(TelemetryApi.simulatorResponse)
   else
     ui.telemetryBuffer = {}
+  end
+
+  if cfg and cfg.crsf_telemetry_mode ~= nil then
+    ui.crsfTelemetryMode = tonumber(cfg.crsf_telemetry_mode)
+  elseif ui.telemetryBuffer and #ui.telemetryBuffer >= 8 then
+    ui.crsfTelemetryMode = tonumber(ui.telemetryBuffer[8])
+  else
+    ui.crsfTelemetryMode = nil
   end
 end
 
@@ -330,8 +341,13 @@ local function queueTelemetryRead()
       if type(session) == "table" and type(parsed) == "table" then
         session.telemetry_config = parsed
       end
+      if parsed and parsed.crsf_telemetry_mode ~= nil then
+        ui.crsfTelemetryMode = tonumber(parsed.crsf_telemetry_mode)
+      end
       if not ui.dirty then
         loadFromSession()
+      elseif not ui.telemetryBuffer and parsed and parsed.buffer then
+        ui.telemetryBuffer = copyBuffer(parsed.buffer)
       end
       if type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
@@ -375,8 +391,14 @@ local function buildWritePayload(selected)
 
   local index = 1
   for pos = 13, 52 do
-    payload[pos] = selected[index] or 0
-    index = index + 1
+    local origId = tonumber(payload[pos]) or 0
+    if origId ~= 0 and not SENSOR_BY_ID[origId] then
+      -- Unmanaged sensor slot (e.g. native CRSF telemetry ids 2, 72, 108, 109):
+      -- preserve exactly where it was.
+    else
+      payload[pos] = selected[index] or 0
+      index = index + 1
+    end
   end
 
   return payload
@@ -498,8 +520,18 @@ function M.onSave(ctx)
   ensureDeps()
   ensureLoaded()
 
+  local unmanagedCount = 0
+  if type(ui.telemetryBuffer) == "table" then
+    for pos = 13, 52 do
+      local origId = tonumber(ui.telemetryBuffer[pos]) or 0
+      if origId ~= 0 and not SENSOR_BY_ID[origId] then
+        unmanagedCount = unmanagedCount + 1
+      end
+    end
+  end
+
   local selected = collectSelectedSensors()
-  if #selected > 40 then
+  if #selected + unmanagedCount > 40 then
     if ctx and type(ctx.reportSave) == "function" then
       ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
@@ -548,6 +580,32 @@ function M.build(ctx)
   local h = ctx.h or 200
 
   local cursorY = y
+
+  if ui.crsfTelemetryMode ~= nil then
+    local modeTitle = ui.crsfTelemetryMode == 0
+      and pageText(i18n, "mode_native", "CRSF Telemetry: Native")
+      or pageText(i18n, "mode_custom", "CRSF Telemetry: Custom")
+
+    if Controls and type(Controls.appendStaticSectionHeader) == "function" then
+      Controls.appendStaticSectionHeader(children, x, cursorY, w, modeTitle)
+      cursorY = cursorY + (Controls.STATIC_SECTION_H or 38)
+    end
+
+    if ui.crsfTelemetryMode == 0 then
+      local warnText = pageText(i18n, "native_mode_warn", "Native CRSF mode active. Custom sensors are only sent in Custom mode; native sensors are preserved.")
+      local textH = (Controls and Controls.estimateWrappedTextHeight) and Controls.estimateWrappedTextHeight(warnText, w, SMLSIZE) or 16
+      children[#children + 1] = {
+        type = "label",
+        x = x,
+        y = cursorY + 2,
+        w = w,
+        text = warnText,
+        color = COLOR_THEME_WARNING or COLOR_THEME_PRIMARY1,
+        font = SMLSIZE
+      }
+      cursorY = cursorY + textH + 8
+    end
+  end
   for g = 1, #SENSOR_GROUP_ORDER do
     local groupKey = SENSOR_GROUP_ORDER[g]
     local items = SENSOR_BY_GROUP[groupKey]
@@ -615,6 +673,8 @@ function M.onClose()
   ui.runtimeBase = nil
   ui.loading = false
   ui.progress = 0
+  ui.crsfTelemetryMode = nil
+  ui.telemetryBuffer = nil
   Controls = nil
   Common = nil
   MspRuntime = nil

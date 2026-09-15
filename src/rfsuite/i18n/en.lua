@@ -1248,7 +1248,10 @@ return {
         loading_message = "Reading telemetry config",
         save_error_title = "Error",
         saved_title = "Saved",
-        saved_message = "Telemetry sensors saved"
+        saved_message = "Telemetry sensors saved",
+        mode_native = "CRSF Telemetry: Native",
+        mode_custom = "CRSF Telemetry: Custom",
+        native_mode_warn = "Native CRSF mode active. Custom sensors are only sent in Custom mode; native sensors are preserved."
       },
       setup_gps = {
         title = "GPS",
