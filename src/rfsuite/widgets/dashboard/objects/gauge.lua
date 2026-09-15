@@ -279,7 +279,7 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
     local thresholds = box.thresholds or {}
     local hasDynamicColor = (type(thresholds) == "table" and #thresholds > 0)
       or type(box.fillcolor) == "function"
-    local barColor = box.fillcolor or BAR_OK_COLOR
+    local barColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
     if hasValue then
       barColor = resolveThresholdColor(gaugeValue, thresholds, barColor, fahrenheit, box, state, utils, compiledThresholds)
     end
@@ -317,10 +317,11 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       end
       cachedFillH = (curRatio > 0) and math.max(1, math.floor(barH * curRatio)) or 0
       cachedFillY = barY + (barH - cachedFillH)
+      local defaultFillColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
       if curHasValue then
-        cachedBarColor = resolveThresholdColor(curVal, thresholds, box.fillcolor or BAR_OK_COLOR, fahrenheit, box, state, utils, compiledThresholds)
+        cachedBarColor = resolveThresholdColor(curVal, thresholds, defaultFillColor, fahrenheit, box, state, utils, compiledThresholds)
       else
-        cachedBarColor = box.fillcolor or BAR_OK_COLOR
+        cachedBarColor = defaultFillColor
       end
     end
 
@@ -339,7 +340,12 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       return cachedBarColor
     end or nil
 
-    local initialH = (hasValue and ratio > 0) and math.max(1, math.floor(barH * ratio)) or 0
+    -- EdgeTX LvglWidgetObjectBase::parseParam maps build-time w or h of 0 to LV_SIZE_CONTENT.
+    -- In EdgeTX create(), getParams -> build -> callRefs runs synchronously in one pass,
+    -- so the size getter immediately overwrites this with cachedFillH (collapsing to 0) before
+    -- anything is drawn. We seed initialH with math.max(1, ...) so parseParam never treats an
+    -- empty initial bar as content-sized even if EdgeTX lifecycle ordering changes.
+    local initialH = (hasValue and ratio > 0) and math.max(1, math.floor(barH * ratio)) or 1
     local initialY = barY + (barH - initialH)
 
     -- Filled bar (from bottom, grows upward)
@@ -455,7 +461,7 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
     local thresholds = box.thresholds or {}
     local hasDynamicColor = (type(thresholds) == "table" and #thresholds > 0)
       or type(box.fillcolor) == "function"
-    local barColor = box.fillcolor or BAR_OK_COLOR
+    local barColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
     if hasValue then
       barColor = resolveThresholdColor(gaugeValue, thresholds, barColor, fahrenheit, box, state, utils, compiledThresholds)
     end
@@ -491,10 +497,11 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
         curRatio = utils.clamp((curVal - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
       end
       cachedBarW = (curRatio > 0) and math.max(1, math.floor(barW * curRatio)) or 0
+      local defaultFillColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
       if curHasValue then
-        cachedBarColor = resolveThresholdColor(curVal, thresholds, box.fillcolor or BAR_OK_COLOR, fahrenheit, box, state, utils, compiledThresholds)
+        cachedBarColor = resolveThresholdColor(curVal, thresholds, defaultFillColor, fahrenheit, box, state, utils, compiledThresholds)
       else
-        cachedBarColor = box.fillcolor or BAR_OK_COLOR
+        cachedBarColor = defaultFillColor
       end
     end
 
@@ -508,7 +515,12 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       return cachedBarColor
     end or nil
 
-    local initialW = (hasValue and ratio > 0) and math.max(1, math.floor(barW * ratio)) or 0
+    -- EdgeTX LvglWidgetObjectBase::parseParam maps build-time w or h of 0 to LV_SIZE_CONTENT.
+    -- In EdgeTX create(), getParams -> build -> callRefs runs synchronously in one pass,
+    -- so the size getter immediately overwrites this with cachedBarW (collapsing to 0) before
+    -- anything is drawn. We seed initialW with math.max(1, ...) so parseParam never treats an
+    -- empty initial bar as content-sized even if EdgeTX lifecycle ordering changes.
+    local initialW = (hasValue and ratio > 0) and math.max(1, math.floor(barW * ratio)) or 1
 
     -- Filled bar
     nodes[#nodes + 1] = {
