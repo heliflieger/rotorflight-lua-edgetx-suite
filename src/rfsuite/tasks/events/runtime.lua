@@ -147,6 +147,17 @@ local function publishConnected(val)
     if nameStore and type(nameStore.invalidate) == "function" then
       pcall(nameStore.invalidate)
     end
+    -- Reset the arm-edge detector so that a reconnect while still armed is seen as a fresh
+    -- arm edge (false → true) and triggers Record.open() via the onarm manifest.  Without this,
+    -- both `armed` and `state.lastArmed` are still true on the reconnect, the condition
+    -- `armed ~= state.lastArmed` is false, and the record is never reopened for the rest of the
+    -- flight — leaving Record.close() at the real disarm to overwrite `flight.last` with an
+    -- empty record. (#278)
+    --
+    -- `false` rather than `nil`: the nil-guard two lines below the edge condition silently
+    -- initialises `state.lastArmed` to the current armed value without firing an edge, which
+    -- would defeat the purpose of the reset.
+    state.lastArmed = false
   end
   if Log and type(Log.emit) == "function" then
     pcall(Log.emit, "rfsuite.events", "session.isConnected=" .. tostring(val), "info")
