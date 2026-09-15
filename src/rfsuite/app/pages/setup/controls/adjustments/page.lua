@@ -14,6 +14,7 @@ local Common = nil
 local MspRuntime = nil
 local RxMapApi = nil
 local AdjustmentRangesApi = nil
+local GetAdjRangeApi = nil
 local GetAdjFuncsApi = nil
 local SetAdjustmentRangeApi = nil
 local LoadingOverlay = nil
@@ -21,7 +22,8 @@ local ConfirmDialog = nil
 local ApiVersion = nil
 local t = nil
 
-local AUX_CHANNEL_COUNT_FALLBACK = 20
+-- Rotorflight firmware limit: MAX_SUPPORTED_RC_CHANNEL_COUNT (18) - CONTROL_CHANNEL_COUNT (5) = 13 (AUX 1..13, indices 0..12)
+local AUX_CHANNEL_COUNT = 13
 local RANGE_MIN = 875
 local RANGE_MAX = 2125
 local RANGE_STEP = 5
@@ -125,6 +127,9 @@ local ui = {
   selectedRangeIndex = 1,
   showFunctionNames = false,
   functionIds = {},
+  slotLoaded = {},
+  awaitingApiVersion = false,
+  readError = false,
   dirtySlots = {},
   autoDetectEnaSlots = {},
   autoDetectAdjSlots = {},
@@ -146,6 +151,7 @@ local function ensureDeps()
   if not MspRuntime then MspRuntime = loadModule("tasks/msp/runtime.lua") end
   if not RxMapApi then RxMapApi = loadModule("tasks/msp/api/rx_map.lua") end
   if not AdjustmentRangesApi then AdjustmentRangesApi = loadModule("tasks/msp/api/adjustment_ranges.lua") end
+  if not GetAdjRangeApi then GetAdjRangeApi = loadModule("tasks/msp/api/get_adjustment_range.lua") end
   if not GetAdjFuncsApi then GetAdjFuncsApi = loadModule("tasks/msp/api/get_adjustment_function_ids.lua") end
   if not SetAdjustmentRangeApi then SetAdjustmentRangeApi = loadModule("tasks/msp/api/set_adjustment_range.lua") end
   if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
@@ -304,7 +310,7 @@ local function channelRawToUs(value)
 end
 
 local function auxIndexToMember(auxIndex)
-  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT - 1)
   local session = getSession()
   local rx = session and session.rx
   local map = rx and rx.map or nil
@@ -392,22 +398,24 @@ end
 
 local function getChannelUsForRangeSet(channelIndex, autoTable, slot, i18n)
   if autoTable and autoTable[slot] then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
-        title = pageText(i18n, "title", "Adjustments"),
-        message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Adjustments"),
+      message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return nil
   end
 
   local us = getAuxPulseUs(channelIndex or 0)
   if not us then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
-        title = pageText(i18n, "title", "Adjustments"),
-        message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Adjustments"),
+      message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return nil
   end
@@ -445,8 +453,10 @@ end
 local function sanitizeAdjustmentRange(adjRange)
   if type(adjRange) ~= "table" then adjRange = {} end
   adjRange.adjFunction = clamp(math.floor(adjRange.adjFunction or 0), 0, 255)
-  adjRange.enaChannel = clamp(math.floor(adjRange.enaChannel or 0), 0, 255)
-  adjRange.adjChannel = clamp(math.floor(adjRange.adjChannel or 0), 0, 255)
+  if adjRange.enaChannel ~= 255 then
+    adjRange.enaChannel = clamp(math.floor(adjRange.enaChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
+  end
+  adjRange.adjChannel = clamp(math.floor(adjRange.adjChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
   adjRange.adjStep = clamp(math.floor(adjRange.adjStep or 0), 0, 255)
 
   if type(adjRange.enaRange) ~= "table" then adjRange.enaRange = { start = 1300, ["end"] = 1700 } end
@@ -530,13 +540,99 @@ local function newDefaultAdjustmentRange()
   }
 end
 
+--- Which route this firmware offers for the adjustment table.
+---
+--- MSP_GET_ADJUSTMENT_RANGE (156) and MSP_GET_ADJUSTMENT_FUNCTION_IDS (167) arrived together in
+--- API 12.09. Below it neither exists, and MSP_ADJUSTMENT_RANGES (52) is the only read there is.
+--- Every place that has to know which commands exist asks here, so the two routes are separated
+--- once rather than at each call.
+local PAGED_READ_API = {12, 0, 9}
+
+local function hasPagedReads()
+  return apiVersionIsAtLeast(PAGED_READ_API)
+end
+
+--- Reads one slot's record with MSP_GET_ADJUSTMENT_RANGE (156).
+---
+--- 156 and MSP_GET_ADJUSTMENT_FUNCTION_IDS (167) are the paged accessors for the adjustment
+--- table, and they cost 14 and 42 bytes. The whole-table MSP_ADJUSTMENT_RANGES (52) costs
+--- MAX_ADJUSTMENT_RANGE_COUNT * 14 = 588, while the shared telemetry response buffer the CRSF
+--- path serialises into is MSP_TLM_OUTBUF_SIZE = 320 bytes and the serialiser has no bound
+--- check -- so asking for it makes the flight controller write past the end of a static buffer.
+--- Over USB that command is safe, because there the buffer is much larger, which is why the
+--- Configurator uses it.
+local function queueSlotRead(slotIndex, requestRebuild, onDone)
+  local function done(ok)
+    if type(onDone) == "function" then onDone(ok) end
+  end
+
+  -- The module's own precondition, stated here rather than left to the caller: below API 12.09
+  -- this command does not exist and must not be sent, whoever asks.
+  if not hasPagedReads() then
+    done(false)
+    return false
+  end
+
+  slotIndex = tonumber(slotIndex)
+  if not slotIndex or slotIndex < 1 or slotIndex > 42 then
+    done(false)
+    return false
+  end
+
+  if not GetAdjRangeApi or not MspRuntime or type(MspRuntime.getState) ~= "function" then
+    done(false)
+    return false
+  end
+
+  local mspState = MspRuntime.getState()
+  local queue = mspState and mspState.queue
+  if not queue or type(queue.add) ~= "function" then
+    done(false)
+    return false
+  end
+
+  queue:add({
+    command = GetAdjRangeApi.command,
+    payload = { slotIndex - 1 },
+    isWrite = false,
+    simulatorResponse = GetAdjRangeApi.simulatorResponse,
+    processReply = function(self, buf)
+      local parsed = GetAdjRangeApi.parse(buf)
+      local record = parsed and parsed.adjustment_range
+      if record then
+        ui.adjustmentRanges[slotIndex] = sanitizeAdjustmentRange(record)
+        ui.slotLoaded[slotIndex] = true
+      end
+      if type(requestRebuild) == "function" then requestRebuild() end
+      done(record ~= nil)
+    end,
+    errorHandler = function()
+      done(false)
+    end
+  })
+
+  return true
+end
+
 local function startLoad(requestRebuild)
   if ui.runtime.readPending then return false end
+
+  local rebuild = requestRebuild or ui.runtime.requestRebuild
+
+  -- The API version decides which commands can answer the table, so nothing is asked for before
+  -- it is known. An unanswered connect sequence is not an old flight controller: leave the page
+  -- unloaded and let the next pass try again.
+  local currentSession = getSession()
+  local apiVersion = currentSession and currentSession.apiVersion
+  ui.awaitingApiVersion = not apiVersion or apiVersion == "" or tostring(apiVersion) == "0"
+  if ui.awaitingApiVersion then
+    return false
+  end
+
   ui.runtime.readPending = true
   ui.loading = true
   ui.progress = 0
 
-  local rebuild = requestRebuild or ui.runtime.requestRebuild
   if type(rebuild) == "function" then
     rebuild()
   end
@@ -549,10 +645,17 @@ local function startLoad(requestRebuild)
     return false
   end
 
+  ui.slotLoaded = {}
+  local paged = hasPagedReads()
+
+  -- A read that did not answer leaves whatever the page already held and says so. Replacing
+  -- the table with defaults would render an I/O error as a flight controller with no
+  -- adjustment configured, which is indistinguishable from the real thing.
   local function failed(reason)
     ui.runtime.readPending = false
     ui.loading = false
     ui.progress = 0
+    ui.readError = true
     local rebuildFn = requestRebuild or ui.runtime.requestRebuild
     if type(rebuildFn) == "function" then
       rebuildFn()
@@ -565,17 +668,85 @@ local function startLoad(requestRebuild)
     ui.dirty = false
     ui.progress = 100
     ui.loaded = true
+    ui.awaitingApiVersion = false
+    ui.readError = false
     local rebuildFn = requestRebuild or ui.runtime.requestRebuild
     if type(rebuildFn) == "function" then rebuildFn() end
   end
 
-  -- Step 1: Read RX_MAP (command 94) to know mapping of AUX1, AUX2, AUX3
+  -- Step 2a, from API 12.09: the function of every slot in one 42-byte reply, and then the
+  -- selected slot's own record. Every other slot is read when it is selected, so the whole
+  -- table never has to cross this transport at all.
+  local function readPaged()
+    queue:add({
+      command = GetAdjFuncsApi.command,
+      simulatorResponse = GetAdjFuncsApi.simulatorResponse,
+      processReply = function(self2, buf2)
+        local parsedObj2 = GetAdjFuncsApi.parse(buf2)
+        if not (parsedObj2 and parsedObj2.adjustment_function_ids) then
+          failed("adjustment_function_ids")
+          return
+        end
+        ui.functionIds = parsedObj2.adjustment_function_ids
+        for i = 1, 42 do
+          if not ui.adjustmentRanges[i] then
+            ui.adjustmentRanges[i] = newDefaultAdjustmentRange()
+          end
+          ui.adjustmentRanges[i].adjFunction = tonumber(ui.functionIds[i]) or 0
+        end
+        ui.showFunctionNames = true
+        ui.progress = 60
+        if type(requestRebuild) == "function" then requestRebuild() end
+
+        local started = queueSlotRead(ui.selectedRangeIndex, requestRebuild, function(ok)
+          if ok then
+            finishLoad()
+          else
+            failed("adjustment_range")
+          end
+        end)
+        if not started then
+          failed("adjustment_range")
+        end
+      end,
+      errorHandler = failed
+    })
+  end
+
+  -- Step 2b, below API 12.09: neither paged command exists on those firmwares, so the
+  -- whole-table read is the only one there is and it is kept for them. It is the read this page
+  -- used everywhere before, unchanged, and the flight controller answers it the way it always
+  -- did -- which is why it is confined to the versions that offer no alternative.
+  local function readWholeTable()
+    queue:add({
+      command = AdjustmentRangesApi.command,
+      simulatorResponse = AdjustmentRangesApi.simulatorResponse,
+      processReply = function(self2, buf2)
+        local parsedObj2 = AdjustmentRangesApi.parse(buf2)
+        if not (parsedObj2 and parsedObj2.adjustment_ranges) then
+          failed("adjustment_ranges")
+          return
+        end
+        ui.adjustmentRanges = {}
+        for i = 1, 42 do
+          local raw = parsedObj2.adjustment_ranges[i]
+          ui.adjustmentRanges[i] = sanitizeAdjustmentRange(raw or {})
+          ui.slotLoaded[i] = true
+        end
+        ui.progress = 60
+        if type(requestRebuild) == "function" then requestRebuild() end
+        finishLoad()
+      end,
+      errorHandler = failed
+    })
+  end
+
+  -- Step 1: Read RX_MAP to know mapping of AUX1, AUX2, AUX3
   queue:add({
     command = RxMapApi.command,
     simulatorResponse = RxMapApi.simulatorResponse,
     processReply = function(self, buf)
-      local parsedObj = RxMapApi.parse(buf)
-      local rxParsed = parsedObj and parsedObj.parsed
+      local rxParsed = RxMapApi.parse(buf)
       if rxParsed then
         local session = getSession()
         if session then
@@ -586,51 +757,12 @@ local function startLoad(requestRebuild)
       ui.progress = 30
       if type(requestRebuild) == "function" then requestRebuild() end
 
-      -- Step 2: Read ADJUSTMENT_RANGES (command 52)
-      queue:add({
-        command = AdjustmentRangesApi.command,
-        simulatorResponse = AdjustmentRangesApi.simulatorResponse,
-        processReply = function(self2, buf2)
-          local parsedObj2 = AdjustmentRangesApi.parse(buf2)
-          if parsedObj2 and parsedObj2.adjustment_ranges then
-            ui.adjustmentRanges = {}
-            for i = 1, 42 do
-              local raw = parsedObj2.adjustment_ranges[i]
-              ui.adjustmentRanges[i] = sanitizeAdjustmentRange(raw or {})
-            end
-          end
-          ui.progress = 60
-          if type(requestRebuild) == "function" then requestRebuild() end
-
-          -- Step 3: Read GET_ADJUSTMENT_FUNCTION_IDS if version supports it
-          if apiVersionIsAtLeast({12, 0, 9}) then
-            queue:add({
-              command = GetAdjFuncsApi.command,
-              simulatorResponse = GetAdjFuncsApi.simulatorResponse,
-              processReply = function(self3, buf3)
-                local parsedObj3 = GetAdjFuncsApi.parse(buf3)
-                if parsedObj3 and parsedObj3.adjustment_function_ids then
-                  ui.functionIds = parsedObj3.adjustment_function_ids
-                  for i = 1, 42 do
-                    local fnId = tonumber(ui.functionIds[i]) or 0
-                    if ui.adjustmentRanges[i] then
-                      ui.adjustmentRanges[i].adjFunction = fnId
-                    end
-                  end
-                  ui.showFunctionNames = true
-                end
-                finishLoad()
-              end,
-              errorHandler = function()
-                finishLoad()
-              end
-            })
-          else
-            finishLoad()
-          end
-        end,
-        errorHandler = failed
-      })
+      -- Step 2: the table itself, by whichever route this API version has
+      if paged then
+        readPaged()
+      else
+        readWholeTable()
+      end
     end,
     errorHandler = failed
   })
@@ -638,7 +770,7 @@ local function startLoad(requestRebuild)
   return true
 end
 
-local function queueAdjustmentsWrite(requestRebuild)
+local function queueAdjustmentsWrite(requestRebuild, i18n, ctx)
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -650,14 +782,13 @@ local function queueAdjustmentsWrite(requestRebuild)
   end
 
   local changedSlots = {}
-  for i = 1, 42 do
+  for i = 1, #ui.adjustmentRanges do
     if ui.dirtySlots[i] then
       changedSlots[#changedSlots + 1] = i
     end
   end
 
   if #changedSlots == 0 then
-    ui.dirty = false
     return true
   end
 
@@ -676,10 +807,11 @@ local function queueAdjustmentsWrite(requestRebuild)
     if type(requestRebuild) == "function" then
       requestRebuild()
     end
-    if lvgl and lvgl.alert then
-      lvgl.alert({
-        title = "Error",
-        message = tostring(reason or "Save failed")
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
+        ok = false,
+        title = pageText(i18n, "save_error_title", "Error"),
+        message = tostring(reason or pageText(i18n, "save_error_message", "Save failed"))
       })
     end
   end
@@ -703,10 +835,11 @@ local function queueAdjustmentsWrite(requestRebuild)
             if type(requestRebuild) == "function" then
               requestRebuild()
             end
-            if lvgl and lvgl.alert then
-              lvgl.alert({
-                title = "Saved",
-                message = "Adjustment configuration saved"
+            if ctx and type(ctx.reportSave) == "function" then
+              ctx.reportSave({
+                ok = true,
+                title = pageText(i18n, "saved_title", "Saved"),
+                message = pageText(i18n, "saved_message", "Adjustment configuration saved")
               })
             end
           end,
@@ -720,6 +853,13 @@ local function queueAdjustmentsWrite(requestRebuild)
         saveToSession()
         if type(requestRebuild) == "function" then
           requestRebuild()
+        end
+        if ctx and type(ctx.reportSave) == "function" then
+          ctx.reportSave({
+            ok = true,
+            title = pageText(i18n, "saved_title", "Saved"),
+            message = pageText(i18n, "saved_message", "Adjustment configuration saved")
+          })
         end
       end
       return
@@ -739,13 +879,19 @@ local function queueAdjustmentsWrite(requestRebuild)
     local minLo, minHi = toS16Bytes(adjRange.adjMin)
     local maxLo, maxHi = toS16Bytes(adjRange.adjMax)
 
+    local enaChannel = adjRange.enaChannel
+    if enaChannel ~= 255 then
+      enaChannel = clamp(math.floor(enaChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
+    end
+    local adjChannel = clamp(math.floor(adjRange.adjChannel or 0), 0, AUX_CHANNEL_COUNT - 1)
+
     local payload = {
       slotIndex - 1,
       clamp(adjRange.adjFunction, 0, 255),
-      clamp(adjRange.enaChannel, 0, 255),
+      enaChannel,
       toS8Byte(enaStartStep),
       toS8Byte(enaEndStep),
-      clamp(adjRange.adjChannel, 0, 255),
+      adjChannel,
       toS8Byte(adjRange1StartStep),
       toS8Byte(adjRange1EndStep),
       toS8Byte(adjRange2StartStep),
@@ -757,9 +903,14 @@ local function queueAdjustmentsWrite(requestRebuild)
       clamp(adjRange.adjStep, 0, 255)
     }
 
-    ui.progress = math.floor((slotPos - 1) * 90 / total)
-    if type(requestRebuild) == "function" then
-      requestRebuild()
+    -- The overlay is the only thing on screen while a save runs and it draws whole percent, so a
+    -- rebuild is worth a scene teardown only when the number it shows actually changes.
+    local progress = math.floor((slotPos - 1) * 90 / total)
+    if progress ~= ui.progress then
+      ui.progress = progress
+      if type(requestRebuild) == "function" then
+        requestRebuild()
+      end
     end
 
     queue:add({
@@ -797,7 +948,7 @@ local function checkLiveUpdates()
   -- 1) Auto-detect Enable Channel
   local enaAutoState = ui.autoDetectEnaSlots[slot]
   if enaAutoState then
-    for auxIdx = 0, AUX_CHANNEL_COUNT_FALLBACK - 1 do
+    for auxIdx = 0, AUX_CHANNEL_COUNT - 1 do
       local us = getAuxPulseUs(auxIdx)
       if us then
         if not enaAutoState.baseline then enaAutoState.baseline = {} end
@@ -821,7 +972,7 @@ local function checkLiveUpdates()
   -- 2) Auto-detect Value Channel
   local adjAutoState = ui.autoDetectAdjSlots[slot]
   if adjAutoState then
-    for auxIdx = 0, AUX_CHANNEL_COUNT_FALLBACK - 1 do
+    for auxIdx = 0, AUX_CHANNEL_COUNT - 1 do
       local us = getAuxPulseUs(auxIdx)
       if us then
         if not adjAutoState.baseline then adjAutoState.baseline = {} end
@@ -904,6 +1055,8 @@ local function ensureLoaded()
   for i = 1, 42 do
     ui.adjustmentRanges[i] = newDefaultAdjustmentRange()
   end
+  ui.slotLoaded = {}
+  ui.readError = false
   ui.dirtySlots = {}
   ui.autoDetectEnaSlots = {}
   ui.autoDetectAdjSlots = {}
@@ -953,6 +1106,13 @@ function M.wakeup(ctx)
     ensureLoaded()
   end
 
+  -- The API version may arrive after the page opened, and the load cannot start without it.
+  -- Retrying is confined to that case, so a read that failed for any other reason is not
+  -- re-issued on every pass.
+  if ui.awaitingApiVersion and not ui.runtime.readPending then
+    startLoad(ui.runtime.requestRebuild)
+  end
+
   local now = nowSeconds()
   if now - lastCheckTime >= 0.15 then
     lastCheckTime = now
@@ -983,9 +1143,25 @@ function M.build(ctx)
   local h = ctx.h
   local i18n = ctx.i18n
 
+  if ui.notice and LoadingOverlay and type(LoadingOverlay.appendNotice) == "function" then
+    LoadingOverlay.appendNotice(children, {
+      x = x, y = y, w = w, h = h,
+      title = ui.notice.title,
+      message = ui.notice.message,
+      press = function()
+        ui.notice = nil
+        if type(ui.runtime.requestRebuild) == "function" then
+          ui.runtime.requestRebuild()
+        end
+      end
+    })
+    return
+  end
+
   if ui.loading or ui.saving then
-    local titleText = ui.loading and pageText(i18n, "loading", "Loading") or pageText(i18n, "saving", "Saving")
-    local msgText = ui.loading and pageText(i18n, "loading", "Loading adjustment ranges...") or pageText(i18n, "saving", "Saving adjustment ranges...")
+    local titleText = ui.loading and "@i18n(app.loading)@" or "@i18n(app.saving)@"
+    local msgText = ui.loading and pageText(i18n, "loading", "Loading adjustment ranges...")
+      or pageText(i18n, "saving", "Saving adjustment ranges...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
       title = titleText,
@@ -1014,6 +1190,11 @@ function M.build(ctx)
     end
   end
   local activeStr = pageText(i18n, "active_ranges", "Active ranges") .. ": " .. tostring(activeCount) .. " / 42"
+  local activeColor = COLOR_THEME_PRIMARY1
+  if ui.readError then
+    activeStr = pageText(i18n, "read_failed", "Could not read the adjustments from the flight controller")
+    activeColor = COLOR_THEME_SECONDARY1
+  end
 
   local enaUs = nil
   local adjRange = ui.adjustmentRanges[ui.selectedRangeIndex]
@@ -1037,7 +1218,7 @@ function M.build(ctx)
     type = "label",
     x = x + 10, y = cursorY + 10,
     text = activeStr,
-    color = COLOR_THEME_PRIMARY1,
+    color = activeColor,
     font = SMLSIZE
   }
 
@@ -1065,7 +1246,7 @@ function M.build(ctx)
     type = "rectangle",
     x = x, y = cursorY,
     w = w, h = 1,
-    color = GREY_DEFAULT, filled = true
+    color = COLOR_THEME_SECONDARY2, filled = true
   }
   cursorY = cursorY + 8
 
@@ -1079,11 +1260,29 @@ function M.build(ctx)
     ui.selectedRangeIndex,
     function(val)
       ui.selectedRangeIndex = val
+      -- Only the paged route leaves a slot unread; the whole-table route brought all 42 at
+      -- once. So the question is when a read is NEEDED, and the module above answers when one
+      -- is POSSIBLE -- neither standing in for the other.
+      if hasPagedReads() and not ui.slotLoaded[val] then
+        ui.loading = true
+        queueSlotRead(val, ui.runtime.requestRebuild, function(ok)
+          ui.loading = false
+          ui.readError = not ok
+          if type(ui.runtime.requestRebuild) == "function" then
+            ui.runtime.requestRebuild()
+          end
+        end)
+      end
       if type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
     end
   )
+
+  -- Everything below is the selected slot's own record, so it is drawn only once that
+  -- record has been read. Editing what a failed read left behind would write defaults to the
+  -- flight controller on the next save.
+  if not ui.slotLoaded[ui.selectedRangeIndex] then return end
 
   -- 2) Type Dropdown
   local typeOptions = {
@@ -1118,6 +1317,10 @@ function M.build(ctx)
   )
 
   -- 3) Enable Channel Row (choice + live + set)
+  local rowH = (Controls and Controls.ROW_H) or 64
+  local controlY_offset = (Controls and Controls.controlY and Controls.controlY(0, rowH)) or math.floor((rowH - 32) / 2)
+  local labelY_offset = (Controls and Controls.labelY and Controls.labelY(0, rowH)) or math.floor((rowH - 21) / 2)
+
   local enaRowY = cursorY
   local rightPadding = 10
   local gap = 6
@@ -1132,7 +1335,7 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "label",
-    x = x + 10, y = enaRowY + 21,
+    x = x + 10, y = enaRowY + labelY_offset,
     w = labelW - 10,
     text = pageText(i18n, "enable_channel", "Enable Channel"),
     color = COLOR_THEME_PRIMARY1,
@@ -1140,7 +1343,7 @@ function M.build(ctx)
   }
 
   local auxOptions = { "AUTO", "Always" }
-  for i = 1, AUX_CHANNEL_COUNT_FALLBACK do
+  for i = 1, AUX_CHANNEL_COUNT do
     auxOptions[#auxOptions + 1] = "AUX " .. tostring(i)
   end
 
@@ -1152,8 +1355,8 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "choice",
-    x = choiceX, y = enaRowY + 13,
-    w = choiceW, h = 36,
+    x = choiceX, y = enaRowY + controlY_offset,
+    w = choiceW,
     title = pageText(i18n, "enable_channel", "Enable Channel"),
     values = auxOptions,
     get = getSelectedEnaIndex,
@@ -1168,7 +1371,7 @@ function M.build(ctx)
         adjRange.enaRange["end"] = 1500
       else
         ui.autoDetectEnaSlots[ui.selectedRangeIndex] = nil
-        adjRange.enaChannel = clamp(val - 3, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+        adjRange.enaChannel = clamp(val - 3, 0, AUX_CHANNEL_COUNT - 1)
       end
       ui.dirtySlots[ui.selectedRangeIndex] = true
       ui.dirty = true
@@ -1192,7 +1395,7 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "label",
-    x = liveX, y = enaRowY + 21,
+    x = liveX, y = enaRowY + labelY_offset,
     w = liveW,
     text = liveText_ena,
     color = COLOR_THEME_SECONDARY1,
@@ -1202,8 +1405,8 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "button",
-    x = btnX, y = enaRowY + 6,
-    w = btnW, h = 50,
+    x = btnX, y = enaRowY + controlY_offset,
+    w = btnW,
     text = pageText(i18n, "set", "Set"),
     press = function()
       if adjRange.enaChannel == 255 then
@@ -1221,11 +1424,11 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "rectangle",
-    x = x, y = enaRowY + 62,
+    x = x, y = enaRowY + rowH,
     w = w, h = 1,
-    color = GREY_DEFAULT, filled = true
+    color = COLOR_THEME_SECONDARY2, filled = true
   }
-  cursorY = cursorY + 63
+  cursorY = cursorY + rowH + 1
 
   -- 4) Enable Range Row
   local rangeRowY = cursorY
@@ -1236,7 +1439,7 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "label",
-    x = x + 10, y = rangeRowY + 21,
+    x = x + 10, y = rangeRowY + labelY_offset,
     w = inputStartX - x - 20,
     text = pageText(i18n, "enable_range", "Enable Range"),
     color = COLOR_THEME_PRIMARY1,
@@ -1245,8 +1448,8 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "numberEdit",
-    x = inputStartX, y = rangeRowY + 6,
-    w = inputW, h = 50,
+    x = inputStartX, y = rangeRowY + controlY_offset,
+    w = inputW,
     min = math.floor(RANGE_MIN / RANGE_STEP),
     max = math.floor(RANGE_MAX / RANGE_STEP),
     get = function()
@@ -1267,8 +1470,8 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "numberEdit",
-    x = inputEndX, y = rangeRowY + 6,
-    w = inputW, h = 50,
+    x = inputEndX, y = rangeRowY + controlY_offset,
+    w = inputW,
     min = math.floor(RANGE_MIN / RANGE_STEP),
     max = math.floor(RANGE_MAX / RANGE_STEP),
     get = function()
@@ -1289,11 +1492,11 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "rectangle",
-    x = x, y = rangeRowY + 62,
+    x = x, y = rangeRowY + rowH,
     w = w, h = 1,
-    color = GREY_DEFAULT, filled = true
+    color = COLOR_THEME_SECONDARY2, filled = true
   }
-  cursorY = cursorY + 63
+  cursorY = cursorY + rowH + 1
 
   -- 5) Mapped/Stepped Fields
   local adjType = getAdjustmentType(adjRange)
@@ -1306,7 +1509,7 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "label",
-      x = x + 10, y = valChRowY + 21,
+      x = x + 10, y = valChRowY + labelY_offset,
       w = labelW - 10,
       text = pageText(i18n, "value_channel", "Value Channel"),
       color = COLOR_THEME_PRIMARY1,
@@ -1314,14 +1517,14 @@ function M.build(ctx)
     }
 
     local adjAuxOptions = { "AUTO" }
-    for i = 1, AUX_CHANNEL_COUNT_FALLBACK do
+    for i = 1, AUX_CHANNEL_COUNT do
       adjAuxOptions[#adjAuxOptions + 1] = "AUX " .. tostring(i)
     end
 
     children[#children + 1] = {
       type = "choice",
-      x = choiceX_val, y = valChRowY + 13,
-      w = choiceW_val, h = 36,
+      x = choiceX_val, y = valChRowY + controlY_offset,
+      w = choiceW_val,
       title = pageText(i18n, "value_channel", "Value Channel"),
       values = adjAuxOptions,
       get = function()
@@ -1334,7 +1537,7 @@ function M.build(ctx)
           ui.autoDetectAdjSlots[ui.selectedRangeIndex] = { baseline = nil }
         else
           ui.autoDetectAdjSlots[ui.selectedRangeIndex] = nil
-          adjRange.adjChannel = clamp(val - 2, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+          adjRange.adjChannel = clamp(val - 2, 0, AUX_CHANNEL_COUNT - 1)
         end
         ui.dirtySlots[ui.selectedRangeIndex] = true
         ui.dirty = true
@@ -1356,7 +1559,7 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "label",
-      x = liveX_val, y = valChRowY + 21,
+      x = liveX_val, y = valChRowY + labelY_offset,
       w = liveW,
       text = adjLiveText,
       color = COLOR_THEME_SECONDARY1,
@@ -1366,11 +1569,11 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "rectangle",
-      x = x, y = valChRowY + 62,
+      x = x, y = valChRowY + rowH,
       w = w, h = 1,
-      color = GREY_DEFAULT, filled = true
+      color = COLOR_THEME_SECONDARY2, filled = true
     }
-    cursorY = cursorY + 63
+    cursorY = cursorY + rowH + 1
 
     -- If stepped type, show Step Size
     if adjType == 2 then
@@ -1400,7 +1603,7 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "label",
-      x = x + 10, y = r1RowY + 21,
+      x = x + 10, y = r1RowY + labelY_offset,
       w = r1StartX - x - 20,
       text = r1Label,
       color = COLOR_THEME_PRIMARY1,
@@ -1409,8 +1612,8 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "numberEdit",
-      x = r1StartX, y = r1RowY + 6,
-      w = inputW, h = 50,
+      x = r1StartX, y = r1RowY + controlY_offset,
+      w = inputW,
       min = math.floor(RANGE_MIN / RANGE_STEP),
       max = math.floor(RANGE_MAX / RANGE_STEP),
       get = function()
@@ -1428,8 +1631,8 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "numberEdit",
-      x = r1EndX, y = r1RowY + 6,
-      w = inputW, h = 50,
+      x = r1EndX, y = r1RowY + controlY_offset,
+      w = inputW,
       min = math.floor(RANGE_MIN / RANGE_STEP),
       max = math.floor(RANGE_MAX / RANGE_STEP),
       get = function()
@@ -1447,8 +1650,8 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "button",
-      x = btnX_r1, y = r1RowY + 6,
-      w = btnW, h = 50,
+      x = btnX_r1, y = r1RowY + controlY_offset,
+      w = btnW,
       text = pageText(i18n, "set", "Set"),
       press = function()
         local us = getChannelUsForRangeSet(adjRange.adjChannel, ui.autoDetectAdjSlots, ui.selectedRangeIndex, i18n)
@@ -1463,11 +1666,11 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "rectangle",
-      x = x, y = r1RowY + 62,
+      x = x, y = r1RowY + rowH,
       w = w, h = 1,
-      color = GREY_DEFAULT, filled = true
+      color = COLOR_THEME_SECONDARY2, filled = true
     }
-    cursorY = cursorY + 63
+    cursorY = cursorY + rowH + 1
 
     -- If stepped type, show Increase Range Row
     if adjType == 2 then
@@ -1476,7 +1679,7 @@ function M.build(ctx)
 
       children[#children + 1] = {
         type = "label",
-        x = x + 10, y = r2RowY + 21,
+        x = x + 10, y = r2RowY + labelY_offset,
         w = r1StartX - x - 20,
         text = r2Label,
         color = COLOR_THEME_PRIMARY1,
@@ -1485,8 +1688,8 @@ function M.build(ctx)
 
       children[#children + 1] = {
         type = "numberEdit",
-        x = r1StartX, y = r2RowY + 6,
-        w = inputW, h = 50,
+        x = r1StartX, y = r2RowY + controlY_offset,
+        w = inputW,
         min = math.floor(RANGE_MIN / RANGE_STEP),
         max = math.floor(RANGE_MAX / RANGE_STEP),
         get = function()
@@ -1504,8 +1707,8 @@ function M.build(ctx)
 
       children[#children + 1] = {
         type = "numberEdit",
-        x = r1EndX, y = r2RowY + 6,
-        w = inputW, h = 50,
+        x = r1EndX, y = r2RowY + controlY_offset,
+        w = inputW,
         min = math.floor(RANGE_MIN / RANGE_STEP),
         max = math.floor(RANGE_MAX / RANGE_STEP),
         get = function()
@@ -1523,8 +1726,8 @@ function M.build(ctx)
 
       children[#children + 1] = {
         type = "button",
-        x = btnX_r1, y = r2RowY + 6,
-        w = btnW, h = 50,
+        x = btnX_r1, y = r2RowY + controlY_offset,
+        w = btnW,
         text = pageText(i18n, "set", "Set"),
         press = function()
           local us = getChannelUsForRangeSet(adjRange.adjChannel, ui.autoDetectAdjSlots, ui.selectedRangeIndex, i18n)
@@ -1539,11 +1742,11 @@ function M.build(ctx)
 
       children[#children + 1] = {
         type = "rectangle",
-        x = x, y = r2RowY + 62,
+        x = x, y = r2RowY + rowH,
         w = w, h = 1,
-        color = GREY_DEFAULT, filled = true
+        color = COLOR_THEME_SECONDARY2, filled = true
       }
-      cursorY = cursorY + 63
+      cursorY = cursorY + rowH + 1
     end
 
     -- Function Dropdown
@@ -1573,7 +1776,7 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "label",
-      x = x + 10, y = vRangeRowY + 21,
+      x = x + 10, y = vRangeRowY + labelY_offset,
       w = inputStartX - x - 20,
       text = pageText(i18n, "value_range", "Value Range"),
       color = COLOR_THEME_PRIMARY1,
@@ -1582,8 +1785,8 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "numberEdit",
-      x = inputStartX, y = vRangeRowY + 6,
-      w = inputW, h = 50,
+      x = inputStartX, y = vRangeRowY + controlY_offset,
+      w = inputW,
       min = valMin,
       max = valMax,
       get = function()
@@ -1602,8 +1805,8 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "numberEdit",
-      x = inputEndX, y = vRangeRowY + 6,
-      w = inputW, h = 50,
+      x = inputEndX, y = vRangeRowY + controlY_offset,
+      w = inputW,
       min = valMin,
       max = valMax,
       get = function()
@@ -1622,21 +1825,22 @@ function M.build(ctx)
 
     children[#children + 1] = {
       type = "rectangle",
-      x = x, y = vRangeRowY + 62,
+      x = x, y = vRangeRowY + rowH,
       w = w, h = 1,
-      color = GREY_DEFAULT, filled = true
+      color = COLOR_THEME_SECONDARY2, filled = true
     }
-    cursorY = cursorY + 63
+    cursorY = cursorY + rowH + 1
   end
 end
 
 function M.onSave(ctx)
-  local ok, err = queueAdjustmentsWrite(ctx and ctx.requestRebuild)
+  local ok, err = queueAdjustmentsWrite(ctx and ctx.requestRebuild, ctx and ctx.i18n, ctx)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
+        ok = false,
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
-        message = tostring(err or "MSP write failed")
+        message = tostring(err or pageText(ctx and ctx.i18n, "save_error_message", "Save failed"))
       })
     end
     return false
@@ -1662,9 +1866,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then
@@ -1678,6 +1879,7 @@ function M.onClose()
   MspRuntime = nil
   RxMapApi = nil
   AdjustmentRangesApi = nil
+  GetAdjRangeApi = nil
   GetAdjFuncsApi = nil
   SetAdjustmentRangeApi = nil
   LoadingOverlay = nil

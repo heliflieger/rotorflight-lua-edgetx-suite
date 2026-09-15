@@ -67,7 +67,7 @@ function M.show(ctx)
   -- Do not call LVGL APIs here (some targets lack `message`/`alert`).
   -- Log the condition, mark the title/message as shown to dedupe,
   -- and invoke the provided fallback if present.
-  if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.ui.msp_unsupported_dialog", "unsupported MSP API: " .. tostring(title_msg_key), "debug", true) end
+  if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.ui.msp_unsupported_dialog", "unsupported MSP API: " .. tostring(title_msg_key), "debug") end
   if root then
     local keys = root._msp_unsupported_dialog_shown_keys or {}
     keys[title_msg_key] = true

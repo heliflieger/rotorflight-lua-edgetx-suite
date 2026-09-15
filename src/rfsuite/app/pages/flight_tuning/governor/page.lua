@@ -16,6 +16,7 @@ local GovernorApi = nil
 local GovernorConfigApi = nil
 local LoadingOverlay = nil
 local Sensors = nil
+local Profile = nil
 local t = nil
 
 M.eepromWrite = true
@@ -121,25 +122,10 @@ local function ensureDeps()
 	if not GovernorConfigApi then GovernorConfigApi = loadModule("tasks/msp/api/governor_config.lua") end
 	if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
 	if not Sensors then Sensors = loadModule("lib/sensors.lua") end
+	if not Profile then Profile = loadModule("lib/profile.lua") end
 	if not t then t = Common and Common.pageT("flight_tuning_governor") or nil end
 	if Common and not ui.runtimeBase then
-		ui.runtimeBase = Common.createProfileAwareRuntime({
-			profileGetter = function()
-				local sensorProfile = nil
-				if Sensors and type(Sensors.getValue) == "function" then
-					sensorProfile = tonumber(Sensors.getValue("pid_profile"))
-				end
-				if sensorProfile and sensorProfile > 0 then
-					return math.floor(sensorProfile)
-				end
-				local session = getSession()
-				local activeProfile = session and session.activeProfile
-				if activeProfile ~= nil then
-					return math.floor(tonumber(activeProfile) or 0) + 1
-				end
-				return nil
-			end
-		})
+		ui.runtimeBase = Common.createProfileAwareRuntime({ profileType = "pid" })
 		if type(ui.runtime) ~= "table" then
 			ui.runtime = newRuntime()
 		end
@@ -187,18 +173,7 @@ local function getFieldSetter(fieldName, altFieldName)
 end
 
 local function getLiveProfile()
-	if Sensors and type(Sensors.getValue) == "function" then
-		local raw = tonumber(Sensors.getValue("pid_profile"))
-		if raw and raw > 0 then
-			return math.floor(raw)
-		end
-	end
-	local session = getSession()
-	local activeProfile = tonumber(session and session.activeProfile)
-	if activeProfile ~= nil then
-		return math.floor(activeProfile) + 1
-	end
-	return 1
+	return Profile and Profile.getActivePidProfile(1) or 1
 end
 
 local function buildSessionSignature()
@@ -266,6 +241,7 @@ local function queueGovRead(isAutoReload)
 	if ui.runtime.readPending then
 		return false, "read_pending"
 	end
+	ui.runtime.readComplete = false
 	if not GovernorApi or not GovernorConfigApi or not MspRuntime or type(MspRuntime.getState) ~= "function" then
 		return false, "msp_runtime_unavailable"
 	end
@@ -277,6 +253,7 @@ local function queueGovRead(isAutoReload)
 		return false, "msp_queue_unavailable"
 	end
 
+	local readValid = type(getSession()) == "table"
 	ui.runtime.readPending = true
 	if not isAutoReload then
 		ui.loading = true
@@ -292,6 +269,7 @@ local function queueGovRead(isAutoReload)
 		timeout = 5.0,
 		processReply = function(_, buf)
 			local parsedConfig = GovernorConfigApi.parse and GovernorConfigApi.parse(buf) or nil
+			if type(parsedConfig) ~= "table" then return Common.failPageRead(ui) end
 			if type(session) == "table" and type(parsedConfig) == "table" then
 				session.governor_config = parsedConfig
 				session.governorMode = parsedConfig.gov_mode
@@ -306,17 +284,20 @@ local function queueGovRead(isAutoReload)
 					ui.loading = false
 					ui.progress = 1
 					local parsed = GovernorApi.parse and GovernorApi.parse(buf) or nil
+					if type(parsed) ~= "table" then return Common.failPageRead(ui) end
 					if type(session) == "table" and type(parsed) == "table" then
 						session.governor_profile = parsed
 					end
 					if not ui.dirty then
 						loadFromSession()
 					end
+					ui.runtime.readComplete = readValid
 					if type(ui.runtime.requestRebuild) == "function" then
 						ui.runtime.requestRebuild()
 					end
 				end,
 				errorHandler = function()
+					readValid = false
 					ui.runtime.readPending = false
 					ui.loading = false
 					ui.progress = 1
@@ -327,6 +308,7 @@ local function queueGovRead(isAutoReload)
 			})
 		end,
 		errorHandler = function()
+			readValid = false
 			ui.runtime.readPending = false
 			ui.loading = false
 			ui.progress = 1
@@ -396,9 +378,9 @@ local function applyConfigToSession(session)
 end
 
 local function appendCompactNumberField(children, x, y, w, labelText, opts)
-	local rowH = 52
-	local labelY = y + 16
-	local itemY = y + 4
+	local rowH = (Controls and Controls.ROW_H) or 40
+	local labelY = (Controls and Controls.labelY and Controls.labelY(y, rowH)) or (y + math.floor((rowH - 21) / 2))
+	local itemY = (Controls and Controls.controlY and Controls.controlY(y, rowH)) or (y + math.floor((rowH - 32) / 2))
 	local fieldW = 172
 	local fieldX = x + w - fieldW - 10
 	
@@ -425,7 +407,6 @@ local function appendCompactNumberField(children, x, y, w, labelText, opts)
 		x = fieldX,
 		y = itemY,
 		w = fieldW,
-		h = 44,
 		min = math.floor(minVal / stepVal),
 		max = math.floor(maxVal / stepVal),
 		active = function() return isActive end,
@@ -452,7 +433,7 @@ local function appendCompactNumberField(children, x, y, w, labelText, opts)
 		y = y + rowH,
 		w = w,
 		h = 1,
-		color = GREY_DEFAULT or 0x808080,
+		color = COLOR_THEME_SECONDARY2,
 		filled = true
 	}
 
@@ -491,10 +472,10 @@ local function appendHorizontalFields(children, x, y, w, labelText, rows, i18n)
 	local gap = metrics.gap
 	local cellW = metrics.cellW
 	
-	local rowH = 76
-	local headerY = y + 4
-	local itemY = y + 26
-	local groupLabelY = y + 38
+	local rowH = (Controls and Controls.HORIZONTAL_ROW_H) or 56
+	local headerY = y + 2
+	local itemY = y + (rowH >= 65 and 24 or 20)
+	local groupLabelY = Controls.labelY(itemY, Controls.CTRL_H)
 
 	children[#children + 1] = {
 		type = "label",
@@ -534,7 +515,6 @@ local function appendHorizontalFields(children, x, y, w, labelText, rows, i18n)
 			x = cellX,
 			y = itemY,
 			w = cellW,
-			h = 44,
 			min = math.floor(limits.min / (limits.step or 1)),
 			max = math.floor(limits.max / (limits.step or 1)),
 			active = function() return isActive end,
@@ -559,7 +539,7 @@ local function appendHorizontalFields(children, x, y, w, labelText, rows, i18n)
 		y = y + rowH,
 		w = w,
 		h = 1,
-		color = GREY_DEFAULT or 0x808080,
+		color = COLOR_THEME_SECONDARY2,
 		filled = true
 	}
 
@@ -576,9 +556,6 @@ function M.getHeaderActions()
 	}
 end
 
-function M.allowMemAutoRefresh()
-	return true
-end
 
 function M.onReload()
 	ensureDeps()
@@ -587,7 +564,12 @@ function M.onReload()
 	return false
 end
 
+function M.canSave()
+	return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+	if not M.canSave() then return false, "loaded_data_missing" end
 	ensureDeps()
 	ensureLoaded()
 
@@ -601,16 +583,17 @@ function M.onSave(ctx)
 	local errMsp = nil
 	okMsp, errMsp = queueGovWrite(session)
 
-	if lvgl and lvgl.alert then
+	if ctx and type(ctx.reportSave) == "function" then
 		if okMsp then
-			lvgl.alert({
-				title = pageText(ctx and ctx.i18n, "saved_title"),
-				message = pageText(ctx and ctx.i18n, "saved_message")
+			ctx.reportSave({
+				ok = true,
+				title = pageText(ctx and ctx.i18n, "saved_title", "@i18n(app.pages.flight_tuning_governor.saved_title)@"),
+				message = pageText(ctx and ctx.i18n, "saved_message", "@i18n(app.pages.flight_tuning_governor.saved_message)@")
 			})
 		else
-			lvgl.alert({
-				title = pageText(ctx and ctx.i18n, "warning_title"),
-				message = pageText(ctx and ctx.i18n, "saved_local_only_message") .. (errMsp and (": " .. tostring(errMsp)) or "")
+			ctx.reportSave({
+				title = pageText(ctx and ctx.i18n, "warning_title", "@i18n(app.pages.flight_tuning_governor.warning_title)@"),
+				message = pageText(ctx and ctx.i18n, "saved_local_only_message", "@i18n(app.pages.flight_tuning_governor.saved_local_only_message)@") .. (errMsp and (": " .. tostring(errMsp)) or "")
 			})
 		end
 	end
@@ -671,7 +654,7 @@ function M.build(ctx)
 	local govMode = tonumber(session and session.governorMode or 0) or 0
 	local govModeName = GOV_MODES[govMode] or "OFF"
 
-	local sectionHeaderH = (Controls and Controls.STATIC_SECTION_H) or 50
+	local sectionHeaderH = (Controls and Controls.STATIC_SECTION_H) or 38
 	local cursorY = y
 	if Controls and type(Controls.appendStaticSectionHeader) == "function" then
 		local headingTitle = string.format("%s #%d - %s", pageText(i18n, "title"), profileDisplay, govModeName)
@@ -708,13 +691,13 @@ function M.build(ctx)
 					children[#children + 1] = {
 						type = "label",
 						x = x,
-						y = cursorY + 8,
+						y = cursorY + 6,
 						w = w,
 						text = getGovGroupTitle(i18n, group.key),
 						color = COLOR_THEME_PRIMARY2,
 						font = SMLSIZE
 					}
-					cursorY = cursorY + 36
+					cursorY = cursorY + 28
 				end
 
 				if group.horizontal then
@@ -752,7 +735,7 @@ function M.build(ctx)
 						end
 					end
 				end
-				cursorY = cursorY + 8
+				cursorY = cursorY + 4
 			end
 		end
 	end

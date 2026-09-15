@@ -7,14 +7,6 @@ local Api = {
   mspHeaderBytes = 2
 }
 
-local onOff = {"Off", "On"}
-local startupPower = {"0.031", "0.047", "0.063", "0.094", "0.125", "0.188", "0.25", "0.38", "0.50", "0.75", "1.00", "1.25", "1.50"}
-local motorDirection = {"Normal", "Reversed", "Forward/Reverse (3D)", "Forward/Reverse (3D) Rev"}
-local commutationTiming = {"Low", "Medium Low", "Medium", "Medium High", "High"}
-local demagCompensation = {"Off", "Low", "High"}
-local beaconDelay = {"1 minute", "2 minutes", "5 minutes", "10 minutes", "Infinite"}
-local temperatureProtection = {[0] = "Disabled", "80C", "90C", "100C", "110C", "120C", "130C", "140C"}
-
 local FIELD_SPEC = {
     {"esc_signature", "U8"},
     {"esc_command", "U8"},
@@ -27,36 +19,36 @@ local FIELD_SPEC = {
     {"low_voltage_limit", "U8"},
     {"motor_gain", "U8"},
     {"motor_idle", "U8"},
-    {"startup_power", "U8", nil, nil, nil, nil, nil, nil, nil, nil, startupPower},
+    {"startup_power", "U8"},
     {"pwm_frequency", "U8"},
-    {"motor_direction", "U8", nil, nil, nil, nil, nil, nil, nil, nil, motorDirection},
+    {"motor_direction", "U8"},
     {"input_pwm_polarity", "U8"},
     {"mode_raw", "U16"},
-    {"programming_by_tx", "U8", nil, nil, nil, nil, nil, nil, nil, nil, onOff},
+    {"programming_by_tx", "U8"},
     {"rearm_at_start", "U8"},
     {"governor_setup_target", "U8"},
     {"startup_rpm", "U8"},
     {"startup_acceleration", "U8"},
     {"volt_comp", "U8"},
-    {"commutation_timing", "U8", nil, nil, nil, nil, nil, nil, nil, nil, commutationTiming},
+    {"commutation_timing", "U8"},
     {"damping_force", "U8"},
     {"governor_range", "U8"},
     {"startup_method", "U8"},
-    {"ppm_min_throttle", "U8", 1000, 1500, nil, "us", nil, nil, nil, 4},
-    {"ppm_max_throttle", "U8", 1504, 2020, nil, "us", nil, nil, nil, 4},
-    {"beep_strength", "U8", 1, 255, nil, nil, nil, nil, 1},
-    {"beacon_strength", "U8", 1, 255, nil, nil, nil, nil, 1},
-    {"beacon_delay", "U8", nil, nil, nil, nil, nil, nil, nil, nil, beaconDelay},
+    {"ppm_min_throttle", "U8"},
+    {"ppm_max_throttle", "U8"},
+    {"beep_strength", "U8"},
+    {"beacon_strength", "U8"},
+    {"beacon_delay", "U8"},
     {"throttle_rate", "U8"},
-    {"demag_compensation", "U8", nil, nil, nil, nil, nil, nil, nil, nil, demagCompensation},
+    {"demag_compensation", "U8"},
     {"bec_voltage", "U8"},
-    {"ppm_center_throttle", "U8", 1000, 2020, nil, nil, nil, nil, 4},
+    {"ppm_center_throttle", "U8"},
     {"spoolup_time", "U8"},
-    {"temperature_protection", "U8", nil, nil, nil, nil, nil, nil, nil, nil, temperatureProtection},
-    {"low_rpm_power_protection", "U8", nil, nil, nil, nil, nil, nil, nil, nil, onOff},
+    {"temperature_protection", "U8"},
+    {"low_rpm_power_protection", "U8"},
     {"pwm_input", "U8"},
     {"pwm_dither", "U8"},
-    {"brake_on_stop", "U8", nil, nil, nil, nil, nil, nil, nil, nil, onOff, -1},
+    {"brake_on_stop", "U8"},
     {"led_control", "U8"},
     {"reserved_29", "U8"},
     {"reserved_2a", "U8"},
@@ -215,30 +207,17 @@ function Api.parse(buf)
     end
   end
 
-  local result = { parsed = parsed }
-  result.other = result.other or {}
-
   if parsed.ppm_min_throttle ~= nil then
-    result.other.ppm_min_throttle_raw = parsed.ppm_min_throttle
     parsed.ppm_min_throttle = normalizePpm(parsed.ppm_min_throttle)
   end
   if parsed.ppm_max_throttle ~= nil then
-    result.other.ppm_max_throttle_raw = parsed.ppm_max_throttle
     parsed.ppm_max_throttle = normalizePpm(parsed.ppm_max_throttle)
   end
   if parsed.ppm_center_throttle ~= nil then
-    result.other.ppm_center_throttle_raw = parsed.ppm_center_throttle
     parsed.ppm_center_throttle = normalizePpm(parsed.ppm_center_throttle)
   end
 
-  -- build light structure metadata
-  local meta = {}
-  for _, f in ipairs(FIELD_SPEC) do
-    meta[#meta+1] = { field = f[1], type = f[2], min = f[3], max = f[4], step = f[9], table = f[11] }
-  end
-  result.structure = meta
-
-  return result
+  return parsed
 end
 
 function Api.buildWritePayload(payloadData, _, _, state)

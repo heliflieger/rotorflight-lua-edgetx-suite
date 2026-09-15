@@ -7,7 +7,7 @@ local function resolveTileTextColor(isEnabled, focused)
   if not isEnabled or focused then
     return GREY_DARK or BLACK or COLOR_THEME_SECONDARY2
   end
-  return COLOR_THEME_PRIMARY1 or WHITE or GREY_DEFAULT
+  return COLOR_THEME_PRIMARY1 or WHITE
 end
 
 local function formatTileText(text)
@@ -26,6 +26,59 @@ local function formatTileText(text)
     return string.sub(text, 1, bestSpace - 1) .. "\n" .. string.sub(text, bestSpace + 1)
   end
   return string.sub(text, 1, mid) .. "\n" .. string.sub(text, mid + 1)
+end
+
+-- The line height of one font, measured. `lcd.sizeText(text, flags)` answers for the font the
+-- label is drawn in and is not gated on a drawing context, so it may be called while the child
+-- list is being built. The fallback only has to be safe on a build that does not offer the call.
+function Tiles.lineHeight(font, fallback)
+  local fn = lcd and lcd.sizeText
+  if type(fn) == "function" then
+    local ok, _, th = pcall(fn, "0", font)
+    th = tonumber(th)
+    if ok and th and th > 0 then
+      return th
+    end
+  end
+  return fallback
+end
+
+local BADGE_INSET = 3
+
+-- A badge in the tile's top-right corner. Drawn only for a tile whose card data asked for
+-- one, on top of the disabled grey rather than instead of it: a tile a pilot cannot press
+-- because nothing answered on MSP and a tile locked because the craft is flying are two
+-- different answers to "why can I not press this", and they stay two different pictures.
+local function appendCornerBadge(children, x, y, size, text)
+  local diameter = math.max(14, math.floor(size * 0.22))
+  local radius = math.floor(diameter / 2)
+  Tiles.appendBadge(children, x + size - BADGE_INSET - radius, y + BADGE_INSET + radius, radius, text)
+end
+
+-- The badge itself, placed by its CENTRE. Public because the same mark is drawn twice -- once
+-- per locked tile, and once at the left of the armed strip ui/home.lua puts above the content
+-- -- and two drawings of one badge would drift apart.
+function Tiles.appendBadge(children, cx, cy, radius, text)
+  -- `circle` takes its CENTRE in x/y, unlike every other element in this file:
+  -- LvglWidgetRoundObject::setPos subtracts the radius before placing the object
+  -- (lua/lua_lvgl_widget.cpp), and LvglWidgetCircle::build sets width and height from it.
+  children[#children + 1] = {
+    type = "circle",
+    x = cx, y = cy, radius = radius,
+    color = RED or COLOR_THEME_WARNING,
+    filled = true
+  }
+
+  local textH = Tiles.lineHeight(SMLSIZE, 14)
+  children[#children + 1] = {
+    type  = "label",
+    x = cx - radius, y = cy - math.floor(textH / 2),
+    w = radius * 2,
+    text  = text,
+    font  = SMLSIZE,
+    color = WHITE or COLOR_THEME_PRIMARY2,
+    align = CENTER
+  }
 end
 
 function Tiles.computeColumns(width, minCardWidth, maxColumns)
@@ -47,7 +100,10 @@ end
 -- Append LVGL widgets for a single tile into `children`.
 -- LVGL handles focus/ENTER natively between button tiles via its built-in focus box.
 -- `focused` is accepted for API compatibility but visual focus is handled by LVGL.
-function Tiles.append(children, x, y, size, iconFile, text, focused, pressHandler, enabled)
+-- `badge` is the glyph of an optional corner badge, already resolved by the caller; nil draws
+-- none. It is a string rather than a flag so this file stays a pure renderer with no i18n of
+-- its own.
+function Tiles.append(children, x, y, size, iconFile, text, focused, pressHandler, enabled, badge)
   local isEnabled = enabled ~= false
 
   children[#children + 1] = {
@@ -64,7 +120,7 @@ function Tiles.append(children, x, y, size, iconFile, text, focused, pressHandle
   if not isEnabled then
     children[#children + 1] = {
       type = "rectangle", x = x + 1, y = y + 1, w = size - 2, h = size - 2,
-      color = GREY_DEFAULT, filled = true
+      color = COLOR_THEME_DISABLED, filled = true
     }
   end
 
@@ -89,6 +145,11 @@ function Tiles.append(children, x, y, size, iconFile, text, focused, pressHandle
     color = resolveTileTextColor(isEnabled, focused == true),
     align = CENTER
   }
+
+  -- Last, so it is the topmost child and nothing above draws over it.
+  if type(badge) == "string" and badge ~= "" then
+    appendCornerBadge(children, x, y, size, badge)
+  end
 end
 
 return Tiles

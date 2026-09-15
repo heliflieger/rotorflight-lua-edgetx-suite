@@ -26,8 +26,7 @@ function Api.parse(buf)
     if modeId == nil or modeLogic == nil or linkedTo == nil then break end
     extras[#extras + 1] = {id = modeId, modeLogic = modeLogic, linkedTo = linkedTo}
   end
-  parsed.mode_ranges_extra = extras
-  return {parsed = parsed, buffer = buf, receivedBytesCount = #buf}
+  return { mode_ranges_extra = extras }
 end
 
 return Api

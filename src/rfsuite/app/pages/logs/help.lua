@@ -15,7 +15,8 @@ return function(ctx)
   local parts = {
     t(i18n, "help_p1"),
     t(i18n, "help_p2"),
-    t(i18n, "help_p3")
+    t(i18n, "help_p3"),
+    t(i18n, "help_p4")
   }
 
   return {

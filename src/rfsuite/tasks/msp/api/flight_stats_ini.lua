@@ -32,9 +32,9 @@ function Api.parse(buf)
     parsed.flightcount = read_u32()
     parsed.lastflighttime = read_u32()
     parsed.totalflighttime = read_u32()
-    return { parsed = parsed }
+    return parsed
   end
-  return { parsed = defaults() }
+  return defaults()
 end
 
 function Api.buildWritePayload(payloadData)

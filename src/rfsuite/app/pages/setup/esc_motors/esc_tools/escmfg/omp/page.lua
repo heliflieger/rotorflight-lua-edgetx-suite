@@ -49,6 +49,9 @@ local ui = {
   currentSection = 1,
   parsedCache = nil,
   activeFields = nil,
+  escModel = nil,
+  escVersion = nil,
+  escFirmware = nil,
   runtime = {
     readPending = false,
     requestRebuild = nil,
@@ -106,7 +109,7 @@ end
 local function logMsg(msg, level)
   local Log = loadModule("lib/log.lua")
   if Log and type(Log.emit) == "function" then
-    Log.emit("rfsuite.omp", msg, level or "debug", true)
+    Log.emit("rfsuite.omp", msg, level or "debug")
   end
 end
 
@@ -126,6 +129,14 @@ local function queueOmpReadActual(queue)
 
         ui.parsedCache = parsed
 
+        local escModel = OmpInit and type(OmpInit.getEscModel) == "function" and OmpInit.getEscModel(buf) or nil
+        local escVersion = OmpInit and type(OmpInit.getEscVersion) == "function" and OmpInit.getEscVersion(buf) or nil
+        local escFirmware = OmpInit and type(OmpInit.getEscFirmware) == "function" and OmpInit.getEscFirmware(buf) or nil
+
+        ui.escModel = escModel
+        ui.escVersion = escVersion
+        ui.escFirmware = escFirmware
+
         if OmpInit and type(OmpInit.getActiveFields) == "function" then
           ui.activeFields = OmpInit.getActiveFields(buf)
         end
@@ -135,7 +146,10 @@ local function queueOmpReadActual(queue)
           session.setup_esc_motors_esc_tools_omp = {
             config = {},
             parsedCache = ui.parsedCache,
-            activeFields = ui.activeFields
+            activeFields = ui.activeFields,
+            escModel = escModel,
+            escVersion = escVersion,
+            escFirmware = escFirmware
           }
           for k, v in pairs(ui.config) do
             session.setup_esc_motors_esc_tools_omp.config[k] = v
@@ -183,100 +197,8 @@ local function queueOmpRead(isAutoReload)
     end
   end
 
-  local FwdProgApi = loadModule("tasks/msp/api/4wif_esc_fwd_prog.lua")
-  if FwdProgApi then
-    if not ui.connState or ui.connState == 0 then
-      ui.connState = 1
-      queue:add({
-        command = FwdProgApi.writeCommand,
-        payload = FwdProgApi.buildWritePayload({ target = 100 }),
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function()
-          if not ui.runtime then return end
-          ui.connState = 2
-          ui.connTimer = nowSeconds()
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end,
-        errorHandler = function()
-          if not ui.runtime then return end
-          ui.connState = 0
-          ui.loading = false
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end
-      })
-    elseif ui.connState == 3 then
-      queue:add({
-        command = FwdProgApi.writeCommand,
-        payload = FwdProgApi.buildWritePayload({ target = ui.escTarget or 0 }),
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function()
-          if not ui.runtime then return end
-          ui.connState = 4
-          ui.connTimer = nowSeconds()
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end,
-        errorHandler = function()
-          if not ui.runtime then return end
-          ui.connState = 0
-          ui.loading = false
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end
-      })
-    elseif ui.connState == 5 then
-      queueOmpReadActual(queue)
-    else
-      ui.runtime.readPending = false
-    end
-  else
-    queueOmpReadActual(queue)
-  end
-
+  queueOmpReadActual(queue)
   return true, nil
-end
-
-local function queuePostSaveReset(target, nextState)
-  local FwdProgApi = loadModule("tasks/msp/api/4wif_esc_fwd_prog.lua")
-  if not FwdProgApi or not MspRuntime or type(MspRuntime.getState) ~= "function" then
-    return
-  end
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue then return end
-
-  queue:add({
-    command = FwdProgApi.writeCommand,
-    payload = FwdProgApi.buildWritePayload({ target = target }),
-    isWrite = true,
-    simulatorResponse = {},
-    processReply = function()
-      ui.connState = nextState
-      ui.connTimer = nowSeconds()
-      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
-    end,
-    errorHandler = function()
-      ui.connState = 5
-      ui.saving = false
-      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
-    end
-  })
 end
 
 local function queueOmpWrite(requestRebuild)
@@ -308,19 +230,24 @@ local function queueOmpWrite(requestRebuild)
 
   queue:add({
     command = EscParametersOmpApi.writeCommand,
-    timeout = 15,
+    timeout = 5,
+    maxRetries = 1,
     payload = EscParametersOmpApi.buildWritePayload(writeData),
     isWrite = true,
     processReply = function(self, buf)
       ui.dirty = false
-      ui.connState = 6
-      ui.connTimer = nowSeconds()
+      ui.saving = false
+      ui.progress = 100
       if requestRebuild and type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
     end,
     errorHandler = function()
       ui.saving = false
+      ui.notice = {
+        title = pageText(ui.i18n, "save_failed_title", "Save Failed"),
+        message = pageText(ui.i18n, "save_failed_message", "ESC did not respond / write timed out.")
+      }
       if requestRebuild and type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
@@ -345,6 +272,9 @@ local function loadFromSession()
     end
     ui.parsedCache = cached.parsedCache
     ui.activeFields = cached.activeFields
+    ui.escModel = cached.escModel
+    ui.escVersion = cached.escVersion
+    ui.escFirmware = cached.escFirmware
     return true
   end
   return false
@@ -429,22 +359,16 @@ local function ensureLoaded()
   ui.dirty = false
   ui.runtime.lastSessionSignature = buildSessionSignature()
   
-  local warningTitle = pageText(nil, "safety_warning_title", "Safety Warning")
-  local warningMsg = pageText(nil, "remove_blades_warning", "Please remove main and tail blades before configuring the ESC!")
-
-  if lvgl then
-    if type(lvgl.message) == "function" then
-      pcall(lvgl.message, {
-        title = warningTitle,
-        message = warningMsg
-      })
-    elseif type(lvgl.alert) == "function" then
-      pcall(lvgl.alert, {
-        title = warningTitle,
-        message = warningMsg
-      })
-    end
-  end
+  -- The safety warning is raised from HERE, which is inside the page build. A native
+  -- lvgl.message raised there cannot be closed by a hardware key: Layer::push gives the
+  -- dialog an empty LVGL group, but the same build goes on creating this page's objects
+  -- afterwards and they land in it, so EXIT is delivered to a widget behind the modal. It
+  -- is now the tool's own notice box, drawn into the page's own child list and dismissed
+  -- by its own button -- which also keeps the tool's run loop reachable while it stands.
+  ui.notice = {
+    title = pageText(nil, "safety_warning_title", "Safety Warning"),
+    message = pageText(nil, "remove_blades_warning", "Please remove main and tail blades before configuring the ESC!")
+  }
   queueOmpRead(false)
 end
 
@@ -473,35 +397,6 @@ function M.wakeup(ctx)
     end
   end
 
-  -- 4way target switch delay timing and post-save cycle
-  if ui.connState == 2 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 2.5 then
-      ui.connState = 3
-      queueOmpRead(false)
-    end
-  elseif ui.connState == 4 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 5.0 then
-      ui.connState = 5
-      queueOmpRead(false)
-    end
-  elseif ui.connState == 6 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 1.0 then
-      ui.connState = 7
-      queuePostSaveReset(100, 8)
-    end
-  elseif ui.connState == 8 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 1.0 then
-      ui.connState = 9
-      queuePostSaveReset(ui.escTarget or 0, 10)
-    end
-  elseif ui.connState == 10 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 0.5 then
-      ui.connState = 5
-      ui.saving = false
-      queueOmpRead(true)
-    end
-  end
-
   if ui.motorConfigRetryPending and ui.motorConfigRetryTimer then
     if nowSeconds() - ui.motorConfigRetryTimer >= 0.5 then
       ui.motorConfigRetryPending = false
@@ -522,8 +417,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueOmpWrite(ctx and ctx.requestRebuild)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -535,8 +430,6 @@ end
 
 function M.onReload(ctx)
   ui.dirty = false
-  ui.connState = 0
-  ui.connTimer = nil
   queueOmpRead(false)
   return true
 end
@@ -554,6 +447,7 @@ function M.build(ctx)
 
   ui.runtime.requestRebuild = ctx and ctx.requestRebuild or nil
   ui.runtime.syncHeaderTitle = ctx and ctx.syncHeaderTitle or nil
+  ui.i18n = ctx and ctx.i18n or nil
 
   local children = ctx.children
   local x = ctx.x
@@ -565,6 +459,21 @@ function M.build(ctx)
   local title = "OMP Configurator"
   if type(ui.runtime.syncHeaderTitle) == "function" then
     ui.runtime.syncHeaderTitle(title, M.getHeaderActions())
+  end
+
+  if ui.notice and LoadingOverlay and type(LoadingOverlay.appendNotice) == "function" then
+    LoadingOverlay.appendNotice(children, {
+      x = x, y = y, w = w, h = h,
+      title = ui.notice.title,
+      message = ui.notice.message,
+      press = function()
+        ui.notice = nil
+        if type(ui.runtime.requestRebuild) == "function" then
+          ui.runtime.requestRebuild()
+        end
+      end
+    })
+    return
   end
 
   if ui.loading or ui.saving then
@@ -583,8 +492,20 @@ function M.build(ctx)
 
   local cursorY = y
   if Controls and type(Controls.appendStaticSectionHeader) == "function" then
-    Controls.appendStaticSectionHeader(children, x, cursorY, w, title)
+    local headerTitle = title
+    if ui.escModel and ui.escModel ~= "" and ui.escModel ~= title then
+      if string.find(string.lower(ui.escModel), string.lower(title), 1, true) then
+        headerTitle = ui.escModel
+      else
+        headerTitle = title .. " - " .. ui.escModel
+      end
+    end
+    Controls.appendStaticSectionHeader(children, x, cursorY, w, headerTitle)
     cursorY = cursorY + (Controls.STATIC_SECTION_H or 50)
+  end
+
+  if Controls and type(Controls.appendEscSubheader) == "function" then
+    cursorY = cursorY + Controls.appendEscSubheader(children, x, cursorY, w, ui.escFirmware, ui.escVersion)
   end
 
   local rowH
@@ -595,7 +516,8 @@ function M.build(ctx)
       { value = 1, label = "ESC 2" }
     }
     local escTargetVal = ui.escTarget or 0
-    rowH = Controls.appendComboSelect(children, x, cursorY, w, "ESC Target", escOptions, escTargetVal, function(val)
+    local targetLabel = pageText(i18n, "esc_target", "ESC Target")
+    rowH = Controls.appendComboSelect(children, x, cursorY, w, targetLabel, escOptions, escTargetVal, function(val)
       local targetVal = tonumber(val) or 0
       if ui.escTarget ~= targetVal then
         ui.escTarget = targetVal
@@ -614,8 +536,13 @@ function M.build(ctx)
     { value = 2, label = "Advanced" },
     { value = 3, label = "Governor" }
   }
-  rowH = Controls.appendComboSelect(children, x, cursorY, w, "Section", sectionOptions, ui.currentSection, function(val)
+  local sectionLabel = pageText(i18n, "esc_section", "Section")
+  rowH = Controls.appendComboSelect(children, x, cursorY, w, sectionLabel, sectionOptions, ui.currentSection, function(val)
     ui.currentSection = val
+    -- The section is the whole of the session signature, and `M.wakeup` compares that signature
+    -- on the next tick. Recording it here means the rebuild requested below is the only one:
+    -- without it the wakeup sees a change nobody else made and asks for a second, identical build.
+    ui.runtime.lastSessionSignature = tostring(ui.currentSection)
     if type(ui.runtime.requestRebuild) == "function" then
       ui.runtime.requestRebuild()
     end
@@ -624,9 +551,6 @@ function M.build(ctx)
 
   local function markDirty()
     ui.dirty = true
-    if type(ui.runtime.requestRebuild) == "function" then
-      ui.runtime.requestRebuild()
-    end
   end
 
   if ui.currentSection == 1 then
@@ -637,7 +561,8 @@ function M.build(ctx)
         { value = 1, label = "7.4V" },
         { value = 2, label = "8.4V" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "BEC Voltage (LV)", lvBecOpts, ui.config.lv_bec_voltage, function(val)
+      local becVoltageLvLabel = pageText(i18n, "esc_bec_voltage_lv", "BEC Voltage (LV)")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, becVoltageLvLabel, lvBecOpts, ui.config.lv_bec_voltage, function(val)
         ui.config.lv_bec_voltage = val
         markDirty()
       end)
@@ -658,7 +583,8 @@ function M.build(ctx)
         { value = 27, label = "11.4V" }, { value = 28, label = "11.6V" }, { value = 29, label = "11.8V" },
         { value = 30, label = "12.0V" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "BEC Voltage (HV)", hvBecOpts, ui.config.hv_bec_voltage, function(val)
+      local becVoltageHvLabel = pageText(i18n, "esc_bec_voltage_hv", "BEC Voltage (HV)")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, becVoltageHvLabel, hvBecOpts, ui.config.hv_bec_voltage, function(val)
         ui.config.hv_bec_voltage = val
         markDirty()
       end)
@@ -670,7 +596,8 @@ function M.build(ctx)
         { value = 0, label = "CW" },
         { value = 1, label = "CCW" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Motor Direction", dirOpts, ui.config.motor_direction, function(val)
+      local motorDirectionLabel = pageText(i18n, "esc_motor_direction", "Motor Direction")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, motorDirectionLabel, dirOpts, ui.config.motor_direction, function(val)
         ui.config.motor_direction = val
         markDirty()
       end)
@@ -683,7 +610,8 @@ function M.build(ctx)
         { value = 1, label = "Medium" },
         { value = 2, label = "High" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Startup Power", spOpts, ui.config.startup_power, function(val)
+      local startupPowerLabel = pageText(i18n, "esc_startup_power", "Startup Power")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, startupPowerLabel, spOpts, ui.config.startup_power, function(val)
         ui.config.startup_power = val
         markDirty()
       end)
@@ -703,7 +631,8 @@ function M.build(ctx)
         { value = 8, label = "Pink" },
         { value = 9, label = "White" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "LED Color", colorOpts, ui.config.led_color, function(val)
+      local ledColorLabel = pageText(i18n, "esc_led_color", "LED Color")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, ledColorLabel, colorOpts, ui.config.led_color, function(val)
         ui.config.led_color = val
         markDirty()
       end)
@@ -715,7 +644,8 @@ function M.build(ctx)
         { value = 0, label = "On" },
         { value = 1, label = "Off" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Smart Fan", fanOpts, ui.config.smart_fan, function(val)
+      local smartFanLabel = pageText(i18n, "esc_smart_fan", "Smart Fan")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, smartFanLabel, fanOpts, ui.config.smart_fan, function(val)
         ui.config.smart_fan = val
         markDirty()
       end)
@@ -731,7 +661,8 @@ function M.build(ctx)
         { value = 2, label = "Medium" },
         { value = 3, label = "High" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Motor Timing", timingOpts, ui.config.timing, function(val)
+      local motorTimingLabel = pageText(i18n, "esc_motor_timing", "Motor Timing")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, motorTimingLabel, timingOpts, ui.config.timing, function(val)
         ui.config.timing = val
         markDirty()
       end)
@@ -745,7 +676,8 @@ function M.build(ctx)
         { value = 2, label = "Slow" },
         { value = 3, label = "Very Slow" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Acceleration", accelOpts, ui.config.acceleration, function(val)
+      local accelerationLabel = pageText(i18n, "esc_acceleration", "Acceleration")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, accelerationLabel, accelOpts, ui.config.acceleration, function(val)
         ui.config.acceleration = val
         markDirty()
       end)
@@ -753,7 +685,7 @@ function M.build(ctx)
     end
 
     if isFieldActive(14) then
-      rowH = Controls.appendNumberField(children, x, cursorY, w, "Brake Force", {
+      rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_brake_force", "Brake Force"), {
         min = 0, max = 100, step = 1, suffix = "%",
         get = function() return ui.config.brake_force end,
         set = function(val)
@@ -769,7 +701,8 @@ function M.build(ctx)
         { value = 0, label = "On" },
         { value = 1, label = "Off" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Synchronous Rectification", srOpts, ui.config.sr_function, function(val)
+      local synchronousRectificationLabel = pageText(i18n, "esc_synchronous_rectification", "Synchronous Rectification")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, synchronousRectificationLabel, srOpts, ui.config.sr_function, function(val)
         ui.config.sr_function = val
         markDirty()
       end)
@@ -777,7 +710,7 @@ function M.build(ctx)
     end
 
     if isFieldActive(16) then
-      rowH = Controls.appendNumberField(children, x, cursorY, w, "Capacity Correction", {
+      rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_capacity_correction", "Capacity Correction"), {
         min = 0, max = 20, step = 1,
         display = function(val) return tostring(val - 10) .. "%" end,
         get = function() return ui.config.capacity_correction end,
@@ -794,7 +727,7 @@ function M.build(ctx)
         { value = 0, label = "Off" },
         { value = 1, label = "90s" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Auto Restart Time", restartOpts, ui.config.auto_restart_time, function(val)
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, pageText(i18n, "esc_auto_restart_time", "Auto Restart Time"), restartOpts, ui.config.auto_restart_time, function(val)
         ui.config.auto_restart_time = val
         markDirty()
       end)
@@ -812,7 +745,8 @@ function M.build(ctx)
         { value = 5, label = "3.6V" },
         { value = 6, label = "3.8V" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Cell Cutoff", cutoffOpts, ui.config.cell_cutoff, function(val)
+      local cellCutoffLabel = pageText(i18n, "esc_cell_cutoff", "Cell Cutoff")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, cellCutoffLabel, cutoffOpts, ui.config.cell_cutoff, function(val)
         ui.config.cell_cutoff = val
         markDirty()
       end)
@@ -827,15 +761,16 @@ function M.build(ctx)
         { value = 1, label = "External Gov" },
         { value = 2, label = "Flybarless Gov" }
       }
-      rowH = Controls.appendComboSelect(children, x, cursorY, w, "Governor Mode", govOpts, ui.config.governor, function(val)
+      local governorModeLabel = pageText(i18n, "esc_governor_mode", "Governor Mode")
+      rowH = Controls.appendComboSelect(children, x, cursorY, w, governorModeLabel, govOpts, ui.config.governor, function(val)
         ui.config.governor = val
         markDirty()
       end)
       cursorY = cursorY + rowH
     end
 
-    if isFieldActive(6) then
-      rowH = Controls.appendNumberField(children, x, cursorY, w, "Governor P Gain", {
+    if isFieldActive(7) then
+      rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_governor_p_gain", "Governor P Gain"), {
         min = 1, max = 10, step = 1,
         get = function() return ui.config.gov_p end,
         set = function(val)
@@ -846,8 +781,8 @@ function M.build(ctx)
       cursorY = cursorY + rowH
     end
 
-    if isFieldActive(7) then
-      rowH = Controls.appendNumberField(children, x, cursorY, w, "Governor I Gain", {
+    if isFieldActive(8) then
+      rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_governor_i_gain", "Governor I Gain"), {
         min = 1, max = 10, step = 1,
         get = function() return ui.config.gov_i end,
         set = function(val)
@@ -859,7 +794,7 @@ function M.build(ctx)
     end
 
     if isFieldActive(17) then
-      rowH = Controls.appendNumberField(children, x, cursorY, w, "Motor Poles", {
+      rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_motor_poles", "Motor Poles"), {
         min = 1, max = 55, step = 1,
         get = function() return ui.config.motor_poles end,
         set = function(val)
@@ -871,36 +806,20 @@ function M.build(ctx)
     end
   end
 
-  if ui.dirty then
-    children[#children + 1] = {
-      type = "label",
-      x = x + 16, y = cursorY + 10,
-      text = pageText(i18n, "unsaved_changes", "Unsaved changes"),
-      color = COLOR_THEME_SECONDARY1,
-      font = SMLSIZE
-    }
-  end
+  -- The label is built once and reads the flag itself, so a change that sets the flag
+  -- does not have to replace the scene to show it. The text is resolved here rather
+  -- than inside the closure: the closure runs on every refresh, the lookup need not.
+  local unsavedText = pageText(i18n, "unsaved_changes", "Unsaved changes")
+  children[#children + 1] = {
+    type = "label",
+    x = x + 16, y = cursorY + 10,
+    text = function() return ui.dirty and unsavedText or "" end,
+    color = COLOR_THEME_SECONDARY1,
+    font = SMLSIZE
+  }
 end
 
 function M.onClose()
-  local FwdProgApi = loadModule("tasks/msp/api/4wif_esc_fwd_prog.lua")
-  if FwdProgApi and MspRuntime and type(MspRuntime.getState) == "function" then
-    local mspState = MspRuntime.getState()
-    local queue = mspState and mspState.queue
-    if queue then
-      queue:add({
-        command = FwdProgApi.writeCommand,
-        payload = FwdProgApi.buildWritePayload({ target = 100 }),
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function() end,
-        errorHandler = function() end
-      })
-    end
-  end
-
-  ui.connState = nil
-  ui.connTimer = nil
   ui.escTarget = nil
   ui.motorCount = nil
   ui.motorConfigRetryPending = nil

@@ -326,8 +326,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueAccWrite()
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -336,8 +336,9 @@ function M.onSave(ctx)
   end
 
   ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
+  if ctx and type(ctx.reportSave) == "function" then
+    ctx.reportSave({
+      ok = true,
       title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
       message = pageText(ctx and ctx.i18n, "saved_message", "Accelerometer trims saved")
     })
@@ -410,8 +411,9 @@ function M.onStar(ctx)
                 end
                 
                 -- Show calibrated alert
-                if lvgl and lvgl.alert then
-                  lvgl.alert({
+                if ctx and type(ctx.reportSave) == "function" then
+                  ctx.reportSave({
+                    ok = true,
                     title = pageText(i18n, "calibrated_title", "Calibrated"),
                     message = pageText(i18n, "calibrated_message", "Accelerometer calibrated successfully and saved to EEPROM.")
                   })
@@ -449,9 +451,6 @@ function M.onStar(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

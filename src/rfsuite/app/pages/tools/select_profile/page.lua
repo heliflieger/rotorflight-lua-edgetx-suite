@@ -13,6 +13,7 @@ local Common = nil
 local MspRuntime = nil
 local Controls = nil
 local Sensors = nil
+local Profile = nil
 local t = nil
 
 local state = {
@@ -35,7 +36,7 @@ local state = {
 local function logMsg(msg, level)
   local rf = _G.rfsuite
   if rf and rf.Log and type(rf.Log.emit) == "function" then
-    rf.Log.emit("rfsuite.profile", msg, level or "debug", true)
+    rf.Log.emit("rfsuite.profile", msg, level or "debug")
   end
 end
 
@@ -57,6 +58,7 @@ local function ensureDeps()
   if not MspRuntime then MspRuntime = loadModule("tasks/msp/runtime.lua") end
   if not Controls then Controls = loadModule("ui/controls.lua") end
   if not Sensors then Sensors = loadModule("lib/sensors.lua") end
+  if not Profile then Profile = loadModule("lib/profile.lua") end
   if not t then t = Common and Common.pageT("diagnostics_profile_select") or nil end
 end
 
@@ -64,6 +66,11 @@ local function pageText(i18n, key, fallback)
   local obj = i18n or state.i18n
   if t then return t(obj, key, fallback) end
   return fallback
+end
+
+local function getSession()
+  local root = _G and _G.rfsuite
+  return root and root.session or nil
 end
 
 local function syncFromSensors()
@@ -79,6 +86,12 @@ local function syncFromSensors()
     local pIdx = p - 1
     if pIdx ~= state.pidProfileIndex then
       state.pidProfileIndex = pIdx
+      if Profile and type(Profile.setSessionPidProfile) == "function" then
+        Profile.setSessionPidProfile(pIdx)
+      else
+        local session = getSession()
+        if session then session.activeProfile = pIdx end
+      end
       if not state.isEditing and not state.isSaving and state.cooldownUntil == 0 then
         state.uiPidProfileIndex = pIdx
         changed = true
@@ -90,6 +103,12 @@ local function syncFromSensors()
     local rIdx = r - 1
     if rIdx ~= state.rateProfileIndex then
       state.rateProfileIndex = rIdx
+      if Profile and type(Profile.setSessionRateProfile) == "function" then
+        Profile.setSessionRateProfile(rIdx)
+      else
+        local session = getSession()
+        if session then session.activeRateProfile = rIdx end
+      end
       if not state.isEditing and not state.isSaving and state.cooldownUntil == 0 then
         state.uiRateProfileIndex = rIdx
         changed = true
@@ -123,14 +142,29 @@ local function requestInitialData()
     simulatorResponse = statusApi.simulatorResponse,
     processReply = function(_, buf)
       state.pendingRequest = false
-      local res = statusApi.parse(buf)
-      local parsed = res and res.parsed
+      local parsed = statusApi.parse(buf)
       if parsed then
         state.pidProfileIndex = parsed.current_pid_profile_index
         state.rateProfileIndex = parsed.current_control_rate_profile_index
         state.uiPidProfileIndex = state.pidProfileIndex
         state.uiRateProfileIndex = state.rateProfileIndex
         state.loaded = true
+        if Profile and type(Profile.setSessionPidProfile) == "function" then
+          Profile.setSessionPidProfile(parsed.current_pid_profile_index)
+          Profile.setSessionRateProfile(parsed.current_control_rate_profile_index)
+        else
+          local session = getSession()
+          if session then
+            session.activeProfile = parsed.current_pid_profile_index
+            session.activeRateProfile = parsed.current_control_rate_profile_index
+          end
+        end
+        local session = getSession()
+        if session then
+          session.pid_profile_count = parsed.pid_profile_count
+          session.control_rate_profile_count = parsed.control_rate_profile_count
+          session.status = parsed
+        end
         logMsg("Initial state loaded: PID=" .. tostring(state.pidProfileIndex+1) .. " Rate=" .. tostring(state.rateProfileIndex+1))
         if type(state.requestRebuild) == "function" then state.requestRebuild() end
       end
@@ -198,6 +232,16 @@ function M.onSave(ctx)
           -- Sync internal baseline
           state.pidProfileIndex = state.uiPidProfileIndex
           state.rateProfileIndex = state.uiRateProfileIndex
+          if Profile and type(Profile.setSessionPidProfile) == "function" then
+            Profile.setSessionPidProfile(state.uiPidProfileIndex)
+            Profile.setSessionRateProfile(state.uiRateProfileIndex)
+          else
+            local session = getSession()
+            if session then
+              session.activeProfile = state.uiPidProfileIndex
+              session.activeRateProfile = state.uiRateProfileIndex
+            end
+          end
           
           -- Request 101 once to confirm FC state
           requestInitialData()
@@ -314,6 +358,7 @@ function M.closePage()
   MspRuntime = nil
   Controls = nil
   Sensors = nil
+  Profile = nil
   t = nil
 end
 

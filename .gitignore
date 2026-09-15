@@ -7,4 +7,5 @@ scratch/*
 __pycache__/
 *.pyc
 *.spec
+bin/package/*.zip
 

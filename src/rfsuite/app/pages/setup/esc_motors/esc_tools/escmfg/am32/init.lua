@@ -5,14 +5,17 @@
 
 local toolName = "AM32"
 
-local function getPageValue(page, index) return page[index] end
+local function getPageValue(page, index)
+    if type(page) ~= "table" then return nil end
+    return page[index]
+end
 
 local function getText(buffer, st, en)
-
+    if type(buffer) ~= "table" then return "" end
     local tt = {}
     for i = st, en do
         local v = buffer[i]
-        if v == 0 then break end
+        if v == nil or v == 0 then break end
         table.insert(tt, string.char(v))
     end
     return table.concat(tt)
@@ -20,24 +23,22 @@ end
 
 -- required by framework
 local function getEscModel(self)
-
     -- we dont have a name for the am32, so we just return the tool name as the model
-    return "AM32 "
-
+    return toolName
 end
-
 
 -- required by framework
 local function getEscVersion(self)
-    return " "
+    return ""
 end
 
 -- required by framework
 local function getEscFirmware(self)
-
-   local version = "SW" .. getPageValue(self, 6) .. "." .. getPageValue(self, 7)
-   return version
-
+    local major = getPageValue(self, 6)
+    local minor = getPageValue(self, 7)
+    if major == nil or minor == nil then return "" end
+    local version = "SW" .. major .. "." .. minor
+    return version
 end
 
 return {

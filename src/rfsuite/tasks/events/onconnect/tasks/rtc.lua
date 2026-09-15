@@ -5,6 +5,7 @@ local done = false
 local requestSent = false
 local RtcApi = nil
 local Log = nil
+local MspRuntime = nil
 
 local function loadModule(path)
   local fullPath = "/SCRIPTS/TOOLS/rfsuite-core/" .. path
@@ -29,7 +30,10 @@ function M.wakeup(args)
   if not RtcApi then
     RtcApi = loadModule("tasks/msp/api/rtc.lua")
   end
-  local msp = loadModule("tasks/msp/runtime.lua")
+  if MspRuntime == nil then
+    MspRuntime = loadModule("tasks/msp/runtime.lua") or false
+  end
+  local msp = MspRuntime or nil
   if not msp or not RtcApi or type(RtcApi.buildWritePayload) ~= "function" then 
     done = true
     return 
@@ -70,7 +74,7 @@ function M.wakeup(args)
     if ok and type(ts) == "number" and ts > 0 then
       unixSecs = ts
       if type(Log) == "table" and type(Log.emit) == "function" then
-        pcall(Log.emit, "rfsuite.tasks.rtc", "Using getRtcTime() = " .. tostring(unixSecs), "debug", true)
+        pcall(Log.emit, "rfsuite.tasks.rtc", "Using getRtcTime() = " .. tostring(unixSecs), "debug")
       end
     end
   end
@@ -78,7 +82,7 @@ function M.wakeup(args)
   if not unixSecs then
     if type(getDateTime) ~= "function" then
       if type(Log) == "table" and type(Log.emit) == "function" then
-        pcall(Log.emit, "rfsuite.tasks.rtc", "Neither getRtcTime nor getDateTime available, skipping RTC sync", "warn", true)
+        pcall(Log.emit, "rfsuite.tasks.rtc", "Neither getRtcTime nor getDateTime available, skipping RTC sync", "warn")
       end
       done = true
       return
@@ -90,7 +94,7 @@ function M.wakeup(args)
     end
     unixSecs = dateToUnix(dt.year, dt.mon, dt.day, dt.hour, dt.min, dt.sec)
     if type(Log) == "table" and type(Log.emit) == "function" then
-      pcall(Log.emit, "rfsuite.tasks.rtc", "Using getDateTime() converted to Unix = " .. tostring(unixSecs), "debug", true)
+      pcall(Log.emit, "rfsuite.tasks.rtc", "Using getDateTime() converted to Unix = " .. tostring(unixSecs), "debug")
     end
   end
 
@@ -102,7 +106,7 @@ function M.wakeup(args)
   local payload = RtcApi.buildWritePayload(payloadData)
 
   if type(Log) == "table" and type(Log.emit) == "function" then
-    pcall(Log.emit, "rfsuite.tasks.rtc", "MSP request for RTC sync (cmd=" .. tostring(RtcApi.writeCommand) .. ") via queue", "debug", true)
+    pcall(Log.emit, "rfsuite.tasks.rtc", "MSP request for RTC sync (cmd=" .. tostring(RtcApi.writeCommand) .. ") via queue", "debug")
   end
 
   mspState.queue:add({
@@ -114,13 +118,20 @@ function M.wakeup(args)
     processReply = function(self, buf)
       done = true
       if type(Log) == "table" and type(Log.emit) == "function" then
-        pcall(Log.emit, "rfsuite.tasks.rtc", "RTC successfully synced", "info", true)
+        pcall(Log.emit, "rfsuite.tasks.rtc", "RTC successfully synced", "info")
       end
     end,
-    errorHandler = function()
+    errorHandler = function(msg, reason)
+      -- "cleared" is the queue dropping this request, not the flight controller refusing it:
+      -- nothing was sent, so the request is still owed. Leaving the task incomplete with its latch
+      -- open is what lets the runner ask for it again on a later pass.
+      if reason == "cleared" then
+        requestSent = false
+        return
+      end
       done = true
       if type(Log) == "table" and type(Log.emit) == "function" then 
-        pcall(Log.emit, "rfsuite.tasks.rtc", "RTC sync failed", "warn", true) 
+        pcall(Log.emit, "rfsuite.tasks.rtc", "RTC sync failed", "warn") 
       end
     end
   })

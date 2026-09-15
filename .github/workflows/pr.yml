@@ -1,0 +1,128 @@
+name: Create rfsuite-lua-edgetx ZIP on PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  create-zip:
+    name: Build PR ZIP (${{ matrix.lang }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # keep in sync with push.yml / release.yml / snapshot.yml
+        lang: [en, de]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set build variables (PR version)
+        run: |
+          PR_NUMBER='${{ github.event.pull_request.number }}'
+          echo "GIT_VER=PR-${PR_NUMBER}" >> $GITHUB_ENV
+
+      - name: Create rfsuite-radio-install-v${{ env.GIT_VER }}_${{ matrix.lang }}.zip
+        run: |
+          python bin/package/build_package.py \
+            --lang '${{ matrix.lang }}' \
+            --artifact-version '${{ env.GIT_VER }}' \
+            --output-dir .
+
+      - name: Upload per-locale ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfsuite-radio-install-v${{ env.GIT_VER }}_${{ matrix.lang }}
+          path: rfsuite-radio-install-v${{ env.GIT_VER }}_${{ matrix.lang }}.zip
+          if-no-files-found: error
+
+  instruction-budget:
+    name: Instruction budget
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.3
+        run: sudo apt-get update && sudo apt-get install -y lua5.3
+
+      - name: Prove the gate can go red
+        run: lua5.3 bin/accounting/measure.lua --self-test
+
+      - name: Account instructions per pass
+        run: lua5.3 bin/accounting/measure.lua --check
+
+  i18n-precompiler:
+    name: i18n precompiler
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the checks can go red
+        run: python .vscode/scripts/test_precompile_i18n.py --self-test
+
+      - name: Precompile one page and compare
+        run: python .vscode/scripts/test_precompile_i18n.py
+
+  documentation-rule:
+    name: Documentation rule
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # the check diffs against the base commit, which a shallow clone does not carry
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the check can go red
+        run: python bin/docs/verify_documentation_rule.py --self-test
+
+      - name: Write the pull request body to a file
+        # through the environment, never interpolated into the script: a pull request
+        # body is text anybody can write
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$PR_BODY" > pr-body.txt
+
+      - name: Check the documentation rule
+        run: |
+          python bin/docs/verify_documentation_rule.py             --base '${{ github.event.pull_request.base.sha }}'             --body-file pr-body.txt
+
+  translation-coverage:
+    name: Translation coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the check can go red
+        run: python bin/i18n/check_translations.py --self-test
+
+      - name: Report the strings a locale build cannot translate
+        run: python bin/i18n/check_translations.py

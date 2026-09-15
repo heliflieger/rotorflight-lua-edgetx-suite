@@ -15,11 +15,19 @@ local Common = nil
 --   type "bool"   → stored/restored as boolean, default must be true/false
 --   type "number" → stored/restored via tonumber(), default must be a number
 
+-- The schema is what is loaded, defaulted and SAVED. A control the page draws whose key is not
+-- in here is read from nothing, written to nothing and lost when the page closes -- which is
+-- what happened to `save_confirm`: it is in SAFETY_ITEMS below, so it is drawn and it can be
+-- toggled, and neither `copyFromPrefs` nor `onSave` ever touched it, because both walk this
+-- table. The comment those two carry -- "no manual field list" -- is true of them and was not
+-- true of the page, because the page had a second list.
 local CONFIG_SCHEMA = {
-  { key = "iconsize",                     type = "number", default = 2     },
-  { key = "syncname",                     type = "bool",   default = false  },
+  { key = "save_confirm",                 type = "bool",   default = true   },
   { key = "save_armed_warning",           type = "bool",   default = true   },
   { key = "reload_confirm",               type = "bool",   default = true   },
+  { key = "preview_setup_wizard",         type = "bool",   default = false  },
+  { key = "preview_flight_log",           type = "bool",   default = false  },
+  { key = "preview_inflight_tuning",      type = "bool",   default = false  },
   { key = "developer_tools",              type = "bool",   default = false  },
 }
 
@@ -36,9 +44,10 @@ end
 
 local ui = {
   loaded = false,
+  dirty = false,
   sections = {
     safety      = true,
-    integration = false,
+    preview     = false,
     development = false,
   },
   config = buildDefaultConfig()
@@ -49,6 +58,7 @@ ui.runtime = nil
 -- ─── Helpers ─────────────────────────────────────────────────────────────────
 
 local t = nil
+local pageI18n = nil
 
 local function ensureDeps()
   if not Common then
@@ -122,9 +132,9 @@ end
 -- Signature: (cursorY, children, x, w, i18n, requestRebuild) -> newCursorY
 
 local SAFETY_ITEMS = {
-  { key = "save_confirm",                 labelKey = "save_confirm",                 fallback = "Bestätigen beim Speichern" },
-  { key = "save_armed_warning",           labelKey = "save_armed_warning",           fallback = "Warnung beim Speichern (armed)" },
-  { key = "reload_confirm",               labelKey = "reload_confirm",               fallback = "Bestätigen beim Neuladen" },
+  { key = "save_confirm",                 labelKey = "save_confirm",                 fallback = "Confirm on Save" },
+  { key = "save_armed_warning",           labelKey = "save_armed_warning",           fallback = "Show Disarm Warning on Save/Reload" },
+  { key = "reload_confirm",               labelKey = "reload_confirm",               fallback = "Confirm on Reload" },
 }
 
 local function buildSafety(cursorY, children, x, w, i18n)
@@ -139,19 +149,114 @@ local function buildSafety(cursorY, children, x, w, i18n)
   return cursorY
 end
 
-local function buildIntegration(cursorY, children, x, w, i18n)
-  cursorY = cursorY + Controls.appendRadioSwitch(children, x, cursorY, w,
-    t(i18n, "sync_model_name", "Modellname synchronisieren"),
-    ui.runtime.getBoolGetter("syncname"),
-    ui.runtime.getBoolSetter("syncname")
-  )
+-- ─── Preview features ────────────────────────────────────────────────────────
+-- A preview feature is in the tree but not finished. It stays hidden until it is switched on
+-- here, one switch per feature and no master switch, so that what is unfinished is only seen by
+-- somebody who has said they want to see it. Turning one on asks once; turning it off does not.
+--
+-- To put a feature behind this: one entry below, one key in CONFIG_SCHEMA and in the preference
+-- defaults, the matching condition published in onSave, and `visibleWhen` on its menu entry.
 
+local PREVIEW_ITEMS = {
+  {
+    key             = "preview_setup_wizard",
+    labelKey        = "preview_setup_wizard",
+    labelFallback   = "Setup Assistant",
+    confirmKey      = "preview_confirm_setup_wizard",
+    confirmFallback = "The setup assistant is not finished. Its screens and their order can still change, and it can write to "
+      .. "the flight controller. Check what it has written before you fly. Show it anyway?"
+  },
+  {
+    key             = "preview_flight_log",
+    labelKey        = "preview_flight_log",
+    labelFallback   = "Flight Log",
+    confirmKey      = "preview_confirm_flight_log",
+    confirmFallback = "The flight log is not finished. What it records, and how the page presents it, can still change, and "
+      .. "it keeps a file of its own on the card. Show it anyway?"
+  },
+  {
+    key             = "preview_inflight_tuning",
+    labelKey        = "preview_inflight_tuning",
+    labelFallback   = "In-flight tuning",
+    confirmKey      = "preview_confirm_inflight_tuning",
+    confirmFallback = "Not finished, and it changes the flight controller's parameters in flight. Show it anyway?"
+  },
+}
+
+local ConfirmDialog = nil
+local confirmDialogTried = false
+
+local function getConfirmDialog()
+  if confirmDialogTried then return ConfirmDialog end
+  confirmDialogTried = true
+  local ok, mod = pcall(loadModule, "ui/confirm_dialog.lua")
+  if ok and type(mod) == "table" and type(mod.show) == "function" then
+    ConfirmDialog = mod
+  end
+  return ConfirmDialog
+end
+
+local previewSetters = {}
+
+-- The switch draws itself from the getter, so a refused acknowledgement needs nothing written
+-- back: the value never moved, and a repaint puts the switch where the value still is.
+--
+-- The setter is cached for the module's lifetime while ui.runtime is rebuilt on every visit, so
+-- it resolves the runtime when it runs rather than closing over the one that existed when it was
+-- created -- otherwise a page that has been closed and reopened would mark an abandoned runtime
+-- dirty and ask a dead rebuild hook for the repaint.
+local function getPreviewSetter(item)
+  local setter = previewSetters[item.key]
+  if setter then return setter end
+
+  setter = function(nextVal)
+    local apply = ui.runtime.getBoolSetter(item.key)
+    if nextVal ~= true then
+      apply(false)
+      return
+    end
+    if ui.config[item.key] == true then
+      return
+    end
+
+    local dialog = getConfirmDialog()
+    if dialog then
+      local ok, shown = pcall(dialog.show, {
+        title = t(pageI18n, item.labelKey, item.labelFallback),
+        message = t(pageI18n, item.confirmKey, item.confirmFallback),
+        onConfirm = function() apply(true) end,
+        onCancel = function()
+          local rebuild = ui.runtime and ui.runtime.requestRebuild
+          if rebuild then rebuild() end
+        end,
+        onFallback = function() apply(true) end
+      })
+      if ok and shown == true then return end
+    end
+
+    -- No confirm UI could be put up. The switch then does what it was asked to do: refusing it
+    -- because the acknowledgement cannot be shown would leave the feature unreachable.
+    apply(true)
+  end
+
+  previewSetters[item.key] = setter
+  return setter
+end
+
+local function buildPreview(cursorY, children, x, w, i18n)
+  for _, item in ipairs(PREVIEW_ITEMS) do
+    cursorY = cursorY + Controls.appendRadioSwitch(children, x, cursorY, w,
+      t(i18n, item.labelKey, item.labelFallback),
+      ui.runtime.getBoolGetter(item.key),
+      getPreviewSetter(item)
+    )
+  end
   return cursorY
 end
 
 local function buildDevelopment(cursorY, children, x, w, i18n)
   cursorY = cursorY + Controls.appendRadioSwitch(children, x, cursorY, w,
-    t(i18n, "developer_tools", "Entwickler Tools"),
+    t(i18n, "developer_tools", "Developer Tools"),
     ui.runtime.getBoolGetter("developer_tools"),
     ui.runtime.getBoolSetter("developer_tools")
   )
@@ -162,9 +267,9 @@ end
 -- Add new sections here — one entry, one builder function above, done.
 
 local SECTIONS = {
-  { key = "safety",      titleKey = "section_safety",      titleFallback = "Sicherheit & Prompts", build = buildSafety      },
-  { key = "integration", titleKey = "section_integration", titleFallback = "Integration",         build = buildIntegration },
-  { key = "development", titleKey = "section_development", titleFallback = "Entwicklung",         build = buildDevelopment },
+  { key = "safety",      titleKey = "section_safety",      titleFallback = "Safety & Prompts", build = buildSafety      },
+  { key = "preview",     titleKey = "section_preview",     titleFallback = "Preview",          build = buildPreview     },
+  { key = "development", titleKey = "section_development", titleFallback = "Development",      build = buildDevelopment },
 }
 
 -- ─── Module API ──────────────────────────────────────────────────────────────
@@ -174,13 +279,10 @@ function M.getHeaderActions()
   return { save = true, help = true }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
-
 function M.onReload(ctx)
   ensureDeps()
   copyFromPrefs(ctx.preferences)
+  ui.dirty = false
 end
 
 function M.onSave(ctx)
@@ -194,15 +296,19 @@ function M.onSave(ctx)
 
   local ok, err = ctx.savePreferences()
   if ok then
+    ui.dirty = false
     if ctx.menu and ctx.menu.setCondition then
       ctx.menu.setCondition("developerTools", ui.config.developer_tools == true)
+      ctx.menu.setCondition("previewSetupWizard", ui.config.preview_setup_wizard == true)
+      ctx.menu.setCondition("previewFlightLog", ui.config.preview_flight_log == true)
+      ctx.menu.setCondition("previewInflightTuning", ui.config.preview_inflight_tuning == true)
     end
-    if lvgl and lvgl.alert then
-      lvgl.alert({ title = t(ctx.i18n, "saved_title", "Gespeichert"), message = t(ctx.i18n, "saved_message", "Einstellungen gespeichert") })
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({ ok = true, title = t(ctx.i18n, "saved_title", "Saved"), message = t(ctx.i18n, "saved_message", "Settings saved") })
     end
   else
-    if lvgl and lvgl.alert then
-      lvgl.alert({ title = t(ctx.i18n, "save_error_title", "Fehler"), message = t(ctx.i18n, "save_error_message", "Speichern fehlgeschlagen") .. ": " .. tostring(err or "io") })
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({ title = t(ctx.i18n, "save_error_title", "Error"), message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io") })
     end
   end
 end
@@ -214,6 +320,7 @@ function M.build(ctx)
   local children       = ctx.children
   local x, w          = ctx.x, ctx.w
   local i18n           = ctx.i18n
+  pageI18n             = i18n
   ui.runtime.setRequestRebuild(ctx.requestRebuild)
   local cursorY        = ctx.y
 
@@ -235,12 +342,11 @@ function M.build(ctx)
 end
 
 function M.onClose()
-  Common.resetPageState(ui, {
-    tablesToWipe = { "sections" }
-  })
+  Common.resetPageState(ui)
   Controls = nil
   Common = nil
   t = nil
+  pageI18n = nil
 end
 
 return M

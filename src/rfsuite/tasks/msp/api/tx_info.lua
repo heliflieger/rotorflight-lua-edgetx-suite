@@ -22,7 +22,7 @@ Api.simulatorResponse = SIM_RESPONSE
 
 function Api.parse(buf)
   if type(buf) ~= "table" then return nil end
-  return { parsed = { rssi_source = tonumber(buf[1]) or 0, rtc_datetime_set = tonumber(buf[2]) or 0 } }
+  return { rssi_source = tonumber(buf[1]) or 0, rtc_datetime_set = tonumber(buf[2]) or 0 }
 end
 
 function Api.buildWritePayload(data)

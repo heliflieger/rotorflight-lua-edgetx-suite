@@ -1,32 +1,25 @@
 local Wrapper = {}
 
-local function loadModule(path, globalKey)
-  if globalKey and _G[globalKey] then return _G[globalKey] end
-  
-  local chunk = loadScript(path, "t")
-  if not chunk then return nil end
-  
-  local ok, mod = pcall(chunk)
-  if ok and type(mod) == "table" then
-    if globalKey then _G[globalKey] = mod end
-    return mod
+local function requireModule(path)
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    return _G.rfsuite.require(path)
+  end
+  local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(fullPath, mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" then return mod end
   end
   return nil
 end
 
-local function getUtils()
-  return loadModule("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/objects/common.lua", "__rfsuiteObjectsCommonModule")
-end
+local utils = requireModule("widgets/dashboard/objects/common.lua")
+local themeCommon = requireModule("widgets/dashboard/themes/default/common.lua")
 
-local function getThemeCommon()
-  return loadModule("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/default/common.lua", "__rfsuiteThemeDefaultCommonModule")
-end
-
-local folder = "/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/objects/text/"
+local folder = "widgets/dashboard/objects/text/"
 local renders = {}
 local missingRenders = {}
-local cachedUtils = nil
-local cachedThemeCommon = nil
 
 local function getRender(subtype)
   local key = subtype or "telemetry"
@@ -38,8 +31,8 @@ local function getRender(subtype)
     missingRenders[key] = true
     return nil
   end
-  
-  local mod = loadModule(folder .. key .. ".lua", "__rfsuite_text_render_" .. key)
+
+  local mod = requireModule(folder .. key .. ".lua")
   if mod then
     renders[key] = mod
     return mod
@@ -49,29 +42,50 @@ local function getRender(subtype)
 end
 
 function Wrapper.render(nodes, rect, box, state)
-  local utils = cachedUtils or getUtils()
-  if utils then
-    cachedUtils = utils
+  if not utils then
+    utils = requireModule("widgets/dashboard/objects/common.lua")
   end
+  if not utils then return end
 
-  local themeCommon = cachedThemeCommon or getThemeCommon()
-  if themeCommon then
-    cachedThemeCommon = themeCommon
-  end
-
-  if not utils or not themeCommon then return end
-  
   utils.drawContainer(nodes, rect, box, state)
-  
+
   local render = getRender(box and box.subtype)
   if render and type(render.render) == "function" then
-    local ok, err = pcall(render.render, nodes, rect, box, state, themeCommon, utils)
-    if not ok then
-      if type(err) == "string" and string.find(err, "CPU limit", 1, true) then
-        return
-      end
-      error(err)
+    if not themeCommon then
+      themeCommon = requireModule("widgets/dashboard/themes/default/common.lua")
     end
+    if themeCommon then
+      render.render(nodes, rect, box, state, themeCommon, utils)
+    end
+  else
+    local lastVal = nil
+    local cachedText = nil
+    local textGetter = function()
+      local v = (box and type(box.value) == "function") and box.value(box, state) or (box and box.value or "--")
+      if v == lastVal and cachedText ~= nil then
+        return cachedText
+      end
+      lastVal = v
+      cachedText = tostring(v)
+      return cachedText
+    end
+    local colorRef = (utils and type(utils.staticTextColor) == "function") and utils.staticTextColor(box, state, WHITE) or nil
+    if colorRef == nil then
+      colorRef = function()
+        local v = (box and type(box.value) == "function") and box.value(box, state) or (box and box.value)
+        if utils and type(utils.resolveTextColor) == "function" then
+          return utils.resolveTextColor(box, state, WHITE, v)
+        end
+        local c = (box and type(box.textcolor) == "function") and box.textcolor(box, state) or (box and box.textcolor)
+        return (c ~= nil) and c or WHITE
+      end
+    end
+    local align = (box and box.valuealign) or (box and box.titlealign) or CENTER
+    local fontGetter = function()
+      local f = (box and type(box.font) == "function") and box.font(box, state) or (box and box.font or MIDSIZE)
+      return f
+    end
+    utils.pushLabel(nodes, rect.x + 4, utils.defaultValueY(rect, box), rect.w - 8, textGetter, colorRef, align, fontGetter)
   end
 end
 

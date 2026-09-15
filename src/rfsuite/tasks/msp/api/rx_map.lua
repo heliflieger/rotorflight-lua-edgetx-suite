@@ -21,7 +21,7 @@ function Api.parse(buf)
   for i = 1, 8 do
     parsed[FIELD_SPEC[i][1]] = tonumber(buf[i]) or 0
   end
-  return { parsed = parsed }
+  return parsed
 end
 
 function Api.buildWritePayload(data)

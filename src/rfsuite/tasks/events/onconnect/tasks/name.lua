@@ -5,6 +5,7 @@ local done = false
 local requestSent = false
 local NameApi = nil
 local Log = nil
+local MspRuntime = nil
 
 local function loadModule(path)
   local fullPath = "/SCRIPTS/TOOLS/rfsuite-core/" .. path
@@ -28,14 +29,19 @@ function M.wakeup(args)
   if type(session) ~= "table" then return end
 
   if requestSent then return end
-  requestSent = true
 
   -- MSP name API laden
   if not NameApi then
     NameApi = loadModule("tasks/msp/api/name.lua")
   end
-  local msp = loadModule("tasks/msp/runtime.lua")
-  if not msp or not NameApi then return end
+  if MspRuntime == nil then
+    MspRuntime = loadModule("tasks/msp/runtime.lua") or false
+  end
+  local msp = MspRuntime or nil
+  if not msp or not NameApi then
+    done = true
+    return
+  end
 
   local mspState = type(msp.getState) == "function" and msp.getState()
   if not mspState or not mspState.queue then
@@ -43,14 +49,19 @@ function M.wakeup(args)
     return
   end
 
+  requestSent = true
+
   if type(Log) == "table" and type(Log.emit) == "function" then
-    pcall(Log.emit, "rfsuite.tasks.name", "MSP request for name (cmd=" .. tostring(NameApi.command) .. ") via queue", "debug", true)
+    pcall(Log.emit, "rfsuite.tasks.name", "MSP request for name (cmd=" .. tostring(NameApi.command) .. ") via queue", "debug")
   end
 
   mspState.queue:add({
     command = NameApi.command,
     simulatorResponse = NameApi.simulatorResponse,
     timeout = 5.0,
+    -- Bounded below the task timeout in tasks/events/common/runner.lua, so this read
+    -- is given up by the queue before the runner re-queues the task that owns it.
+    maxRetries = 2,
     processReply = function(self, buf)
       local data = NameApi.parse(buf)
       if data and data.name then
@@ -58,12 +69,19 @@ function M.wakeup(args)
       end
       done = true
       if type(Log) == "table" and type(Log.emit) == "function" then
-        pcall(Log.emit, "rfsuite.tasks.name", "model name received: " .. tostring(data and data.name), "debug", true)
+        pcall(Log.emit, "rfsuite.tasks.name", "model name received: " .. tostring(data and data.name), "debug")
       end
     end,
-    errorHandler = function()
+    errorHandler = function(msg, reason)
+      -- "cleared" is the queue dropping this request, not the flight controller refusing it:
+      -- nothing was sent, so the request is still owed. Leaving the task incomplete with its latch
+      -- open is what lets the runner ask for it again on a later pass.
+      if reason == "cleared" then
+        requestSent = false
+        return
+      end
       done = true
-      if type(Log) == "table" and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks.name", "model name read failed", "warn", true) end
+      if type(Log) == "table" and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks.name", "model name read failed", "warn") end
     end
   })
 end

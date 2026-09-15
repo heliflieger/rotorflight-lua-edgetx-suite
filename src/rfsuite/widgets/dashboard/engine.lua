@@ -1,8 +1,30 @@
 local Engine = {}
 
-local Common = assert(loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/default/common.lua", "t"))()
-local Utils = assert(loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/objects/common.lua", "t"))()
-local Sensors = assert(loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/sensors.lua", "t"))()
+local requireModule = (_G.rfsuite and _G.rfsuite.require)
+if not requireModule then
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local rChunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/require.lua", mode)
+  if rChunk then
+    local ok, res = pcall(rChunk)
+    if ok and type(res) == "function" then
+      requireModule = res
+    end
+  end
+end
+requireModule = requireModule or function(path)
+  local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(fullPath, mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" then return mod end
+  end
+  return nil
+end
+
+local Common = requireModule("widgets/dashboard/themes/default/common.lua")
+local Utils = requireModule("widgets/dashboard/objects/common.lua")
+local Sensors = requireModule("lib/sensors.lua")
 
 local OBJECTS_BASE = "/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/objects/"
 local objectWrappers = {}
@@ -19,14 +41,8 @@ local function loadObjectWrapper(typ)
     return objectWrappers[typ]
   end
 
-  local chunk = loadScript(OBJECTS_BASE .. typ .. ".lua", "t")
-  if not chunk then
-    objectWrappers[typ] = false
-    return nil
-  end
-
-  local ok, wrapper = pcall(chunk)
-  if not ok or type(wrapper) ~= "table" then
+  local wrapper = requireModule("widgets/dashboard/objects/" .. typ .. ".lua")
+  if not wrapper or type(wrapper) ~= "table" then
     objectWrappers[typ] = false
     return nil
   end
@@ -42,9 +58,50 @@ local function resolveGrid(layout)
   return cols, rows, padding
 end
 
+-- The grid hands `padding` px to the space between the tracks and emits a rect per box
+-- only, so nothing downstream ever draws in that gap. A Lua widget's own LVGL object
+-- carries no background style, so what shows through the gap is whatever the radio's
+-- theme paints behind the widget -- a different colour on every radio, and a slice of a
+-- photograph where that theme has a background image. One full-zone rectangle at the head
+-- of the node list is the surface the tiles sit on. A theme that wants the radio
+-- background to show through sets `layout.bgcolor = false`.
+local function buildBackgroundNode(zone, layout, state)
+  local bgcolor = Utils.resolveValue(layout and layout.bgcolor, nil, state)
+  if bgcolor == nil then bgcolor = BLACK end
+  if bgcolor == false then return nil end
+  return { type = "rectangle", x = zone.x, y = zone.y, w = zone.w, h = zone.h, color = bgcolor, filled = true }
+end
+
+-- A rect's geometry depends on exactly these four fields of a box; everything else a box
+-- carries is read back from `rect.box` at render time. A theme whose `boxes` is a function
+-- returns a fresh table on every build, so comparing the table itself can never match and the
+-- whole grid is recomputed on every repaint even though nothing about the layout moved.
+local function sameGridGeometry(cached, boxes)
+  if cached == boxes then return true end
+  if type(cached) ~= "table" or type(boxes) ~= "table" then return false end
+  if #cached ~= #boxes then return false end
+  for i = 1, #boxes do
+    local a, b = cached[i], boxes[i]
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    if a.col ~= b.col or a.row ~= b.row or a.colspan ~= b.colspan or a.rowspan ~= b.rowspan then
+      return false
+    end
+  end
+  return true
+end
+
+-- Reused rects keep their arithmetic and take the current box objects, so a box whose colour,
+-- source, title or any other non-geometry field changed still renders from its own table.
+local function rebindGridRects(rects, boxes)
+  for i = 1, #rects do
+    rects[i].box = boxes[i]
+  end
+  return rects
+end
+
 local function canReuseGridRects(cache, zone, boxes, cols, rows, padding)
   return cache
-    and cache.boxes == boxes
+    and sameGridGeometry(cache.boxes, boxes)
     and cache.zoneX == zone.x
     and cache.zoneY == zone.y
     and cache.zoneW == zone.w
@@ -123,8 +180,11 @@ local function renderBox(nodes, rect, state)
   end
 end
 
-function Engine.build(zone, state, theme)
-  local nodes = {}
+-- Everything the build decides, bound once: layout and boxes resolved, grid rects taken
+-- through the cache, main rects and header rects concatenated IN THAT ORDER -- later nodes
+-- draw on top, which is what keeps the header above the scene. Values are read per step;
+-- structure is never re-resolved.
+function Engine.beginBuild(zone, state, theme)
   local layout = Utils.resolveValue(theme.layout, nil, state) or { cols = 1, rows = 1, padding = 0 }
   local boxes = Utils.resolveValue(theme.boxes, nil, state) or {}
   local cols, rows, padding = resolveGrid(layout)
@@ -134,11 +194,12 @@ function Engine.build(zone, state, theme)
     state._engineCache = engineCache
   end
 
-  local rects = nil
+  local mainRects = nil
   if canReuseGridRects(engineCache and engineCache.main, zone, boxes, cols, rows, padding) then
-    rects = engineCache.main.rects
+    mainRects = rebindGridRects(engineCache.main.rects, boxes)
+    engineCache.main.boxes = boxes
   else
-    rects = buildGridRects(zone, boxes, cols, rows, padding)
+    mainRects = buildGridRects(zone, boxes, cols, rows, padding)
     if engineCache then
       engineCache.main = {
         boxes = boxes,
@@ -149,22 +210,16 @@ function Engine.build(zone, state, theme)
         cols = cols,
         rows = rows,
         padding = padding,
-        rects = rects
+        rects = mainRects
       }
     end
   end
 
-  local maxMainRects = #rects
-  local maxHeaderRects = 9999
-  if isSimulator() then
-    -- Simulator has a stricter per-refresh instruction budget than TX16.
-    -- Render a reduced subset to keep the widget alive in desktop simulation.
-    maxMainRects = math.min(maxMainRects, 14)
-    maxHeaderRects = 4
-  end
-
-  for i = 1, maxMainRects do
-    renderBox(nodes, rects[i], state)
+  -- The combined list is a fresh table: the cached rect lists are long-lived and must not
+  -- grow header entries.
+  local rects = {}
+  for i = 1, #mainRects do
+    rects[#rects + 1] = mainRects[i]
   end
 
   local headerLayout = Utils.resolveValue(theme.header_layout, nil, state)
@@ -175,7 +230,8 @@ function Engine.build(zone, state, theme)
     local hCols, hRows, hPadding = resolveGrid(headerLayout)
     local headerRects = nil
     if canReuseGridRects(engineCache and engineCache.header, headerZone, headerBoxes, hCols, hRows, hPadding) then
-      headerRects = engineCache.header.rects
+      headerRects = rebindGridRects(engineCache.header.rects, headerBoxes)
+      engineCache.header.boxes = headerBoxes
     else
       headerRects = buildGridRects(headerZone, headerBoxes, hCols, hRows, hPadding)
       if engineCache then
@@ -192,69 +248,57 @@ function Engine.build(zone, state, theme)
         }
       end
     end
-    local headerLimit = math.min(#headerRects, maxHeaderRects)
-    for i = 1, headerLimit do
-      renderBox(nodes, headerRects[i], state)
+    for i = 1, #headerRects do
+      rects[#rects + 1] = headerRects[i]
     end
   end
 
-  return nodes
+  -- Seeded here rather than pushed by the first step: the background has to precede every
+  -- tile, and the stepped and the single-pass path must hand LVGL the same node order.
+  local nodes = {}
+  local background = buildBackgroundNode(zone, layout, state)
+  if background then nodes[1] = background end
+
+  return { rects = rects, nodes = nodes, cursor = 1 }
 end
 
-function Engine.renderKey(state, boxSources)
-  local voltage = Utils.toNumber(state and state.voltage, 0)
-  local lq = Utils.toNumber(state and state.lq, 0)
-  local fuel = Utils.toNumber(state and state.fuel, 0)
-  local rpm = Utils.toNumber(state and state.rpm, 0)
-  local flight = Utils.toNumber(state and state.flightSeconds, 0)
-  local total = Utils.toNumber(state and state.totalFlightSeconds, 0)
-  local bb_used = state and state.dataflash and state.dataflash.used or 0
-  local bb_total = state and state.dataflash and state.dataflash.total or 0
+-- Renders up to `k` boxes from the cursor into the build's node table -- pure Lua data
+-- construction, no LVGL call anywhere on this path. Returns true when every rect has been
+-- rendered.
+function Engine.stepBuild(build, state, k)
+  local rects = build.rects
+  local last = math.min(build.cursor + k - 1, #rects)
+  for i = build.cursor, last do
+    renderBox(build.nodes, rects[i], state)
+  end
+  build.cursor = last + 1
+  return build.cursor > #rects
+end
+
+-- One call, one pass: beginBuild plus a single step over everything. Same nodes in the
+-- same order as the stepped path, which is what makes the two interchangeable.
+function Engine.build(zone, state, theme)
+  local build = Engine.beginBuild(zone, state, theme)
+  Engine.stepBuild(build, state, #build.rects)
+  return build.nodes
+end
+
+function Engine.renderKey(state, _)
   local cells = Utils.toNumber(state and state.batteryCellCount, 0)
   local themeMin = Utils.toNumber(state and state.themeConfig and state.themeConfig.v_min, 0)
   local themeMax = Utils.toNumber(state and state.themeConfig and state.themeConfig.v_max, 0)
-  local armFlags = Utils.toNumber(state and state.armFlags, 0)
-  local parts = {
-    tostring(math.floor(lq + 0.5)),
-    tostring(math.floor(fuel + 0.5)),
-    tostring(math.floor(rpm + 0.5)),
-    tostring(math.floor(flight + 0.5)),
-    tostring(math.floor(total + 0.5)),
-    tostring(math.floor(voltage * 10 + 0.5)),
-    tostring(bb_used),
-    tostring(bb_total),
-    tostring(math.floor(cells + 0.5)),
-    tostring(math.floor(themeMin * 10 + 0.5)),
-    tostring(math.floor(themeMax * 10 + 0.5)),
-    tostring(math.floor(armFlags + 0.5))
-  }
-  if boxSources and state then
-    for i = 1, #boxSources do
-      local source = boxSources[i]
-      local v = nil
-      -- Zuerst im State suchen (wird in readTelemetry aktualisiert)
-      if source == "esc_temp" then v = state.escTemp
-      elseif source == "mcu_temp" then v = state.mcuTemp
-      elseif source == "pid_profile" then v = state.profile
-      elseif source == "rate_profile" then v = state.rateProfile
-      elseif source == "battery_profile" then v = state.batteryProfile
-      elseif source == "governor" then
-        v = tostring(state.governor or "x") .. ":" .. tostring(state.armDisableFlags or "x")
-      else
-        -- Fallback auf Sensors, aber gedrosselt oder nur wenn absolut nötig
-        -- In der Regel sollten alle wichtigen Dashboard-Quellen im State sein
-        v = state[source]
-      end
-      if type(v) == "number" then
-        parts[#parts + 1] = tostring(math.floor(v * 10 + 0.5))
-      elseif type(v) == "string" then
-        parts[#parts + 1] = v
-      else
-        parts[#parts + 1] = "x"
-      end
-    end
-  end
-  return table.concat(parts, "|")
+  local zoneW = Utils.toNumber(state and state.zoneW, 0)
+  local zoneH = Utils.toNumber(state and state.zoneH, 0)
+  local flightMode = tostring((state and state.flightMode) or "")
+
+  return string.format("%s|%dx%d|%d|%d|%d",
+    flightMode,
+    zoneW,
+    zoneH,
+    math.floor(cells + 0.5),
+    math.floor(themeMin * 10 + 0.5),
+    math.floor(themeMax * 10 + 0.5)
+  )
 end
 
 return Engine

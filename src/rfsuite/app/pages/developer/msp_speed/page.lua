@@ -135,7 +135,7 @@ local function appendDataRow(children, x, y, w, labelText, valueText)
     y = y + rowH,
     w = w,
     h = 1,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true,
   }
 
@@ -392,9 +392,6 @@ function M.getHeaderActions()
   return { save = false, reload = true, help = true }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onReload()
   ensureDeps()
@@ -486,24 +483,16 @@ function M.build(ctx)
   Controls.appendStaticSectionHeader(children, x, y, w, t(i18n, "section_test", "MSP Speed Test"))
 
   local cursorY = y + Controls.STATIC_SECTION_H
-  local rowH = 44
+  local rowH = (Controls and Controls.ROW_H) or 64
   local buttonW = 130
-  local buttonH = 36
   local comboW = 130
-  local comboH = 36
-  local comboYOffset = -2
-  local rightPad = 10
-  local gap = 8
-  local buttonX = x + w - buttonW - rightPad
-  local comboX = buttonX - gap - comboW
-  local labelW = comboX - x - 8
-  local buttonY = cursorY + math.floor((rowH - buttonH) / 2) + comboYOffset
-  local comboY = cursorY + math.floor((rowH - comboH) / 2) + comboYOffset
+  local ctrlY = (Controls and Controls.controlY and Controls.controlY(cursorY, rowH)) or (cursorY + math.floor((rowH - 32) / 2))
+  local labelY = (Controls and Controls.labelY and Controls.labelY(cursorY, rowH)) or (cursorY + math.floor((rowH - 21) / 2))
 
   children[#children + 1] = {
     type = "label",
     x = x,
-    y = cursorY + 10,
+    y = labelY,
     w = labelW,
     text = t(i18n, "duration", "Duration"),
     color = COLOR_THEME_PRIMARY1,
@@ -514,9 +503,8 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "choice",
     x = comboX,
-    y = comboY,
+    y = ctrlY,
     w = comboW,
-    h = comboH,
     title = tostring(t(i18n, "duration", "Duration")),
     values = DURATION_LABELS,
     get = function()
@@ -542,9 +530,8 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "button",
     x = buttonX,
-    y = buttonY,
+    y = ctrlY,
     w = buttonW,
-    h = buttonH,
     text = buttonText,
     press = values.active and ui.handlers.stop or ui.handlers.start,
   }
@@ -555,7 +542,7 @@ function M.build(ctx)
     y = cursorY + rowH,
     w = w,
     h = 1,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true,
   }
 

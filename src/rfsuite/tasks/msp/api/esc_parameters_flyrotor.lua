@@ -70,8 +70,11 @@ local TYPE_LEN = {
     U8 = 1, S8 = 1, U16 = 2, S16 = 2, U24 = 3, U32 = 4, U64 = 8, U120 = 15, U128 = 16
 }
 
+-- pairs, not ipairs. The flag is the FOURTEENTH element of a field table whose elements 3 to
+-- 13 are nil, and ipairs stops at the first hole -- so with ipairs this returned false for
+-- every field, including the three that carry the flag.
 local function has_big_flag(field)
-    for _, v in ipairs(field) do if v == "big" then return true end end
+    for _, v in pairs(field) do if v == "big" then return true end end
     return false
 end
 
@@ -114,6 +117,16 @@ local function pack_unsigned(v, len, big)
     return out
 end
 
+-- EdgeTX builds Lua with LUA_32BITS, so a 64-bit value has no exact representation: reading
+-- one into a number and writing it back does not round-trip. The only 64-bit field here is
+-- an identifier that nothing displays or edits, so it is carried as the bytes it arrived as
+-- and written back untouched.
+local function raw_bytes(buf, pos, len)
+    local out = {}
+    for i = 0, len - 1 do out[#out+1] = (tonumber(buf[pos + i]) or 0) & 0xFF end
+    return out
+end
+
 local function pack_string(s, len)
     s = s or ""
     local out = {}
@@ -132,7 +145,10 @@ function Api.parse(buf)
         local name, typ = f[1], f[2]
         local len = TYPE_LEN[typ] or 1
         local big = has_big_flag(f)
-        if typ == "U120" or typ == "U128" then
+        if typ == "U64" then
+            out[name] = raw_bytes(buf, pos, len)
+            pos = pos + len
+        elseif typ == "U120" or typ == "U128" then
             out[name] = bytes_to_string(buf, pos, len)
             pos = pos + len
         elseif typ == "S8" then
@@ -154,7 +170,11 @@ function Api.buildWritePayload(data)
         local len = TYPE_LEN[typ] or 1
         local big = has_big_flag(f)
         local v = data[name]
-        if typ == "U120" or typ == "U128" then
+        if typ == "U64" then
+            local bytes = v
+            if type(bytes) ~= "table" or #bytes ~= len then bytes = pack_unsigned(0, len, big) end
+            for i = 1, len do payload[#payload+1] = bytes[i] or 0 end
+        elseif typ == "U120" or typ == "U128" then
             local bytes = pack_string(v, len)
             for _, b in ipairs(bytes) do payload[#payload+1] = b end
         else

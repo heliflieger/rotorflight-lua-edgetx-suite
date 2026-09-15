@@ -61,7 +61,7 @@ function Api.parse(buf)
   if #buf >= pos + 1 then
     parsed.vtxtable_power_levels = tonumber(buf[pos]) or 0; pos = pos + 1
   end
-  return { parsed = parsed }
+  return parsed
 end
 
 function Api.buildWritePayload(data)

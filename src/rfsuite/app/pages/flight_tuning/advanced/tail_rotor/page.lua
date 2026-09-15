@@ -17,6 +17,7 @@ local GovernorProfileApi = nil
 local GovernorConfigApi = nil
 local LoadingOverlay = nil
 local Sensors = nil
+local Profile = nil
 local ApiVersion = nil
 local t = nil
 
@@ -52,28 +53,13 @@ local function ensureDeps()
   if not GovernorConfigApi then GovernorConfigApi = loadModule("tasks/msp/api/governor_config.lua") end
   if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
   if not Sensors then Sensors = loadModule("lib/sensors.lua") end
+  if not Profile then Profile = loadModule("lib/profile.lua") end
   if not ApiVersion then ApiVersion = loadModule("lib/api_version.lua") end
   if not t then t = Common and Common.pageT("flight_tuning_advanced_tail_rotor") or nil end
   
   if Common then
     if not ui.runtimeBase then
-      ui.runtimeBase = Common.createProfileAwareRuntime({
-        profileGetter = function()
-          local sensorProfile = nil
-          if Sensors and type(Sensors.getValue) == "function" then
-            sensorProfile = tonumber(Sensors.getValue("pid_profile"))
-          end
-          if sensorProfile and sensorProfile > 0 then
-            return math.floor(sensorProfile)
-          end
-          local session = getSession()
-          local activeProfile = session and session.activeProfile
-          if activeProfile ~= nil then
-            return math.floor(tonumber(activeProfile) or 0) + 1
-          end
-          return 1
-        end
-      })
+      ui.runtimeBase = Common.createProfileAwareRuntime({ profileType = "pid" })
     end
     if type(ui.runtime) ~= "table" then
       ui.runtime = newRuntime()
@@ -116,6 +102,7 @@ end
 
 local function queueRcRead(isAutoReload)
   if ui.runtime.readPending then return false, "read_pending" end
+  ui.runtime.readComplete = false
   if not PidProfileApi or not GovernorConfigApi or not MspRuntime or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -126,6 +113,7 @@ local function queueRcRead(isAutoReload)
     return false, "msp_queue_unavailable"
   end
 
+  local readValid = type(getSession()) == "table"
   ui.runtime.readPending = true
   if not isAutoReload then
     ui.loading = true
@@ -143,6 +131,7 @@ local function queueRcRead(isAutoReload)
     simulatorResponse = GovernorConfigApi.simulatorResponse,
     processReply = function(self, buf)
       local parsedGovConfig = GovernorConfigApi.parse(buf)
+      if type(parsedGovConfig) ~= "table" then return Common.failPageRead(ui) end
       if parsedGovConfig and session then
         session.governor_config = parsedGovConfig
         session.governorMode = parsedGovConfig.gov_mode
@@ -154,6 +143,7 @@ local function queueRcRead(isAutoReload)
         simulatorResponse = PidProfileApi.simulatorResponse,
         processReply = function(self, buf)
           local parsedPid = PidProfileApi.parse(buf)
+          if type(parsedPid) ~= "table" then return Common.failPageRead(ui) end
           if parsedPid and session then
             session.pid_profile = parsedPid
           end
@@ -165,6 +155,7 @@ local function queueRcRead(isAutoReload)
               simulatorResponse = GovernorProfileApi.simulatorResponse,
               processReply = function(self, buf)
                 local parsedGov = GovernorProfileApi.parse(buf)
+                if type(parsedGov) ~= "table" then return Common.failPageRead(ui) end
                 if parsedGov and session then
                   session.governor_profile = parsedGov
                 end
@@ -174,11 +165,13 @@ local function queueRcRead(isAutoReload)
                 ui.loading = false
                 ui.dirty = false
                 ui.progress = 100
+                ui.runtime.readComplete = readValid
                 if type(ui.runtime.requestRebuild) == "function" then
                   ui.runtime.requestRebuild()
                 end
               end,
               errorHandler = function()
+                readValid = false
                 ui.runtime.readPending = false
                 ui.loading = false
                 if type(ui.runtime.requestRebuild) == "function" then
@@ -192,12 +185,14 @@ local function queueRcRead(isAutoReload)
             ui.loading = false
             ui.dirty = false
             ui.progress = 100
+            ui.runtime.readComplete = readValid
             if type(ui.runtime.requestRebuild) == "function" then
               ui.runtime.requestRebuild()
             end
           end
         end,
         errorHandler = function()
+          readValid = false
           ui.runtime.readPending = false
           ui.loading = false
           if type(ui.runtime.requestRebuild) == "function" then
@@ -207,6 +202,7 @@ local function queueRcRead(isAutoReload)
       })
     end,
     errorHandler = function()
+      readValid = false
       ui.runtime.readPending = false
       ui.loading = false
       if type(ui.runtime.requestRebuild) == "function" then
@@ -299,18 +295,7 @@ local function queueRcWrite()
 end
 
 local function getLiveProfile()
-  if Sensors and type(Sensors.getValue) == "function" then
-    local raw = tonumber(Sensors.getValue("pid_profile"))
-    if raw and raw > 0 then
-      return math.floor(raw)
-    end
-  end
-  local session = getSession()
-  local activeProfile = tonumber(session and session.activeProfile)
-  if activeProfile ~= nil then
-    return math.floor(activeProfile) + 1
-  end
-  return 1
+  return Profile and Profile.getActivePidProfile(1) or 1
 end
 
 local function getBaseTitle()
@@ -343,14 +328,15 @@ local function formatValue(val, spec)
 end
 
 local function appendDualFieldRow(children, x, y, w, rowLabel, label1, key1, spec1, label2, key2, spec2)
-  local rowH = 52
-  local labelY = y + 16
-  local cellTop = y + 4
+  local rowH = (Controls and Controls.ROW_H) or 40
+  local labelY = (Controls and Controls.labelY and Controls.labelY(y, rowH)) or (y + math.floor((rowH - 21) / 2))
+  local cellTop = (Controls and Controls.controlY and Controls.controlY(y, rowH)) or (y + math.floor((rowH - 32) / 2))
   
-  local mainW    = math.floor(w * 0.31)
-  local labelW1  = math.floor(w * 0.19)
-  local editW1   = math.floor(w * 0.14)
-  local labelGap = 6
+  local mainW    = math.floor(w * 0.18)
+  local labelW1  = math.floor(w * 0.14)
+  local editW1   = math.floor(w * 0.24)
+  local gap      = 8
+  local labelGap = 4
   
   -- Left main label
   children[#children + 1] = {
@@ -388,7 +374,6 @@ local function appendDualFieldRow(children, x, y, w, rowLabel, label1, key1, spe
     x = xEdit1,
     y = cellTop,
     w = editW1,
-    h = 44,
     min = math.floor(rawMin / stepSize),
     max = math.ceil(rawMax / stepSize),
     active = function() return activeA end,
@@ -413,9 +398,9 @@ local function appendDualFieldRow(children, x, y, w, rowLabel, label1, key1, spe
 
   -- Column 2
   if label2 and key2 and spec2 then
-    local labelW2 = math.floor(w * 0.20)
-    local editW2  = math.floor(w * 0.14)
-    local xLabel2 = xEdit1 + editW1 + 5
+    local labelW2 = math.floor(w * 0.14)
+    local editW2  = math.floor(w * 0.24)
+    local xLabel2 = xEdit1 + editW1 + gap
     local xEdit2  = xLabel2 + labelW2
     
     local activeB = spec2.active == nil or spec2.active
@@ -440,7 +425,6 @@ local function appendDualFieldRow(children, x, y, w, rowLabel, label1, key1, spe
       x = xEdit2,
       y = cellTop,
       w = editW2,
-      h = 44,
       min = math.floor(rawMinB / stepSizeB),
       max = math.ceil(rawMaxB / stepSizeB),
       active = function() return activeB end,
@@ -468,7 +452,7 @@ local function appendDualFieldRow(children, x, y, w, rowLabel, label1, key1, spe
     type   = "rectangle",
     x = x, y = y + rowH,
     w = w, h = 1,
-    color  = GREY_DEFAULT, filled = true
+    color  = COLOR_THEME_SECONDARY2, filled = true
   }
 
   return rowH + 1
@@ -540,10 +524,8 @@ function M.build(ctx)
   local cursorY = y
   if Controls and type(Controls.appendStaticSectionHeader) == "function" then
     Controls.appendStaticSectionHeader(children, x, cursorY, w, displayTitle)
-    cursorY = cursorY + (Controls.STATIC_SECTION_H or 50)
+    cursorY = cursorY + (Controls.STATIC_SECTION_H or 38)
   end
-
-  cursorY = cursorY + 10
 
   -- Specs
   local specGain    = { scale=1, mult=1, min=0, max=250, suffix="", decimals=0 }
@@ -611,7 +593,12 @@ function M.build(ctx)
   end
 end
 
+function M.canSave()
+  return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+  if not M.canSave() then return false, "loaded_data_missing" end
   queueRcWrite()
   return true
 end
@@ -634,9 +621,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

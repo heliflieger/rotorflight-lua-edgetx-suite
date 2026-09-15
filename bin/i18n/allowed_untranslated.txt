@@ -1,0 +1,48 @@
+# Strings that stay English in every locale, and are therefore not reported by
+# bin/i18n/check_translations.py.
+#
+# One literal per line, matched exactly and case-sensitively, after surrounding
+# whitespace is stripped. A `#` at the start of a line is a comment; a `#` inside a
+# literal is part of the literal.
+#
+# What belongs here is a name, not a word. A product, a manufacturer, a firmware, a
+# protocol or a unit is the same in German as it is in English, and translating it would
+# make a page harder to read rather than easier. A word that describes something -- Off,
+# Normal, Basic, Low -- does not belong here however often it appears; that is exactly
+# the string the report exists to find.
+#
+# Adding a line here is a decision that this string is a name. It is cheap to make and
+# invisible afterwards, so make it deliberately.
+
+# --- ESC firmwares and their configurator pages ---------------------------------------
+AM32
+AM32 Configurator
+BLHeli_S
+BLHeli_S Configurator
+Bluejay
+Bluejay Configurator
+Flyrotor
+Flyrotor Configurator
+Hobbywing V5
+Hobbywing V5 Configurator
+OMP
+OMP Configurator
+Scorpion
+Scorpion Configurator
+XDFly
+XDFly Configurator
+YGE
+YGE Configurator
+ZTW
+ZTW Configurator
+ESC Configurator
+
+# --- projects, radios and link protocols ----------------------------------------------
+Rotorflight
+EdgeTX
+ExpressLRS
+Crossfire
+CRSF
+S.Port
+F.Port
+SBUS

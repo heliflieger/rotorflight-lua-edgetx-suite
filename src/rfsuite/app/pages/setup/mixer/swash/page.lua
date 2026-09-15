@@ -10,6 +10,7 @@ local function loadModule(path)
 end
 
 local Controls = nil
+local SavePipeline = nil
 local Common = nil
 local MspRuntime = nil
 local MixerConfigApi = nil
@@ -19,7 +20,6 @@ local MixerInputCollectiveApi = nil
 local LoadingOverlay = nil
 local t = nil
 
-local needsReboot = false
 
 local function u16_to_s16(u)
   if u >= 0x8000 then
@@ -273,107 +273,75 @@ local function queueSwashRead(isAutoReload)
 end
 
 local function queueSwashWrite()
-  if not MspRuntime or not MixerConfigApi or not MixerInputPitchApi or not MixerInputRollApi or not MixerInputCollectiveApi or type(MspRuntime.getState) ~= "function" then
+  if not SavePipeline then SavePipeline = loadModule("tasks/msp/save_pipeline.lua") end
+  if not SavePipeline or not MixerConfigApi or not MixerInputPitchApi
+    or not MixerInputRollApi or not MixerInputCollectiveApi then
     return false, "msp_runtime_unavailable"
   end
 
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue or type(queue.add) ~= "function" then
-    return false, "msp_queue_unavailable"
-  end
-
-  if type(ui.apiData.MIXER_CONFIG) == "table" then
-    ui.apiData.MIXER_CONFIG.swash_type = ui.config.swash_type
-    ui.apiData.MIXER_CONFIG.main_rotor_dir = ui.config.main_rotor_dir
-  else
+  if type(ui.apiData.MIXER_CONFIG) ~= "table"
+    or type(ui.apiData.GET_MIXER_INPUT_PITCH) ~= "table"
+    or type(ui.apiData.GET_MIXER_INPUT_ROLL) ~= "table"
+    or type(ui.apiData.GET_MIXER_INPUT_COLLECTIVE) ~= "table" then
     return false, "loaded_data_missing"
   end
 
-  if type(ui.apiData.GET_MIXER_INPUT_PITCH) == "table" then
-    ui.apiData.GET_MIXER_INPUT_PITCH.rate_stabilized_pitch =
-      applyDirectionToRate(ui.apiData.GET_MIXER_INPUT_PITCH.rate_stabilized_pitch, ui.config.ele_direction)
-  else
-    return false, "loaded_data_missing"
-  end
+  -- Whether this save has to restart the flight controller is decided here, from the difference
+  -- between what was read and what is about to be written -- and it has to be read before the
+  -- assignment below overwrites it. A module-level flag set when the control changed stood here
+  -- instead, and it was only ever cleared on the success path: a chain that died earlier left it
+  -- set, so the next save on this page restarted the board although the swashplate type had not
+  -- been touched.
+  local swashTypeChanged = ui.apiData.MIXER_CONFIG.swash_type ~= ui.config.swash_type
 
-  if type(ui.apiData.GET_MIXER_INPUT_ROLL) == "table" then
-    ui.apiData.GET_MIXER_INPUT_ROLL.rate_stabilized_roll =
-      applyDirectionToRate(ui.apiData.GET_MIXER_INPUT_ROLL.rate_stabilized_roll, ui.config.ail_direction)
-  else
-    return false, "loaded_data_missing"
-  end
+  ui.apiData.MIXER_CONFIG.swash_type = ui.config.swash_type
+  ui.apiData.MIXER_CONFIG.main_rotor_dir = ui.config.main_rotor_dir
 
-  if type(ui.apiData.GET_MIXER_INPUT_COLLECTIVE) == "table" then
-    ui.apiData.GET_MIXER_INPUT_COLLECTIVE.rate_stabilized_collective =
-      applyDirectionToRate(ui.apiData.GET_MIXER_INPUT_COLLECTIVE.rate_stabilized_collective, ui.config.col_direction)
-  else
-    return false, "loaded_data_missing"
-  end
+  ui.apiData.GET_MIXER_INPUT_PITCH.rate_stabilized_pitch =
+    applyDirectionToRate(ui.apiData.GET_MIXER_INPUT_PITCH.rate_stabilized_pitch, ui.config.ele_direction)
+  ui.apiData.GET_MIXER_INPUT_ROLL.rate_stabilized_roll =
+    applyDirectionToRate(ui.apiData.GET_MIXER_INPUT_ROLL.rate_stabilized_roll, ui.config.ail_direction)
+  ui.apiData.GET_MIXER_INPUT_COLLECTIVE.rate_stabilized_collective =
+    applyDirectionToRate(ui.apiData.GET_MIXER_INPUT_COLLECTIVE.rate_stabilized_collective, ui.config.col_direction)
 
-  local mixerCfgPayload = MixerConfigApi.buildWritePayload(ui.apiData.MIXER_CONFIG)
-  local pitchPayload = MixerInputPitchApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_PITCH)
-  local rollPayload = MixerInputRollApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_ROLL)
-  local collectivePayload = MixerInputCollectiveApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_COLLECTIVE)
-
-  queue:add({
-    command = MixerConfigApi.writeCommand,
-    payload = mixerCfgPayload,
-    isWrite = true,
-    processReply = function()
-      queue:add({
+  return SavePipeline.start({
+    pageId = "setup_mixer_swash",
+    steps = {
+      {
+        label = "MSP_SET_MIXER_CONFIG",
+        command = MixerConfigApi.writeCommand,
+        payload = MixerConfigApi.buildWritePayload(ui.apiData.MIXER_CONFIG)
+      },
+      {
+        label = "MSP_SET_MIXER_INPUT_PITCH",
         command = MixerInputPitchApi.writeCommand,
-        payload = pitchPayload,
-        isWrite = true,
-        processReply = function()
-          queue:add({
-            command = MixerInputRollApi.writeCommand,
-            payload = rollPayload,
-            isWrite = true,
-            processReply = function()
-              queue:add({
-                command = MixerInputCollectiveApi.writeCommand,
-                payload = collectivePayload,
-                isWrite = true,
-                processReply = function()
-                  local eepromApi = loadModule("tasks/msp/api/eeprom_write.lua")
-                  if eepromApi then
-                    queue:add({
-                      command = eepromApi.writeCommand,
-                      payload = {},
-                      isWrite = true,
-                      processReply = function()
-                        if needsReboot then
-                          local rebootApi = loadModule("tasks/msp/api/reboot.lua")
-                          if rebootApi then
-                            queue:add({
-                              command = rebootApi.writeCommand,
-                              payload = rebootApi.buildWritePayload({ rebootMode = 0 }),
-                              isWrite = true,
-                              processReply = function() end,
-                              errorHandler = function() end
-                            })
-                          end
-                          needsReboot = false
-                        end
-                      end,
-                      errorHandler = function() end
-                    })
-                  end
-                end,
-                errorHandler = function() end
-              })
-            end,
-            errorHandler = function() end
-          })
-        end,
-        errorHandler = function() end
-      })
+        payload = MixerInputPitchApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_PITCH)
+      },
+      {
+        label = "MSP_SET_MIXER_INPUT_ROLL",
+        command = MixerInputRollApi.writeCommand,
+        payload = MixerInputRollApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_ROLL)
+      },
+      {
+        label = "MSP_SET_MIXER_INPUT_COLLECTIVE",
+        command = MixerInputCollectiveApi.writeCommand,
+        payload = MixerInputCollectiveApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_COLLECTIVE)
+      }
+    },
+    reboot = swashTypeChanged,
+    invalidateSessionKeys = { "setup_mixer_swash" },
+    onSaved = function()
+      ui.dirty = false
     end,
-    errorHandler = function() end
+    onDone = function(result)
+      if result.status ~= "done" then
+        ui.dirty = true
+      end
+      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
+        ui.runtime.requestRebuild()
+      end
+    end
   })
-
-  return true, nil
 end
 
 local function buildSessionSignature()
@@ -402,6 +370,11 @@ end
 function M.onActivate()
   ensureDeps()
   ensureLoaded()
+  -- A save whose overlay was dismissed finished without a screen. Its outcome was held
+  -- back rather than raised over whatever page the user went to; claim it now.
+  if SavePipeline and type(SavePipeline.takeResult) == "function" then
+    SavePipeline.takeResult("setup_mixer_swash")
+  end
 end
 
 function M.wakeup(ctx)
@@ -481,7 +454,6 @@ function M.build(ctx)
       if ui.config.swash_type ~= newVal then
         ui.config.swash_type = newVal
         ui.dirty = true
-        needsReboot = true
       end
     end
   )
@@ -550,8 +522,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueSwashWrite()
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -559,13 +531,12 @@ function M.onSave(ctx)
     return false
   end
 
-  ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
-      title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
-      message = pageText(ctx and ctx.i18n, "saved_message", "Swashplate settings saved")
-    })
-  end
+  -- Nothing is announced here. This function has only QUEUED the save: the writes, the commit
+  -- and -- on this page -- the restart are all still ahead of it, and a dialog saying the
+  -- settings are saved would be a claim it cannot make. It was also drawn on TOP of the
+  -- overlay that reports the save, from a place where that overlay could not be repainted away
+  -- first, and while a native dialog stands the tool's run() does not run at all. The pipeline
+  -- reports the outcome in the overlay, once, when it knows it.
   return true
 end
 
@@ -579,9 +550,6 @@ function M.onReload(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

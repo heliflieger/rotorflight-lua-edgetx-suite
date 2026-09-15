@@ -1,0 +1,512 @@
+[
+  {
+    "file": "adj/acc.wav",
+    "english": "Accelerometer",
+    "translation": "Accelerometer",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/acro.wav",
+    "english": "Acro",
+    "translation": "Acro",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/alt.wav",
+    "english": "Altitude",
+    "translation": "Altitude",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/angle.wav",
+    "english": "Angle",
+    "translation": "Angle",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/b.wav",
+    "english": "B",
+    "translation": "B",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/boost.wav",
+    "english": "Boost",
+    "translation": "Boost",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/ccw.wav",
+    "english": "CCW",
+    "translation": "CCW",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/climb.wav",
+    "english": "Climb",
+    "translation": "Climb",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/collective.wav",
+    "english": "Collective",
+    "translation": "Collective",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/crossc.wav",
+    "english": "Cross Coupling",
+    "translation": "Cross Coupling",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/cutoff.wav",
+    "english": "Cut Off",
+    "translation": "Cut Off",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/cw.wav",
+    "english": "CW",
+    "translation": "CW",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/cyclic.wav",
+    "english": "Cyclic",
+    "translation": "Cyclic",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/d.wav",
+    "english": "D",
+    "translation": "D",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/deadband.wav",
+    "english": "Deadband",
+    "translation": "Deadband",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/decay.wav",
+    "english": "Decay",
+    "translation": "Decay",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/dterm.wav",
+    "english": "d term",
+    "translation": "d term",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/dyn.wav",
+    "english": "Dynamic",
+    "translation": "Dynamic",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/f.wav",
+    "english": "F",
+    "translation": "F",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/ff.wav",
+    "english": "Feed Forward",
+    "translation": "Feed Forward",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/filter.wav",
+    "english": "Filter",
+    "translation": "Filter",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/gain.wav",
+    "english": "Gain",
+    "translation": "Gain",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/gov.wav",
+    "english": "Governor",
+    "translation": "Governor",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/gyro.wav",
+    "english": "Gyro",
+    "translation": "Gyro",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/horizon.wav",
+    "english": "horizon",
+    "translation": "horizon",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/hover.wav",
+    "english": "Hover",
+    "translation": "Hover",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/i.wav",
+    "english": "I",
+    "translation": "I",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/inertia.wav",
+    "english": "Inertia",
+    "translation": "Inertia",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/level.wav",
+    "english": "Level",
+    "translation": "Level",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/o.wav",
+    "english": "O",
+    "translation": "O",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/p.wav",
+    "english": "P",
+    "translation": "P",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/pitch.wav",
+    "english": "Pitch",
+    "translation": "Pitch",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/precomp.wav",
+    "english": "Precomp",
+    "translation": "Precomp",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/rate.wav",
+    "english": "Rate",
+    "translation": "Rate",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/rc.wav",
+    "english": "RC",
+    "translation": "RC",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/rescue.wav",
+    "english": "Rescue",
+    "translation": "Rescue",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/roll.wav",
+    "english": "Roll",
+    "translation": "Roll",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/setpoint.wav",
+    "english": "Setpoint",
+    "translation": "Setpoint",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/trim.wav",
+    "english": "Trim",
+    "translation": "Trim",
+    "needs_translation": false
+  },
+  {
+    "file": "adj/yaw.wav",
+    "english": "Your",
+    "translation": "Your",
+    "needs_translation": false
+  },
+  {
+    "file": "app/eraseflash.wav",
+    "english": "Erasing Data Flash",
+    "translation": "Erasing Data Flash",
+    "needs_translation": false
+  },
+  {
+    "file": "app/moveridedis.wav",
+    "english": "Mixer overide - disabled",
+    "translation": "Mixer overide - disabled",
+    "needs_translation": false
+  },
+  {
+    "file": "app/moverideen.wav",
+    "english": "Mixer overide - enabled",
+    "translation": "Mixer overide - enabled",
+    "needs_translation": false
+  },
+  {
+    "file": "app/mpoveridedis.wav",
+    "english": "Passthrough Mixer overide - disabled",
+    "translation": "Passthrough Mixer overide - disabled",
+    "needs_translation": false
+  },
+  {
+    "file": "app/mpoverideen.wav",
+    "english": "Passthrough Mixer overide - enabled",
+    "translation": "Passthrough Mixer overide - enabled",
+    "needs_translation": false
+  },
+  {
+    "file": "app/powercycleesc.wav",
+    "english": "Please power cycle the speed controller",
+    "translation": "Please power cycle the speed controller",
+    "needs_translation": false
+  },
+  {
+    "file": "app/soveridedis.wav",
+    "english": "Servo overide - disabled",
+    "translation": "Servo overide - disabled",
+    "needs_translation": false
+  },
+  {
+    "file": "app/soverideen.wav",
+    "english": "Servo overide - enabled",
+    "translation": "Servo overide - enabled",
+    "needs_translation": false
+  },
+  {
+    "file": "app/timeout.wav",
+    "english": "Timed out",
+    "translation": "Timed out",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/armed.wav",
+    "english": "Armed",
+    "translation": "Armed",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/battery.wav",
+    "english": "Battery",
+    "translation": "Battery",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/becvolt.wav",
+    "english": "BEC Voltage Warning",
+    "translation": "BEC Voltage Warning",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/disarm.wav",
+    "english": "Disarmed",
+    "translation": "Disarmed",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/elapsed.wav",
+    "english": "Timer Elapsed",
+    "translation": "Timer Elapsed",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/esctemp.wav",
+    "english": "ESC Temperature Warning",
+    "translation": "ESC Temperature Warning",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/lowfuel.wav",
+    "english": "Low Fuel",
+    "translation": "Low Fuel",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/lowvbat.wav",
+    "english": "Low Voltage",
+    "translation": "Low Voltage",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/profile.wav",
+    "english": "Profile",
+    "translation": "Profile",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/rates.wav",
+    "english": "Rates",
+    "translation": "Rates",
+    "needs_translation": false
+  },
+  {
+    "file": "evt/rxvolt.wav",
+    "english": "RX Batt Voltage Warning",
+    "translation": "RX Batt Voltage Warning",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/active.wav",
+    "english": "Governor - Active",
+    "translation": "Governor - Active",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/autorot.wav",
+    "english": "Governor - Auto Rotation",
+    "translation": "Governor - Auto Rotation",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/bailout.wav",
+    "english": "Governor - Bailout",
+    "translation": "Governor - Bailout",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/disabled.wav",
+    "english": "Governor - Disabled",
+    "translation": "Governor - Disabled",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/disarmed.wav",
+    "english": "Governor - Disarmed",
+    "translation": "Governor - Disarmed",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/idle.wav",
+    "english": "Governor - Idle",
+    "translation": "Governor - Idle",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/lost-hs.wav",
+    "english": "Governor - Lost Headspeed",
+    "translation": "Governor - Lost Headspeed",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/off.wav",
+    "english": "Governor - Off",
+    "translation": "Governor - Off",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/recovery.wav",
+    "english": "Governor - Recovery",
+    "translation": "Governor - Recovery",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/spoolup.wav",
+    "english": "Governor - Spoolup",
+    "translation": "Governor - Spoolup",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/thr-off.wav",
+    "english": "Governor - Throttle Off",
+    "translation": "Governor - Throttle Off",
+    "needs_translation": false
+  },
+  {
+    "file": "gov/unknown.wav",
+    "english": "Governor - Unknown",
+    "translation": "Governor - Unknown",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/current.wav",
+    "english": "Current",
+    "translation": "Current",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/esc.wav",
+    "english": "Esc Temperature",
+    "translation": "Esc Temperature",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/fuel.wav",
+    "english": "Fuel",
+    "translation": "Fuel",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/headspeed.wav",
+    "english": "Head Speed",
+    "translation": "Head Speed",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/lowbat.wav",
+    "english": "Battery Empty",
+    "translation": "Battery Empty",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/lowfuel.wav",
+    "english": "Low Fuel",
+    "translation": "Low Fuel",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/lowvoltage.wav",
+    "english": "Low Voltage",
+    "translation": "Low Voltage",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/lq.wav",
+    "english": "Link Quality",
+    "translation": "Link Quality",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/mcu.wav",
+    "english": "MCU Temperature",
+    "translation": "MCU Temperature",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/notfull.wav",
+    "english": "Pack Not Full",
+    "translation": "Pack Not Full",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/remaining.wav",
+    "english": "remaining",
+    "translation": "remaining",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/timer.wav",
+    "english": "timer",
+    "translation": "timer",
+    "needs_translation": false
+  },
+  {
+    "file": "stat/alerts/voltage.wav",
+    "english": "voltage",
+    "translation": "voltage",
+    "needs_translation": false
+  }
+]

@@ -28,12 +28,14 @@ local function copyBuffer(buf)
   return out
 end
 
-local function debugLog(msg, level)
-  if type(log) == "function" then
-    log(msg, level or "info")
-  elseif type(print) == "function" then
-    print("[TELEMETRY_CONFIG.parse]["..(level or "info").."] "..tostring(msg))
-  end
+-- The logging core, through the shared instance in _G. When it is absent, silence is
+-- right: an ungated fallback would run on every TELEMETRY_CONFIG response at every
+-- debug level.
+local function coreLog()
+  local rf = _G and _G.rfsuite
+  local L = rf and rf.Log
+  if type(L) == "table" and type(L.emit) == "function" then return L end
+  return nil
 end
 
 function Api.parse(buf)
@@ -59,8 +61,14 @@ function Api.parse(buf)
     return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
   end
 
-  -- DEBUG: Log buffer content
-  debugLog("buf len="..tostring(#buf).." first="..table.concat((function() local parts = {}; for i = 1, math.min(#buf, 64) do parts[#parts+1] = tostring(buf[i]) end; return parts end)(), ","), "info")
+  -- The raw buffer, asked for BEFORE it is built: the dump is a table.concat over up to
+  -- 64 bytes, and it must cost nothing when the gate is closed.
+  local L = coreLog()
+  if L and L.wanted("info") then
+    local parts = {}
+    for i = 1, math.min(#buf, 64) do parts[#parts + 1] = tostring(buf[i]) end
+    L.emit("rfsuite.msp.telemetry_config", "buf len=" .. tostring(#buf) .. " first=" .. table.concat(parts, ","), "info")
+  end
 
   local parsed = {
     telemetry_inverted = u8(1),
@@ -80,21 +88,22 @@ function Api.parse(buf)
       local idx = slotBase + i - 1
       local byte = tonumber(buf[idx])
       if byte == nil then
-        debugLog("slot "..tostring(i).." idx="..tostring(idx).." is nil (break)", "warn")
+        if L then L.emit("rfsuite.msp.telemetry_config", "slot "..tostring(i).." idx="..tostring(idx).." is nil (break)", "warn") end
         break
       end
       parsed["telem_sensor_slot_" .. tostring(i)] = byte
     end
   end
 
-  -- DEBUG: Log parsed slots
-  do
+  -- The parsed slots, behind the same gate and by the same rule: the string is only
+  -- built once the gate has passed.
+  if L and L.wanted("info") then
     local slotParts = {}
     for i = 1, 40 do
       local v = parsed["telem_sensor_slot_"..tostring(i)]
       slotParts[#slotParts+1] = tostring(v or "nil")
     end
-    debugLog("parsed slots: "..table.concat(slotParts, ","), "info")
+    L.emit("rfsuite.msp.telemetry_config", "parsed slots: "..table.concat(slotParts, ","), "info")
   end
 
   return parsed

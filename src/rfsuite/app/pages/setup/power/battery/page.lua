@@ -16,6 +16,7 @@ local MspRuntime = nil
 local BatteryConfigApi = nil
 local BatteryProfileApi = nil
 local Sensors = nil
+local SmartFuelReserve = nil
 local t = nil
 
 M.eepromWrite = true
@@ -50,6 +51,10 @@ end
 local ui = {
 	loaded = false,
 	dirty = false,
+	-- Tracks whether the pilot has actively changed the Consumption reserve field
+	-- in this session. Only when true will onSave write consumptionWarningPercentage
+	-- back to the flight controller, preventing silent overwrites of cbat_alert_percent.
+	reserveDirty = false,
 	config = {
 		selectedBatteryProfile = 0,
 		capacities = { 0, 0, 0, 0, 0, 0 },
@@ -88,6 +93,7 @@ local function ensureDeps()
 	if not BatteryConfigApi then BatteryConfigApi = loadModule("tasks/msp/api/battery_config.lua") end
 	if not BatteryProfileApi then BatteryProfileApi = loadModule("tasks/msp/api/battery_profile.lua") end
 	if not Sensors then Sensors = loadModule("lib/sensors.lua") end
+	if not SmartFuelReserve then SmartFuelReserve = loadModule("lib/smartfuel_reserve.lua") end
 	if not t then t = Common and Common.pageT("setup_power_battery") or nil end
 end
 
@@ -214,9 +220,15 @@ local function loadFromSession()
 	ui.config.vbatmincellvoltage = clampInt(batteryConfig and batteryConfig.vbatmincellvoltage, 250, 500, 330)
 	ui.config.batteryCellCount = clampInt(batteryConfig and batteryConfig.batteryCellCount, CELL_COUNT_MIN, CELL_COUNT_MAX, 0)
 
-	local reserve = batteryPrefs and batteryPrefs.consumption_warning_percentage
+	-- Resolve consumption reserve: SmartFuelReserve.pick prioritizes explicit per-model
+	-- preference when set by the pilot, then falls through to the FC's cbat_alert_percent.
+	-- Since defaultModelPreferences() no longer seeds 35, unedited models will pick the board value.
+	local reserve = SmartFuelReserve and SmartFuelReserve.pick(session, batteryConfig)
 	if reserve == nil then
 		reserve = batteryConfig and batteryConfig.consumptionWarningPercentage
+		if reserve == nil then
+			reserve = batteryPrefs and batteryPrefs.consumption_warning_percentage
+		end
 	end
 	ui.config.consumption_warning_percentage = clampInt(reserve, RESERVE_MIN, RESERVE_MAX, 35)
 end
@@ -226,6 +238,7 @@ local function queueBatteryRead()
 	if ui.runtime.readPending then
 		return false
 	end
+	ui.runtime.readComplete = false
 	if not MspRuntime or not BatteryConfigApi or type(MspRuntime.getState) ~= "function" then
 		return false
 	end
@@ -237,6 +250,7 @@ local function queueBatteryRead()
 		return false
 	end
 
+	local readValid = type(getSession()) == "table"
 	ui.runtime.readPending = true
 	ui.loading = true
 	ui.progress = 0
@@ -250,6 +264,7 @@ local function queueBatteryRead()
 			ui.progress = 1
 			if type(session) == "table" then
 				local parsed = BatteryConfigApi.parse and BatteryConfigApi.parse(buf) or nil
+				if type(parsed) ~= "table" then return Common.failPageRead(ui) end
 				if type(parsed) == "table" then
 					session.battery_config = parsed
 					session.batteryConfig = parsed
@@ -258,11 +273,13 @@ local function queueBatteryRead()
 			if not ui.dirty then
 				loadFromSession()
 			end
+			ui.runtime.readComplete = readValid
 			if type(ui.runtime.requestRebuild) == "function" then
 				ui.runtime.requestRebuild()
 			end
 		end,
 		errorHandler = function()
+			readValid = false
 			ui.runtime.readPending = false
 			ui.loading = false
 			ui.progress = 1
@@ -366,6 +383,7 @@ local function getReserveSetter()
 		local nextValue = clampInt(value, RESERVE_MIN, RESERVE_MAX, 35)
 		if ui.config.consumption_warning_percentage == nextValue then return end
 		ui.config.consumption_warning_percentage = nextValue
+		ui.reserveDirty = true
 		markDirty()
 	end
 	return ui.runtime.reserveSet
@@ -408,18 +426,22 @@ function M.getHeaderActions()
 	}
 end
 
-function M.allowMemAutoRefresh()
-	return true
-end
 
 function M.onReload()
 	ensureDeps()
 	ui.loaded = false
+	ui.dirty = false
+	ui.reserveDirty = false
 	ensureLoaded()
 	return false
 end
 
+function M.canSave()
+	return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+	if not M.canSave() then return false, "loaded_data_missing" end
 	ensureDeps()
 	ensureLoaded()
 
@@ -439,7 +461,15 @@ function M.onSave(ctx)
 	batteryConfig.vbatfullcellvoltage = clampInt(ui.config.vbatfullcellvoltage, 250, 500, 410)
 	batteryConfig.vbatwarningcellvoltage = clampInt(ui.config.vbatwarningcellvoltage, 250, 500, 350)
 	batteryConfig.vbatmincellvoltage = clampInt(ui.config.vbatmincellvoltage, 250, 500, 330)
-	batteryConfig.consumptionWarningPercentage = reserve
+	-- Fix for issue #52: only overwrite consumptionWarningPercentage in batteryConfig
+	-- when the pilot explicitly edited the Consumption reserve spinner.
+	-- If unedited, preserve the existing FC value; if batteryConfig has no value yet,
+	-- populate from ui.config so we never write 0 to the FC.
+	if ui.reserveDirty then
+		batteryConfig.consumptionWarningPercentage = reserve
+	elseif batteryConfig.consumptionWarningPercentage == nil then
+		batteryConfig.consumptionWarningPercentage = reserve
+	end
 	batteryConfig.batteryProfile = activeProfile
 	for i = 0, 5 do
 		batteryConfig["batteryCapacity_" .. tostring(i)] = clampInt(ui.config.capacities[i + 1], CAPACITY_MIN, CAPACITY_MAX, 0)
@@ -450,7 +480,10 @@ function M.onSave(ctx)
 	session.battery_config = batteryConfig
 	session.batteryConfig = batteryConfig
 
-	batteryPrefs.consumption_warning_percentage = reserve
+	-- Only persist the reserve preference when the pilot explicitly changed it.
+	if ui.reserveDirty then
+		batteryPrefs.consumption_warning_percentage = reserve
+	end
 	local okPrefs, errPrefs = saveModelPreferences(session)
 
 	local okMsp = false
@@ -489,24 +522,25 @@ function M.onSave(ctx)
 		end
 	end
 
-	if lvgl and lvgl.alert then
+	if ctx and type(ctx.reportSave) == "function" then
 		if okMsp and okPrefs then
-			lvgl.alert({
+			ctx.reportSave({
+				ok = true,
 				title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
 				message = pageText(ctx and ctx.i18n, "saved_message", "Battery settings saved")
 			})
 		elseif okMsp and not okPrefs then
-			lvgl.alert({
+			ctx.reportSave({
 				title = pageText(ctx and ctx.i18n, "warning_title", "Warning"),
 				message = "Battery values sent to FC. Model prefs save failed: " .. tostring(errPrefs or "io")
 			})
 		elseif (not okMsp) and okPrefs then
-			lvgl.alert({
+			ctx.reportSave({
 				title = pageText(ctx and ctx.i18n, "warning_title", "Warning"),
 				message = pageText(ctx and ctx.i18n, "saved_local_only_message", "Saved locally; FC write pending")
 			})
 		else
-			lvgl.alert({
+			ctx.reportSave({
 				title = pageText(ctx and ctx.i18n, "warning_title", "Warning"),
 				message = "FC write pending and model prefs save failed: " .. tostring(errPrefs or "io")
 			})
@@ -514,6 +548,7 @@ function M.onSave(ctx)
 	end
 
 	ui.dirty = false
+	ui.reserveDirty = false
 	ui.runtime.lastSessionSignature = buildSessionSignature()
 	return true
 end
@@ -686,6 +721,7 @@ function M.onClose()
 		ui.loaded = false
 		ui.dirty = false
 	end
+	ui.reserveDirty = false
 	ui.loading = false
 	ui.progress = 0
 	Controls = nil
@@ -695,6 +731,7 @@ function M.onClose()
 	BatteryConfigApi = nil
 	BatteryProfileApi = nil
 	Sensors = nil
+	SmartFuelReserve = nil
 	t = nil
 end
 

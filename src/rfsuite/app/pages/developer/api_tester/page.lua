@@ -111,7 +111,7 @@ local function appendDataRow(children, x, y, w, labelText, valueText)
     y = y + rowH,
     w = w,
     h = 1,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true,
   }
 
@@ -221,11 +221,11 @@ local function addApiName(name, names, seen)
 end
 
 local function listApiDir(path, names, seen)
-  Log.emit("api_tester", "listApiDir: trying path " .. tostring(path), "debug", true)
+  Log.emit("api_tester", "listApiDir: trying path " .. tostring(path), "debug")
 
   -- Prefer EdgeTX/Ethos native dir() if available
   if type(dir) == "function" then
-    Log.emit("api_tester", "listApiDir: using dir() for " .. tostring(path), "debug", true)
+    Log.emit("api_tester", "listApiDir: using dir() for " .. tostring(path), "debug")
     
     -- WICHTIG: Das Ausführen von dir() absichern und die Rückgabe speichern
     local okDir, iterator = pcall(dir, path)
@@ -234,7 +234,7 @@ local function listApiDir(path, names, seen)
     if okDir and type(iterator) == "function" then
       for fname in iterator do
         local ok, err = pcall(function()
-          Log.emit("api_tester", "listApiDir: processing entry: '" .. tostring(fname) .. "' (type=" .. type(fname) .. ")", "debug", true)
+          Log.emit("api_tester", "listApiDir: processing entry: '" .. tostring(fname) .. "' (type=" .. type(fname) .. ")", "debug")
           
           local clean = ""
           if type(fname) == "string" then
@@ -243,30 +243,30 @@ local function listApiDir(path, names, seen)
             clean = string.gsub(clean, "%s+$", "")
           end
           
-          Log.emit("api_tester", "listApiDir: clean='" .. tostring(clean) .. "'", "debug", true)
+          Log.emit("api_tester", "listApiDir: clean='" .. tostring(clean) .. "'", "debug")
           
           if type(clean) == "string" and clean ~= "" then
             local apiName = string.match(clean, "([%w_%-]+)%.lua$")
             
             if apiName then
-              Log.emit("api_tester", "listApiDir: addApiName AUFRUF mit apiName='" .. tostring(apiName) .. "'", "debug", true)
+              Log.emit("api_tester", "listApiDir: calling addApiName with apiName='" .. tostring(apiName) .. "'", "debug")
               addApiName(apiName, names, seen)
             end
           end
         end)
         if not ok then
-          Log.emit("api_tester", "listApiDir: ERROR bei Verarbeitung von '" .. tostring(fname) .. "': " .. tostring(err), "error", true)
+          Log.emit("api_tester", "listApiDir: error processing '" .. tostring(fname) .. "': " .. tostring(err), "error")
         end
       end
     else
-      -- Ordner existiert nicht oder ist leer
-      Log.emit("api_tester", "listApiDir: Ordner nicht gefunden oder leer für " .. tostring(path), "warn", true)
+      -- folder missing or empty
+      Log.emit("api_tester", "listApiDir: folder not found or empty for " .. tostring(path), "warn")
     end
 
     local namesStr = (names and #names > 0) and table.concat(names, ", ") or "<leer>"
-    Log.emit("api_tester", "listApiDir: final names for path '" .. tostring(path) .. "': [" .. namesStr .. "]", "debug", true)
+    Log.emit("api_tester", "listApiDir: final names for path '" .. tostring(path) .. "': [" .. namesStr .. "]", "debug")
   else
-    Log.emit("api_tester", "listApiDir: no dir() available for " .. tostring(path), "error", true)
+    Log.emit("api_tester", "listApiDir: no dir() available for " .. tostring(path), "error")
   end
 end
 
@@ -294,7 +294,7 @@ local function enqueueApiRead(apiName)
     return false
   end
 
-  local isEsc = (command == 217 or apiName:sub(1, 15) == "esc_parameters_")
+  local isEsc = (command == 217 or string.sub(apiName, 1, 15) == "esc_parameters_")
 
   if (not isEsc or not ui.connState or ui.connState == 0) and type(queue.clear) == "function" then
     queue:clear()
@@ -490,12 +490,9 @@ function M.getHeaderActions()
   return { save = false, reload = false, help = true }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 local function discoverApis()
-  Log.emit("api_tester", "discoverApis: starting", "debug", true)
+  Log.emit("api_tester", "discoverApis: starting", "debug")
   
   local names = {}
   local seen = {}
@@ -503,7 +500,7 @@ local function discoverApis()
   -- Durchsuche alle konfigurierten Ordner
   for i = 1, #API_DIR_CANDIDATES do
     local path = API_DIR_CANDIDATES[i]
-    Log.emit("api_tester", "discoverApis: checking candidate " .. tostring(path), "debug", true)
+    Log.emit("api_tester", "discoverApis: checking candidate " .. tostring(path), "debug")
     listApiDir(path, names, seen)
   end
 
@@ -518,7 +515,7 @@ local function discoverApis()
     if ok and type(api) == "table" and api.command ~= nil then
       filtered[#filtered + 1] = apiName
     else
-      Log.emit("api_tester", "discoverApis: skipping '" .. tostring(apiName) .. "' (no command or load failed)", "debug", true)
+      Log.emit("api_tester", "discoverApis: skipping '" .. tostring(apiName) .. "' (no command or load failed)", "debug")
     end
   end
 
@@ -533,7 +530,7 @@ local function discoverApis()
   end
 
   ui.selectedIndex = 1
-  Log.emit("api_tester", "discoverApis: finished. Found " .. tostring(#names) .. " APIs.", "debug", true)
+  Log.emit("api_tester", "discoverApis: finished. Found " .. tostring(#names) .. " APIs.", "debug")
 end
 
 function M.onReload()
@@ -642,11 +639,9 @@ function M.build(ctx)
   Controls.appendStaticSectionHeader(children, x, y, w, t(i18n, "section_test", "API Tester"))
 
   local cursorY = y + Controls.STATIC_SECTION_H
-  local rowH = 44
+  local rowH = (Controls and Controls.ROW_H) or 64
   local buttonW = 130
-  local buttonH = 36
   local comboW = 220
-  local comboH = 36
   local rightPad = 10
   local gap = 8
   local buttonX = x + w - buttonW - rightPad
@@ -657,13 +652,13 @@ function M.build(ctx)
   end
   if comboW < 120 then comboW = 120 end
   local labelW = comboX - x - 8
-  local buttonY = cursorY + math.floor((rowH - buttonH) / 2) - 2
-  local comboY = cursorY + math.floor((rowH - comboH) / 2) - 2
+  local ctrlY = (Controls and Controls.controlY and Controls.controlY(cursorY, rowH)) or (cursorY + math.floor((rowH - 32) / 2))
+  local labelY = (Controls and Controls.labelY and Controls.labelY(cursorY, rowH)) or (cursorY + math.floor((rowH - 21) / 2))
 
   children[#children + 1] = {
     type = "label",
     x = x,
-    y = cursorY + 10,
+    y = labelY,
     w = labelW,
     text = t(i18n, "label_api", "API"),
     color = COLOR_THEME_PRIMARY1,
@@ -673,9 +668,8 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "choice",
     x = comboX,
-    y = comboY,
+    y = ctrlY,
     w = comboW,
-    h = comboH,
     title = tostring(t(i18n, "label_api", "API")),
     values = (#ui.choiceLabels > 0) and ui.choiceLabels or { "" },
     get = function()
@@ -696,9 +690,8 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "button",
     x = buttonX,
-    y = buttonY,
+    y = ctrlY,
     w = buttonW,
-    h = buttonH,
     text = "",
     color = COLOR_THEME_SECONDARY1,
     press = ui.handlers.test,
@@ -707,7 +700,7 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "label",
     x = buttonX,
-    y = buttonY + 8,
+    y = Controls.labelY(ctrlY, Controls.CTRL_H),
     w = buttonW,
     text = t(i18n, "btn_test", "Test"),
     color = WHITE,
@@ -721,7 +714,7 @@ function M.build(ctx)
     y = cursorY + rowH,
     w = w,
     h = 1,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true,
   }
 
@@ -766,8 +759,22 @@ function M.build(ctx)
       message = message,
       progress = ui.progress
     })
-  elseif ui.errorMessage and ui.errorMessage ~= "" and AsyncLoadUi and type(AsyncLoadUi.showErrorDialog) == "function" then
-    AsyncLoadUi.showErrorDialog(ui, i18n, t)
+  elseif ui.errorMessage and ui.errorMessage ~= "" and AsyncLoadUi and type(AsyncLoadUi.appendErrorNotice) == "function" then
+    AsyncLoadUi.appendErrorNotice(children, {
+      x = x,
+      y = y,
+      w = w,
+      h = ctx.h,
+      overlay = LoadingOverlay,
+      requestRebuild = ctx and ctx.requestRebuild
+    }, ui, i18n, t)
+  end
+end
+
+function M.wakeup()
+  local now = nowSeconds()
+  if ui.loading and AsyncLoadUi and type(AsyncLoadUi.isTimedOut) == "function" and AsyncLoadUi.isTimedOut(ui, now) then
+    abortLoading(ui.i18n, tr("loading_timeout", "Timeout"))
   end
 end
 

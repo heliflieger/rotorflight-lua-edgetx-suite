@@ -15,7 +15,10 @@ return function(ctx)
   local help_p1 = t(i18n, "help_p1", "Configure the function and baud rate for each serial port on the flight controller.")
   local help_p2 = t(i18n, "help_p2", "Save writes changes to EEPROM and reboots the flight controller.")
 
-  local parts = { help_p1, help_p2 }
+  local help_p3 = t(i18n, "help_p3",
+    "Where the board layout is known, a port is named as the board prints it, with its UART name in brackets.")
+
+  local parts = { help_p1, help_p2, help_p3 }
 
   return {
     title = t(i18n, "help_title", "Ports Help"),

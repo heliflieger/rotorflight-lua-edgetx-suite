@@ -6,22 +6,13 @@
 
 local Sensors = {}
 Sensors.sim_search_misses = {}
-local Log = nil
-do
-  local okLoad, chunk = pcall(loadScript, "/SCRIPTS/TOOLS/rfsuite-core/lib/log.lua", "t")
-  if okLoad and type(chunk) == "function" then
-    local okMod, mod = pcall(chunk)
-    if okMod and type(mod) == "table" and type(mod.emit) == "function" then
-      Log = mod
-    end
-  end
-end
-local SIM_SENSOR_PATHS = {
-  "/SCRIPTS/TOOLS/rfsuite-core/sim/sensors/",
-  "/SCRIPTS/TOOLS/rfsuite.user/sim/sensors/",
-  "/SCRIPTS/rfsuite-core/sim/sensors/",
-  "SCRIPTS/TOOLS/rfsuite-core/sim/sensors/",
-}
+-- The logging core's tagged emitter, bound on first use. It cannot be bound at module scope:
+-- this file is reached from contexts where lib/log.lua has not published itself yet, which is
+-- what the raw loadScript that stood here was working around -- at the cost of going past
+-- lib/require.lua's cache and compiling a second copy of the logger for every load of this
+-- module, in "t" mode rather than the loader's own.
+local taggedLog = nil
+
 local SIM_FILE_ALIASES = {
   ["PID#"] = "pid_profile",
   ["RTE#"] = "rate_profile",
@@ -47,7 +38,29 @@ local SIM_FILE_ALIASES = {
   ["rpm"] = "rpm",
 }
 
-local debugEnabled = false
+local debugEnabled = nil
+
+-- This flag was declared false with nothing anywhere in the tree assigning it, so every call
+-- site behind it was unreachable -- including the ones that say WHY a sensor did not resolve,
+-- which is what a report about a missing telemetry value needs. The suite's own log level
+-- decides now, so the diagnostics appear when a pilot raises it and stay silent otherwise.
+--
+-- Resolved ONCE rather than per call, and that is a budget decision rather than a style one.
+-- These call sites sit on the sensor read path, which runs inside the widget's state pass;
+-- asking `Log.wanted` each time walks the preference table and lowercases a string per sensor
+-- per pass, and that showed up as ~950 instructions on `pass.state` -- over its budget on its
+-- own. The cost of resolving once is that raising the log level takes effect when the module is
+-- next loaded rather than immediately, which is the right trade for a diagnostic that a pilot
+-- turns on deliberately and then goes flying with.
+local function debugWanted()
+  if debugEnabled == nil then
+    local L = type(_G) == "table" and _G.rfsuite and _G.rfsuite.Log
+    if type(L) ~= "table" or type(L.wanted) ~= "function" then return false end
+    debugEnabled = L.wanted("debug") == true
+  end
+  return debugEnabled
+end
+
 local loggedSimulatorState = false
 local loggedSources = {}
 local simValueCache = {}
@@ -67,12 +80,15 @@ local function nowSeconds()
 end
 
 local function debugLog(key, msg)
-  if not debugEnabled then return end
+  if not debugWanted() then return end
   if key and loggedSources[key] then return end
   if key then loggedSources[key] = true end
-  if Log then
-    Log.emit("rfsuite.sensors", tostring(msg), "debug", true)
+  if not taggedLog then
+    local L = type(_G) == "table" and _G.rfsuite and _G.rfsuite.Log
+    if type(L) ~= "table" or type(L.tagged) ~= "function" then return end
+    taggedLog = L.tagged("rfsuite.sensors")
   end
+  taggedLog(tostring(msg), "debug")
 end
 
 local fieldInfoCache = {}
@@ -107,6 +123,19 @@ local function readTelemetryValue(name)
 
   valueMisses[name] = now
   return nil
+end
+
+-- getValue() answers 0 for a sensor the model still carries but the radio does not send, and 0
+-- is a number, so such a sensor would be taken for a reading. getSourceValue() returns nothing
+-- for exactly that sensor and its last value otherwise, which tells a dead sensor apart from a
+-- live one that happens to read zero. Only asked before a search path is adopted, and only about
+-- a zero, so neither a settled source nor a reading of its own costs anything.
+local function telemetryValueIsLive(name)
+  local getSrcV = _G.getSourceValue
+  if type(getSrcV) ~= "function" then return true end
+  local ok, sourceValue = pcall(getSrcV, name)
+  if not ok then return true end
+  return sourceValue ~= nil
 end
 
 local SIM_SENSOR_PATHS = {
@@ -304,6 +333,7 @@ Sensors.aliases = {
   rpm = "Hspd",
   link = "RQly",
   fuel = "Bat%",
+  smartfuel = "SmFt",
   smartconsumption = "SmCp",
   consumption = "Capa",
   current = "Curr",
@@ -374,7 +404,14 @@ function Sensors.isSimulator()
 end
 
 -- Resolve alias to 4-char sensor name
-function Sensors.resolveName(source)
+-- Memoised: the answer depends only on the source string and on Sensors.map / Sensors.aliases,
+-- both of which are written once as literals and only read afterwards --
+-- and getValue resolves a name on every read -- about twenty-five of them per background pass of
+-- the dashboard widget. `false` records a name that resolves to nothing, so a miss is answered
+-- from the table instead of running the pattern again.
+local resolvedNames = {}
+
+local function resolveNameUncached(source)
   if type(source) ~= "string" then return nil end
   local baseSource, suffix = string.match(source, "^(.-)([+-])$")
   if baseSource and suffix then
@@ -394,6 +431,18 @@ function Sensors.resolveName(source)
   return nil
 end
 
+function Sensors.resolveName(source)
+  if type(source) ~= "string" then return nil end
+  local memo = resolvedNames[source]
+  if memo ~= nil then
+    if memo == false then return nil end
+    return memo
+  end
+  local resolved = resolveNameUncached(source)
+  resolvedNames[source] = (resolved == nil) and false or resolved
+  return resolved
+end
+
 -- Get sensor metadata by 4-char name or alias
 function Sensors.getMetadata(source)
   local name = Sensors.resolveName(source)
@@ -411,6 +460,24 @@ function Sensors.getMetadata(source)
   return nil
 end
 
+-- How long a source that answered nowhere is left alone before its whole name search runs
+-- again. It used to be a flat 2 s, and a radio that carries no sensor for a source -- no
+-- altimeter, no BEC voltage, no ESC temperature -- pays that search for the whole flight.
+-- readTelemetry in widgets/dashboard/runtime.lua asks for every source in one pass, so all of
+-- those searches expire on the same boundary and land in the same pass together. The wait
+-- doubles with each further miss up to the cap below, which leaves the first retry exactly where
+-- it was and makes the steady state of an absent source fifteen times rarer.
+--
+-- Bounded rather than permanent, because a sensor can still appear: EdgeTX adds one when its
+-- first frame arrives, and the suite publishes SmFt and SmCp itself from
+-- tasks/events/telemetry_bg/smart.lua. Both happen shortly after the link comes up, and both
+-- edges of that link call Sensors.reset() below, which puts every source back on the first wait.
+local SEARCH_MISS_SECONDS = 2.0
+local SEARCH_MISS_MAX_SECONDS = 30.0
+-- Module-local, like fieldInfoCache and valueMisses above and unlike Sensors.active_paths: it is
+-- a timer of this file's own and nothing outside reads it. Sensors.reset() clears it.
+local searchWaits = {}
+
 function Sensors.getValue(source)
   if type(source) ~= "string" then return nil end
 
@@ -427,7 +494,7 @@ function Sensors.getValue(source)
       local simValue = readSimSensorFile(resolved, source)
       if type(simValue) == "number" then
         local normalized = normalizeSimValue(resolved, simValue)
-        debugLog("sim-use:" .. source, "using sim value " .. resolved .. " = " .. tostring(normalized))
+        if debugWanted() then debugLog("sim-use:" .. source, "using sim value " .. resolved .. " = " .. tostring(normalized)) end
         return normalized
       end
     end
@@ -435,7 +502,7 @@ function Sensors.getValue(source)
     local simDirect = readSimSensorFile(source, source)
     if type(simDirect) == "number" then
       local normalized = normalizeSimValue(source, simDirect)
-      debugLog("sim-direct-use:" .. source, "using sim direct value " .. source .. " = " .. tostring(normalized))
+      if debugWanted() then debugLog("sim-direct-use:" .. source, "using sim direct value " .. source .. " = " .. tostring(normalized)) end
       return normalized
     end
 
@@ -445,7 +512,7 @@ function Sensors.getValue(source)
         local simPathValue = readSimSensorFile(paths[i], source)
         if type(simPathValue) == "number" then
           local normalized = normalizeSimValue(paths[i], simPathValue)
-          debugLog("sim-search-hit:" .. source, "using sim search value " .. paths[i] .. " = " .. tostring(normalized))
+          if debugWanted() then debugLog("sim-search-hit:" .. source, "using sim search value " .. paths[i] .. " = " .. tostring(normalized)) end
           return normalized
         end
       end
@@ -457,27 +524,62 @@ function Sensors.getValue(source)
 
   local activePath = Sensors.active_paths and Sensors.active_paths[source]
   if activePath then
+    local paths = Sensors.search_paths[source]
+    local primaryPath = paths and paths[1]
+    if primaryPath and activePath ~= primaryPath then
+      local now = nowSeconds()
+      Sensors.probe_times = Sensors.probe_times or {}
+      local lastProbe = Sensors.probe_times[source] or 0
+      if now - lastProbe >= 3.0 then
+        Sensors.probe_times[source] = now
+        local primaryVal = readTelemetryValue(primaryPath)
+        if type(primaryVal) == "number" and (primaryVal ~= 0 or telemetryValueIsLive(primaryPath)) then
+          Sensors.active_paths = Sensors.active_paths or {}
+          Sensors.active_paths[source] = primaryPath
+          if debugWanted() then debugLog("telemetry-promote:" .. source, "promoted " .. primaryPath .. " = " .. tostring(primaryVal)) end
+          return primaryVal
+        end
+      end
+    end
+
     local val = readTelemetryValue(activePath)
     if type(val) == "number" then
-      debugLog("telemetry-hit-cached:" .. source, "hit " .. activePath .. " = " .. tostring(val))
+      if debugWanted() then debugLog("telemetry-hit-cached:" .. source, "hit " .. activePath .. " = " .. tostring(val)) end
       return val
     end
   end
 
   local now = nowSeconds()
   Sensors.search_misses = Sensors.search_misses or {}
-  if now - (Sensors.search_misses[source] or 0) < 2.0 then
+  if now - (Sensors.search_misses[source] or 0) < (searchWaits[source] or SEARCH_MISS_SECONDS) then
     return nil
   end
+
+  local previousWait = searchWaits[source]
+
+  -- One REPEATED search per pass. readTelemetry asks for every source in one pass, so all of the
+  -- absent ones would otherwise search in the same pass -- and that pass is the one against the
+  -- firmware's per-call instruction limit. This is the throttle the simulator half of this file
+  -- has always applied to its own searches, for the same reason (Sensors.sim_last_search above).
+  -- A source that has not missed yet is never held back, so the pass that first asks still
+  -- resolves everything the radio actually carries.
+  if previousWait ~= nil then
+    if Sensors.last_search == now then return nil end
+    Sensors.last_search = now
+  end
+
+  -- Taken away for the duration of the search and written back only by the miss tail below, so
+  -- that every path which adopts a source and returns clears the back-off on its way out.
+  searchWaits[source] = nil
 
   local paths = Sensors.search_paths[source]
   if paths then
     for i = 1, #paths do
       local val = readTelemetryValue(paths[i])
-      if type(val) == "number" then
+      if type(val) == "number" and (val ~= 0 or telemetryValueIsLive(paths[i])) then
         Sensors.active_paths = Sensors.active_paths or {}
         Sensors.active_paths[source] = paths[i]
-        debugLog("telemetry-hit:" .. source, "hit " .. paths[i] .. " = " .. tostring(val))
+        if debugWanted() then debugLog("telemetry-hit:" .. source, "hit " .. paths[i] .. " = " .. tostring(val)) end
         return val
       end
     end
@@ -488,7 +590,7 @@ function Sensors.getValue(source)
     if type(value) == "number" then
       Sensors.active_paths = Sensors.active_paths or {}
       Sensors.active_paths[source] = resolved
-      debugLog("telemetry-hit:" .. source, "telemetry hit " .. resolved .. " = " .. tostring(value))
+      if debugWanted() then debugLog("telemetry-hit:" .. source, "telemetry hit " .. resolved .. " = " .. tostring(value)) end
       return value
     end
   end
@@ -497,12 +599,54 @@ function Sensors.getValue(source)
   if type(direct) == "number" then
     Sensors.active_paths = Sensors.active_paths or {}
     Sensors.active_paths[source] = source
-    debugLog("telemetry-direct-hit:" .. source, "telemetry direct hit " .. source .. " = " .. tostring(direct))
+    if debugWanted() then debugLog("telemetry-direct-hit:" .. source, "telemetry direct hit " .. source .. " = " .. tostring(direct)) end
     return direct
   end
 
   Sensors.search_misses[source] = now
+  if previousWait == nil then
+    searchWaits[source] = SEARCH_MISS_SECONDS
+  else
+    local wait = previousWait * 2
+    if wait > SEARCH_MISS_MAX_SECONDS then wait = SEARCH_MISS_MAX_SECONDS end
+    searchWaits[source] = wait
+  end
   return nil
+end
+
+-- Flush cached sensor paths and miss / probe timers (e.g. on model disconnect/reconnect).
+function Sensors.reset()
+  if Sensors.active_paths then
+    for k in pairs(Sensors.active_paths) do
+      Sensors.active_paths[k] = nil
+    end
+  end
+  if Sensors.search_misses then
+    for k in pairs(Sensors.search_misses) do
+      Sensors.search_misses[k] = nil
+    end
+  end
+  for k in pairs(searchWaits) do
+    searchWaits[k] = nil
+  end
+  if Sensors.probe_times then
+    for k in pairs(Sensors.probe_times) do
+      Sensors.probe_times[k] = nil
+    end
+  end
+  Sensors.last_search = nil
+  if fieldInfoCache then
+    for k in pairs(fieldInfoCache) do
+      fieldInfoCache[k] = nil
+    end
+  end
+  -- `valueMisses` is a module-local table initialised at declaration time and therefore
+  -- never nil.  The guard is added purely for style consistency with the blocks above.
+  if valueMisses then
+    for k in pairs(valueMisses) do
+      valueMisses[k] = nil
+    end
+  end
 end
 
 -- Get all 4-char sensor names (for tool enumeration)

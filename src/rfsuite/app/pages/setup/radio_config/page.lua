@@ -10,6 +10,7 @@ local function loadModule(path)
 end
 
 local Controls = nil
+local SavePipeline = nil
 local Common = nil
 local MspRuntime = nil
 local RcConfigApi = nil
@@ -183,61 +184,48 @@ local function queueRcRead(isAutoReload)
 end
 
 local function queueRcWrite()
-  if not MspRuntime or not RcConfigApi or type(MspRuntime.getState) ~= "function" then
+  if not SavePipeline then SavePipeline = loadModule("tasks/msp/save_pipeline.lua") end
+  if not SavePipeline or not RcConfigApi then
     return false, "msp_runtime_unavailable"
-  end
-
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue or type(queue.add) ~= "function" then
-    return false, "msp_queue_unavailable"
   end
 
   validateThrottle()
 
-  local payload = RcConfigApi.buildWritePayload({
-    rc_center = ui.config.rc_center,
-    rc_deflection = ui.config.rc_deflection,
-    rc_arm_throttle = ui.config.rc_arm_throttle,
-    rc_min_throttle = ui.config.rc_min_throttle,
-    rc_max_throttle = ui.config.rc_max_throttle,
-    rc_deadband = ui.config.rc_deadband,
-    rc_yaw_deadband = ui.config.rc_yaw_deadband
-  })
-
-  queue:add({
-    command = RcConfigApi.writeCommand,
-    payload = payload,
-    isWrite = true,
-    processReply = function()
-      -- Step 2: Write EEPROM
-      local eepromApi = loadModule("tasks/msp/api/eeprom_write.lua")
-      if eepromApi then
-        queue:add({
-          command = eepromApi.command,
-          payload = {},
-          isWrite = true,
-          processReply = function()
-            -- Step 3: Write REBOOT
-            local rebootApi = loadModule("tasks/msp/api/reboot.lua")
-            if rebootApi then
-              queue:add({
-                command = rebootApi.writeCommand,
-                payload = rebootApi.buildWritePayload({ rebootMode = 0 }),
-                isWrite = true,
-                processReply = function() end,
-                errorHandler = function() end
-              })
-            end
-          end,
-          errorHandler = function() end
+  -- The three nested queue:add calls that stood here wrote the configuration, committed it and
+  -- sent the reboot, and the reboot's processReply was empty: nothing waited for the flight
+  -- controller to come back, and every errorHandler in the chain was empty too, so a failed
+  -- write was silent. The pipeline owns the process and reports its outcome.
+  return SavePipeline.start({
+    pageId = "setup_radio_config",
+    steps = {
+      {
+        label = "MSP_SET_RC_CONFIG",
+        command = RcConfigApi.writeCommand,
+        payload = RcConfigApi.buildWritePayload({
+          rc_center = ui.config.rc_center,
+          rc_deflection = ui.config.rc_deflection,
+          rc_arm_throttle = ui.config.rc_arm_throttle,
+          rc_min_throttle = ui.config.rc_min_throttle,
+          rc_max_throttle = ui.config.rc_max_throttle,
+          rc_deadband = ui.config.rc_deadband,
+          rc_yaw_deadband = ui.config.rc_yaw_deadband
         })
-      end
+      }
+    },
+    reboot = true,
+    invalidateSessionKeys = { "setup_radio_config" },
+    onSaved = function()
+      ui.dirty = false
     end,
-    errorHandler = function() end
+    onDone = function(result)
+      if result.status ~= "done" then
+        ui.dirty = true
+      end
+      if type(ui.runtime.requestRebuild) == "function" then
+        ui.runtime.requestRebuild()
+      end
+    end
   })
-
-  return true, nil
 end
 
 local function buildSessionSignature()
@@ -259,15 +247,16 @@ local function ensureLoaded()
 end
 
 local function appendDoubleFieldRow(children, x, y, w, rowLabelText, field1, field2)
-  local rowH = 52
-  local labelY = y + 16
-  local cellTop = y + 4
+  local rowH = (Controls and Controls.ROW_H) or 40
+  local labelY = (Controls and Controls.labelY and Controls.labelY(y, rowH)) or (y + math.floor((rowH - 21) / 2))
+  local cellTop = (Controls and Controls.controlY and Controls.controlY(y, rowH)) or (y + math.floor((rowH - 32) / 2))
   local dividerY = y + rowH
 
-  local mainW    = math.floor(w * 0.31)
-  local labelW1  = math.floor(w * 0.19)
-  local editW1   = math.floor(w * 0.14)
-  local labelGap = 6
+  local mainW    = math.floor(w * 0.18)
+  local labelW1  = math.floor(w * 0.14)
+  local editW1   = math.floor(w * 0.24)
+  local gap      = 8
+  local labelGap = 4
 
   -- Left row label
   if rowLabelText and rowLabelText ~= "" then
@@ -301,7 +290,6 @@ local function appendDoubleFieldRow(children, x, y, w, rowLabelText, field1, fie
       x = xEdit1,
       y = cellTop,
       w = editW1,
-      h = 44,
       min = field1.min,
       max = field1.max,
       active = function() return field1.active ~= false end,
@@ -315,9 +303,9 @@ local function appendDoubleFieldRow(children, x, y, w, rowLabelText, field1, fie
 
   -- Column 2
   if field2 then
-    local labelW2 = math.floor(w * 0.20)
-    local editW2  = math.floor(w * 0.14)
-    local xLabel2 = xEdit1 + editW1 + 5
+    local labelW2 = math.floor(w * 0.14)
+    local editW2  = math.floor(w * 0.24)
+    local xLabel2 = xEdit1 + editW1 + gap
     local xEdit2  = xLabel2 + labelW2
 
     children[#children + 1] = {
@@ -335,7 +323,6 @@ local function appendDoubleFieldRow(children, x, y, w, rowLabelText, field1, fie
       x = xEdit2,
       y = cellTop,
       w = editW2,
-      h = 44,
       min = field2.min,
       max = field2.max,
       active = function() return field2.active ~= false end,
@@ -352,7 +339,7 @@ local function appendDoubleFieldRow(children, x, y, w, rowLabelText, field1, fie
     type   = "rectangle",
     x = x, y = dividerY,
     w = w, h = 1,
-    color  = GREY_DEFAULT, filled = true
+    color  = COLOR_THEME_SECONDARY2, filled = true
   }
 
   return rowH + 1
@@ -366,6 +353,11 @@ end
 function M.onActivate()
   ensureDeps()
   ensureLoaded()
+  -- A save whose overlay was dismissed finished without a screen. Its outcome was held
+  -- back rather than raised over whatever page the user went to; claim it now.
+  if SavePipeline and type(SavePipeline.takeResult) == "function" then
+    SavePipeline.takeResult("setup_radio_config")
+  end
 end
 
 function M.wakeup(ctx)
@@ -423,10 +415,8 @@ function M.build(ctx)
   local cursorY = y
   if Controls and type(Controls.appendStaticSectionHeader) == "function" then
     Controls.appendStaticSectionHeader(children, x, cursorY, w, displayTitle)
-    cursorY = cursorY + (Controls.STATIC_SECTION_H or 50)
+    cursorY = cursorY + (Controls.STATIC_SECTION_H or 38)
   end
-
-  cursorY = cursorY + 10
 
   -- Stick row
   cursorY = cursorY + appendDoubleFieldRow(children, x, cursorY, w,
@@ -577,8 +567,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueRcWrite()
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -586,13 +576,12 @@ function M.onSave(ctx)
     return false
   end
 
-  ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
-      title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
-      message = pageText(ctx and ctx.i18n, "saved_message", "Radio configuration settings saved")
-    })
-  end
+  -- Nothing is announced here. This function has only QUEUED the save: the writes, the commit
+  -- and -- on this page -- the restart are all still ahead of it, and a dialog saying the
+  -- settings are saved would be a claim it cannot make. It was also drawn on TOP of the
+  -- overlay that reports the save, from a place where that overlay could not be repainted away
+  -- first, and while a native dialog stands the tool's run() does not run at all. The pipeline
+  -- reports the outcome in the overlay, once, when it knows it.
   return true
 end
 
@@ -614,9 +603,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

@@ -1,35 +1,39 @@
 local Wrapper = {}
 
-local function loadModule(path, globalKey)
-  if globalKey and _G[globalKey] then return _G[globalKey] end
-  local chunk = loadScript(path, "t")
-  if not chunk then return nil end
-  local ok, mod = pcall(chunk)
-  if ok and type(mod) == "table" then
-    if globalKey then _G[globalKey] = mod end
-    return mod
+local function requireModule(path)
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    return _G.rfsuite.require(path)
+  end
+  local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(fullPath, mode)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" then return mod end
   end
   return nil
 end
 
-
-
 local function getUtils()
-  return loadModule("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/objects/common.lua", "__rfsuiteObjectsCommonModule")
+  return requireModule("widgets/dashboard/objects/common.lua")
 end
 
 local function getThemeCommon()
-  return loadModule("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/default/common.lua", "__rfsuiteThemeDefaultCommonModule")
+  return requireModule("widgets/dashboard/themes/default/common.lua")
 end
 
 local function rgb(hex, fallback)
   if lcd and type(lcd.RGB) == "function" then
-    return lcd.RGB(hex)
+    local r = math.floor(hex / 65536) % 256
+    local g = math.floor(hex / 256) % 256
+    local b = hex % 256
+    local ok, col = pcall(lcd.RGB, r, g, b)
+    if ok and col then return col end
   end
   return fallback
 end
 
-local ARC_BG_COLOR = rgb(0x444444, GREY_DEFAULT)
+local ARC_BG_COLOR = rgb(0x444444, COLOR_THEME_SECONDARY2)
 local ARC_OK_COLOR = rgb(0x00FF00, GREEN or 0x00FF00)
 local ARC_WARN_COLOR = rgb(0xFF8000, 0xFF8000)
 local ARC_ALERT_COLOR = rgb(0xFF0000, 0xFF0000)
@@ -38,27 +42,56 @@ local BAR_OK_COLOR = rgb(0x00FF00, GREEN or 0x00FF00)
 local BAR_WARN_COLOR = rgb(0xFF8000, 0xFF8000)
 local BAR_ALERT_COLOR = rgb(0xFF0000, 0xFF0000)
 
-local function resolveThresholdColor(value, thresholds, defaultColor)
-  if type(value) ~= "number" or type(thresholds) ~= "table" or #thresholds == 0 then
-    return defaultColor
-  end
+local function useFahrenheit()
+  local prefs = type(_G) == "table" and _G.rfsuite and _G.rfsuite.preferences or nil
+  local localizations = prefs and prefs.localizations or nil
+  return tonumber(localizations and localizations.temperature_unit) == 1
+end
 
-  for i = 1, #thresholds do
-    local threshold = thresholds[i]
-    if type(threshold) == "table" and type(threshold.value) == "number" and value <= threshold.value then
-      return threshold.fillcolor or threshold.color or defaultColor
-    end
-  end
+local function isTempSource(source)
+  return source == "esc_temp" or source == "mcu_temp" or source == "temp_esc" or source == "temp_mcu"
+end
 
+local function cToF(c)
+  if type(c) == "number" then
+    return (c * 9 / 5) + 32
+  end
+  return c
+end
+
+-- The value a reactive closure renders comes out of the derived snapshot, never from a
+-- probe: the sweep runs per frame on the refresh's leftover budget, outside any pcall,
+-- so its per-object cost has to be a constant (see GEMINI.md, "Dashboard reactive
+-- closures"). The snapshot is rebuilt on the telemetry-read cadence.
+local function readDerived(state, source)
+  local derived = type(state) == "table" and state.derived or nil
+  if derived == nil or source == nil then return nil end
+  return derived[source]
+end
+
+local function resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state, utils, compiled)
+  if utils and type(utils.resolveThresholdColor) == "function" then
+    return utils.resolveThresholdColor(value, thresholds, defaultColor, isFahrenheit, box, state, "fillcolor", compiled)
+  end
   return defaultColor
 end
 
-local function getArcValueColor(value, state, box, themeCommon, utils)
+-- The grading further down is the battery rule: the value divided by the pack's estimated cell
+-- count and held against per-cell limits. It says something only where the value IS the pack
+-- voltage. A gauge on any other source -- a BEC rail, an RPM -- is not a battery, and dividing
+-- it by the cell count grades it against limits it has nothing to do with. Such a box keeps the
+-- plain fill; a theme that wants it graded states its own `thresholds`, or opts into the
+-- per-cell rule by carrying `alertcell` / `warncell`.
+local function isCellGraded(source, box)
+  if source == "voltage" then return true end
+  return box ~= nil and (box.alertcell ~= nil or box.warncell ~= nil)
+end
+
+local function getArcValueColor(value, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit, source)
   if type(value) ~= "number" then
     return ARC_BG_COLOR
   end
 
-  local unit = box and box.unit
   if unit == "%" then
     local alertPct = tonumber(box and box.alertpct) or 15
     local warnPct = tonumber(box and box.warnpct) or 30
@@ -67,8 +100,67 @@ local function getArcValueColor(value, state, box, themeCommon, utils)
     return ARC_OK_COLOR
   end
 
-  if value <= 0 then
+  -- Temperature sources: inverted threshold logic (high = warning/critical).
+  -- No division by battery cell count; raw value is evaluated directly.
+  if isTemp then
+    -- When telemetry has no reading, use background color.
+    -- Legitimate low/negative temperatures (<= 0 °C) remain valid (green).
+    if curHasValue == false then
+      return ARC_BG_COLOR
+    end
+
+    -- Resolve warn threshold (°C): box property -> theme config -> default 90.
+    local warnTemp = tonumber(box and (box.warntemp or box.warn))
+    if not warnTemp then
+      local cfg = state and state.themeConfig
+      warnTemp = tonumber(cfg and cfg.esctemp_warn)
+    end
+    warnTemp = warnTemp or 90
+
+    -- Resolve alert threshold (°C): box property -> theme config -> default max(warn+15, 105).
+    local isDefaultAlert = false
+    local alertTemp = tonumber(box and (box.alerttemp or box.alert))
+    if not alertTemp then
+      local cfg = state and state.themeConfig
+      alertTemp = tonumber(cfg and cfg.esctemp_alert)
+    end
+    if not alertTemp then
+      alertTemp = math.max(warnTemp + 15, 105)
+      isDefaultAlert = true
+    end
+
+    -- Ensure warn < alert.
+    if warnTemp > alertTemp then
+      local tmp = warnTemp
+      warnTemp = alertTemp
+      alertTemp = tmp
+    end
+
+    -- When Fahrenheit display is active, renderArc already converts curVal to °F
+    -- before calling this function, so the thresholds must be converted as well.
+    if fahrenheit then
+      warnTemp = cToF(warnTemp)
+      alertTemp = cToF(alertTemp)
+    end
+
+    -- Cap defaulted alert threshold at gaugeMax so alert color remains reachable even if
+    -- user or theme increases warnTemp beyond standard scale limits.
+    if isDefaultAlert and type(gaugeMax) == "number" and gaugeMax > warnTemp then
+      alertTemp = math.min(alertTemp, gaugeMax)
+    end
+
+    if value >= alertTemp then return ARC_ALERT_COLOR end
+    if value >= warnTemp then return ARC_WARN_COLOR end
+    return ARC_OK_COLOR
+  end
+
+  -- Default: battery cell voltage handling (ascending thresholds, low = bad).
+  if value <= 0 or curHasValue == false then
     return ARC_BG_COLOR
+  end
+
+  if not isCellGraded(source, box) then
+    return ARC_OK_COLOR
   end
 
   local cells = 1
@@ -96,24 +188,26 @@ local function getArcValueColor(value, state, box, themeCommon, utils)
   return ARC_OK_COLOR
 end
 
-local function getMaxValue(source, state, box, utils)
-  if source == "throttle_percent" then
-    return state.currentFlightMaxThrottlePercent or state.lastFlightMaxThrottlePercent
-  elseif source == "rpm" then
-    return state.currentFlightMaxRpm or state.lastFlightMaxRpm
-  elseif source == "temp_esc" or source == "esc_temp" then
-    return state.currentFlightMaxEscTemp or state.lastFlightMaxEscTemp
-  elseif source == "temp_mcu" or source == "mcu_temp" then
-    return state.currentFlightMaxMcuTemp or state.lastFlightMaxMcuTemp
-  elseif source == "current" then
-    return state.currentFlightMaxCurrent or state.lastFlightMaxCurrent
-  elseif source == "watts" then
-    return state.currentFlightMaxWatts or state.lastFlightMaxWatts
-  end
-  return nil
+-- The sources a gauge labels with the flight maximum. Which statistic one resolves to is
+-- utils.statFields' job, the same mapping the stats text object reads; this set is what keeps
+-- the label to the sources a gauge has always offered it for.
+local GAUGE_MAX_SOURCES = {
+  throttle_percent = true,
+  rpm = true,
+  temp_esc = true, esc_temp = true,
+  temp_mcu = true, mcu_temp = true,
+  current = true,
+  watts = true,
+}
+
+--- The record key a gauge's maximum label reads, resolved where the gauge is rendered. The
+--- label's own getter then runs per frame on that key, without a lookup.
+local function maxFields(source, utils)
+  if GAUGE_MAX_SOURCES[source] == nil then return nil end
+  return utils.statFields(source, "max")
 end
 
-local function resolveGaugeBounds(box, state, utils, defaultMin, defaultMax)
+local function resolveGaugeBounds(box, state, utils, defaultMin, defaultMax, isTemp)
   local fallbackMin = utils.toNumber(
     state and state.themeConfig and state.themeConfig.v_min,
     utils.toNumber(defaultMin, 0)
@@ -123,29 +217,46 @@ local function resolveGaugeBounds(box, state, utils, defaultMin, defaultMax)
     utils.toNumber(defaultMax, 100)
   )
 
+  local minValue, maxValue
   if type(box.min) == "number" and type(box.max) == "number" then
     box._gaugeMin = box._gaugeMin or box.min
     box._gaugeMax = box._gaugeMax or box.max
-    return utils.toNumber(box._gaugeMin, fallbackMin), utils.toNumber(box._gaugeMax, fallbackMax)
+    minValue = utils.toNumber(box._gaugeMin, fallbackMin)
+    maxValue = utils.toNumber(box._gaugeMax, fallbackMax)
+  else
+    minValue = utils.toNumber(utils.resolveValue(box.min, box, state), fallbackMin)
+    maxValue = utils.toNumber(utils.resolveValue(box.max, box, state), fallbackMax)
   end
 
-  local minValue = utils.toNumber(utils.resolveValue(box.min, box, state), fallbackMin)
-  local maxValue = utils.toNumber(utils.resolveValue(box.max, box, state), fallbackMax)
+  if isTemp and useFahrenheit() then
+    minValue = cToF(minValue)
+    maxValue = cToF(maxValue)
+  end
+
   return minValue, maxValue
 end
 
 local function renderBar(nodes, rect, box, state, themeCommon, utils)
   local source = utils.resolveValue(box.source, box, state)
-  local rawValue = utils.mapTelemetrySource(source, state)
+  local unit = utils.resolveValue(box.unit, box, state)
+  local isTemp = isTempSource(source) or unit == "°C" or unit == "°F"
+  local fahrenheit = isTemp and useFahrenheit()
+  -- Compiled once, here where the box is rendered, rather than on every value change in the
+  -- reactive sweep -- the argument for why that is the same answer is on Utils.renderThresholds.
+  local compiledThresholds = utils.renderThresholds(box, state, fahrenheit, WHITE)
+  local rawValue = readDerived(state, source)
   local hasValue = type(rawValue) == "number"
   local gaugeValue = utils.toNumber(rawValue, 0)
+  if fahrenheit and hasValue then
+    gaugeValue = cToF(gaugeValue)
+  end
 
-  local gaugeMin, gaugeMax = resolveGaugeBounds(box, state, utils, 0, 100)
+  local gaugeMin, gaugeMax = resolveGaugeBounds(box, state, utils, isTemp and 20 or 0, isTemp and 140 or 100, isTemp)
   
   if gaugeMax <= gaugeMin then gaugeMax = 100 end
   
   local ratio = 0
-  if gaugeMax > gaugeMin then
+  if hasValue and gaugeMax > gaugeMin then
     ratio = utils.clamp((gaugeValue - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
   end
   
@@ -166,9 +277,11 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
     local barH = panelH
     
     local thresholds = box.thresholds or {}
-    local barColor = box.fillcolor or BAR_OK_COLOR
+    local hasDynamicColor = (type(thresholds) == "table" and #thresholds > 0)
+      or type(box.fillcolor) == "function"
+    local barColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
     if hasValue then
-      barColor = resolveThresholdColor(gaugeValue, thresholds, barColor)
+      barColor = resolveThresholdColor(gaugeValue, thresholds, barColor, fahrenheit, box, state, utils, compiledThresholds)
     end
     
     -- Background bar (vertical)
@@ -181,20 +294,72 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       color = box.fillbgcolor or BAR_BG_COLOR,
       filled = true
     }
-    
-    -- Filled bar (from bottom, grows upward)
-    if ratio > 0 then
-      local filledH = math.max(1, math.floor(barH * ratio))
-      nodes[#nodes + 1] = {
-        type = "rectangle",
-        x = barX,
-        y = barY + (barH - filledH),
-        w = barWidth,
-        h = filledH,
-        color = barColor,
-        filled = true
-      }
+
+    local lastRawBar = nil
+    local cachedFillH = nil
+    local cachedFillY = nil
+    local cachedBarColor = nil
+
+    local function updateVerticalBar()
+      local curRaw = readDerived(state, source)
+      if curRaw == lastRawBar and cachedFillH ~= nil then
+        return
+      end
+      lastRawBar = curRaw
+      local curHasValue = type(curRaw) == "number"
+      local curVal = utils.toNumber(curRaw, 0)
+      if fahrenheit and curHasValue then
+        curVal = cToF(curVal)
+      end
+      local curRatio = 0
+      if curHasValue and gaugeMax > gaugeMin then
+        curRatio = utils.clamp((curVal - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
+      end
+      cachedFillH = (curRatio > 0) and math.max(1, math.floor(barH * curRatio)) or 0
+      cachedFillY = barY + (barH - cachedFillH)
+      local defaultFillColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
+      if curHasValue then
+        cachedBarColor = resolveThresholdColor(curVal, thresholds, defaultFillColor, fahrenheit, box, state, utils, compiledThresholds)
+      else
+        cachedBarColor = defaultFillColor
+      end
     end
+
+    local valuePosGetter = function()
+      updateVerticalBar()
+      return barX, cachedFillY
+    end
+
+    local valueSizeGetter = function()
+      updateVerticalBar()
+      return barWidth, cachedFillH
+    end
+
+    local valueColorGetter = hasDynamicColor and function()
+      updateVerticalBar()
+      return cachedBarColor
+    end or nil
+
+    -- EdgeTX LvglWidgetObjectBase::parseParam maps build-time w or h of 0 to LV_SIZE_CONTENT.
+    -- In EdgeTX create(), getParams -> build -> callRefs runs synchronously in one pass,
+    -- so the size getter immediately overwrites this with cachedFillH (collapsing to 0) before
+    -- anything is drawn. We seed initialH with math.max(1, ...) so parseParam never treats an
+    -- empty initial bar as content-sized even if EdgeTX lifecycle ordering changes.
+    local initialH = (hasValue and ratio > 0) and math.max(1, math.floor(barH * ratio)) or 1
+    local initialY = barY + (barH - initialH)
+
+    -- Filled bar (from bottom, grows upward)
+    nodes[#nodes + 1] = {
+      type = "rectangle",
+      x = barX,
+      y = initialY,
+      w = barWidth,
+      h = initialH,
+      pos = valuePosGetter,
+      size = valueSizeGetter,
+      color = valueColorGetter or barColor,
+      filled = true
+    }
 
     -- Optional segmented battery look for vertical bars.
     if box.battery then
@@ -215,42 +380,72 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       end
     end
     
-    -- Value text (above or inside gauge)
-    local unit = utils.resolveValue(box.unit, box, state)
+    local unit = unit
+    if fahrenheit then
+      unit = "°F"
+    elseif isTemp and (unit == nil or unit == "") then
+      unit = "°C"
+    end
     local decimals = utils.resolveValue(box.decimals, box, state)
-    local valueText = nil
-    
-    if not hasValue then
-      if unit ~= nil and unit ~= "" then
-        valueText = "-- " .. tostring(unit)
-      else
-        valueText = "--"
+
+    local lastBarVal = nil
+    local cachedBarText = nil
+    local valueTextGetter = function()
+      local curRaw = readDerived(state, source)
+      if curRaw == lastBarVal and cachedBarText ~= nil then
+        return cachedBarText
       end
-    else
-      valueText = utils.appendUnit(utils.formatDisplayValue(gaugeValue, decimals), unit)
+      lastBarVal = curRaw
+      local curHasValue = type(curRaw) == "number"
+      local curVal = utils.toNumber(curRaw, 0)
+      if not curHasValue then
+        if unit ~= nil and unit ~= "" then
+          cachedBarText = "-- " .. tostring(unit)
+        else
+          cachedBarText = "--"
+        end
+      else
+        cachedBarText = utils.appendUnit(utils.formatDisplayValue(curVal, decimals), unit)
+      end
+      return cachedBarText
     end
     
-    local textFont = utils.resolveValue(box.valuefont, box, state) or utils.resolveValue(box.font, box, state) or DBLSIZE
+    local textFontRef = nil
+    if type(box.valuefont) ~= "function" and type(box.font) ~= "function" then
+      textFontRef = box.valuefont or box.font or DBLSIZE
+    end
+    if textFontRef == nil then
+      textFontRef = function()
+        return utils.resolveValue(box.valuefont, box, state) or utils.resolveValue(box.font, box, state) or DBLSIZE
+      end
+    end
     local valuePaddingTop = utils.toNumber(utils.resolveValue(box.valuepaddingtop, box, state), 0)
-    local valuePosition = utils.resolveValue(box.valueposition, box, state) or "center"
+    local valuePosition = utils.resolveValue(box.valueposition, box, state) or "inside"
     local valueAlign = utils.resolveValue(box.valuealign, box, state) or CENTER
-    local valueY = barY + math.floor((barH - 8) / 2) + valuePaddingTop
+    local valueY = barY + math.floor((barH - 12) / 2) + valuePaddingTop
 
     if valuePosition == "top" then
-      valueY = barY + 4 + valuePaddingTop
+      valueY = barY + valuePaddingTop
     elseif valuePosition == "bottom" then
       valueY = barY + barH - 12 + valuePaddingTop
     end
     
+    local colorRef = utils.staticTextColor(box, state, WHITE)
+    if colorRef == nil then
+      colorRef = function()
+        return utils.resolveTextColor(box, state, WHITE, nil, nil, compiledThresholds)
+      end
+    end
+
     utils.pushLabel(
       nodes,
       barX,
       valueY,
       barWidth,
-      valueText,
-      utils.resolveTextColor(box, state, WHITE),
+      valueTextGetter,
+      colorRef,
       valueAlign,
-      textFont
+      textFontRef
     )
   
   -- HORIZONTAL GAUGE (default)
@@ -264,9 +459,11 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
     local barY = panelY + math.floor((panelH - barHeight) / 2)
     
     local thresholds = box.thresholds or {}
-    local barColor = box.fillcolor or BAR_OK_COLOR
+    local hasDynamicColor = (type(thresholds) == "table" and #thresholds > 0)
+      or type(box.fillcolor) == "function"
+    local barColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
     if hasValue then
-      barColor = resolveThresholdColor(gaugeValue, thresholds, barColor)
+      barColor = resolveThresholdColor(gaugeValue, thresholds, barColor, fahrenheit, box, state, utils, compiledThresholds)
     end
     
     -- Background bar
@@ -279,133 +476,235 @@ local function renderBar(nodes, rect, box, state, themeCommon, utils)
       color = box.fillbgcolor or BAR_BG_COLOR,
       filled = true
     }
-    
-    -- Filled bar
-    if ratio > 0 then
-      nodes[#nodes + 1] = {
-        type = "rectangle",
-        x = barX,
-        y = barY,
-        w = math.max(1, math.floor(barW * ratio)),
-        h = barHeight,
-        color = barColor,
-        filled = true
-      }
-    end
-    
-    -- Value text
-    local unit = utils.resolveValue(box.unit, box, state)
-    local decimals = utils.resolveValue(box.decimals, box, state)
-    local valueText = nil
-    
-    if not hasValue then
-      if unit ~= nil and unit ~= "" then
-        valueText = "-- " .. tostring(unit)
-      else
-        valueText = "--"
+
+    local lastRawBar = nil
+    local cachedBarW = nil
+    local cachedBarColor = nil
+
+    local function updateHorizontalBar()
+      local curRaw = readDerived(state, source)
+      if curRaw == lastRawBar and cachedBarW ~= nil then
+        return
       end
-    else
-      valueText = utils.appendUnit(utils.formatDisplayValue(gaugeValue, decimals), unit)
+      lastRawBar = curRaw
+      local curHasValue = type(curRaw) == "number"
+      local curVal = utils.toNumber(curRaw, 0)
+      if fahrenheit and curHasValue then
+        curVal = cToF(curVal)
+      end
+      local curRatio = 0
+      if curHasValue and gaugeMax > gaugeMin then
+        curRatio = utils.clamp((curVal - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
+      end
+      cachedBarW = (curRatio > 0) and math.max(1, math.floor(barW * curRatio)) or 0
+      local defaultFillColor = utils.resolveValue(box.fillcolor, box, state) or BAR_OK_COLOR
+      if curHasValue then
+        cachedBarColor = resolveThresholdColor(curVal, thresholds, defaultFillColor, fahrenheit, box, state, utils, compiledThresholds)
+      else
+        cachedBarColor = defaultFillColor
+      end
+    end
+
+    local valueSizeGetter = function()
+      updateHorizontalBar()
+      return cachedBarW, barHeight
+    end
+
+    local valueColorGetter = hasDynamicColor and function()
+      updateHorizontalBar()
+      return cachedBarColor
+    end or nil
+
+    -- EdgeTX LvglWidgetObjectBase::parseParam maps build-time w or h of 0 to LV_SIZE_CONTENT.
+    -- In EdgeTX create(), getParams -> build -> callRefs runs synchronously in one pass,
+    -- so the size getter immediately overwrites this with cachedBarW (collapsing to 0) before
+    -- anything is drawn. We seed initialW with math.max(1, ...) so parseParam never treats an
+    -- empty initial bar as content-sized even if EdgeTX lifecycle ordering changes.
+    local initialW = (hasValue and ratio > 0) and math.max(1, math.floor(barW * ratio)) or 1
+
+    -- Filled bar
+    nodes[#nodes + 1] = {
+      type = "rectangle",
+      x = barX,
+      y = barY,
+      w = initialW,
+      h = barHeight,
+      size = valueSizeGetter,
+      color = valueColorGetter or barColor,
+      filled = true
+    }
+    
+    local unit = unit
+    if fahrenheit then
+      unit = "°F"
+    elseif isTemp and (unit == nil or unit == "") then
+      unit = "°C"
+    end
+    local decimals = utils.resolveValue(box.decimals, box, state)
+
+    local lastBarVal = nil
+    local cachedBarText = nil
+    local valueTextGetter = function()
+      local curRaw = readDerived(state, source)
+      if curRaw == lastBarVal and cachedBarText ~= nil then
+        return cachedBarText
+      end
+      lastBarVal = curRaw
+      local curHasValue = type(curRaw) == "number"
+      local curVal = utils.toNumber(curRaw, 0)
+      if not curHasValue then
+        if unit ~= nil and unit ~= "" then
+          cachedBarText = "-- " .. tostring(unit)
+        else
+          cachedBarText = "--"
+        end
+      else
+        cachedBarText = utils.appendUnit(utils.formatDisplayValue(curVal, decimals), unit)
+      end
+      return cachedBarText
     end
     
-    local textFont = utils.resolveValue(box.valuefont, box, state) or utils.resolveValue(box.font, box, state) or DBLSIZE
+    local textFontRef = nil
+    if type(box.valuefont) ~= "function" and type(box.font) ~= "function" then
+      textFontRef = box.valuefont or box.font or DBLSIZE
+    end
+    if textFontRef == nil then
+      textFontRef = function()
+        return utils.resolveValue(box.valuefont, box, state) or utils.resolveValue(box.font, box, state) or DBLSIZE
+      end
+    end
     local valuePaddingLeft = utils.toNumber(utils.resolveValue(box.valuepaddingleft, box, state), 8)
     local valuePaddingTop = utils.toNumber(utils.resolveValue(box.valuepaddingtop, box, state), 0)
     local valueAlign = utils.resolveValue(box.valuealign, box, state) or LEFT
     
+    local colorRef = utils.staticTextColor(box, state, WHITE)
+    if colorRef == nil then
+      colorRef = function()
+        return utils.resolveTextColor(box, state, WHITE, nil, nil, compiledThresholds)
+      end
+    end
+
     utils.pushLabel(
       nodes,
       barX + valuePaddingLeft,
       barY + math.floor((barHeight - 8) / 2) + valuePaddingTop,
       barW - valuePaddingLeft - 4,
-      valueText,
-      utils.resolveTextColor(box, state, WHITE),
+      valueTextGetter,
+      colorRef,
       valueAlign,
-      textFont
+      textFontRef
     )
   
     -- Battery advanced info (like capacity) - only for horizontal
     if box.battadv then
-      local battAdvText = ""
-      if source == "smartfuel" or source == "fuel" then
-        local voltageText = nil
-        if themeCommon and type(themeCommon.formatVoltage) == "function" and type(state and state.voltage) == "number" and state.voltage > 0 then
-          local cellText = nil
-          local cells = nil
-          if type(state and state.batteryCellCount) == "number" and state.batteryCellCount > 0 then
-            cells = state.batteryCellCount
-          elseif type(themeCommon.estimateCellCount) == "function" then
-            cells = themeCommon.estimateCellCount(state)
+      local lastBattAdvVoltage = nil
+      local lastBattAdvCells = nil
+      local lastBattAdvMah = nil
+      local cachedBattAdvText = nil
+      local battAdvTextGetter = function()
+        local curVoltage = state and state.voltage
+        local curCells = state and state.batteryCellCount
+        local curMah = state and state.consumedMah
+        if curVoltage == lastBattAdvVoltage and curCells == lastBattAdvCells and curMah == lastBattAdvMah and cachedBattAdvText ~= nil then
+          return cachedBattAdvText
+        end
+        lastBattAdvVoltage = curVoltage
+        lastBattAdvCells = curCells
+        lastBattAdvMah = curMah
+
+        local battAdvText = ""
+        if source == "smartfuel" or source == "fuel" then
+          local voltageText = nil
+          if themeCommon and type(themeCommon.formatVoltage) == "function" and type(curVoltage) == "number" and curVoltage > 0 then
+            local cellText = nil
+            local cells = nil
+            if type(curCells) == "number" and curCells > 0 then
+              cells = curCells
+            elseif type(themeCommon.estimateCellCount) == "function" then
+              local ok, c = pcall(themeCommon.estimateCellCount, state)
+              if ok and c ~= nil then cells = c end
+            end
+
+            if type(cells) == "number" and cells > 0 then
+              cellText = string.format("%.2fV (%dS)", curVoltage / cells, cells)
+            elseif type(themeCommon.formatCellVoltage) == "function" then
+              local ok, cv = pcall(themeCommon.formatCellVoltage, state, curVoltage)
+              if ok and cv ~= nil then cellText = cv end
+            end
+
+            local okFmt, fmtV = pcall(themeCommon.formatVoltage, curVoltage)
+            local baseV = (okFmt and fmtV) or string.format("%.1fV", curVoltage)
+            if cellText and cellText ~= "" then
+              voltageText = baseV .. " / " .. cellText
+            else
+              voltageText = baseV
+            end
           end
 
-          if type(cells) == "number" and cells > 0 then
-            cellText = string.format("%.2fV (%dS)", state.voltage / cells, cells)
-          elseif type(themeCommon.formatCellVoltage) == "function" then
-            cellText = themeCommon.formatCellVoltage(state, state.voltage)
+          local consumptionText = nil
+          local consumedMah = tonumber(curMah)
+          if consumedMah and consumedMah >= 0 then
+            consumptionText = string.format("%d mah", math.floor(consumedMah + 0.5))
           end
 
-          if cellText and cellText ~= "" then
-            voltageText = themeCommon.formatVoltage(state.voltage) .. " / " .. cellText
+          local singleLineDetails = utils.resolveValue(box.battadvsingleline, box, state)
+
+          if voltageText and consumptionText then
+            if singleLineDetails then
+              battAdvText = voltageText .. " " .. consumptionText
+            else
+              battAdvText = voltageText .. "\n" .. consumptionText
+            end
           else
-            voltageText = themeCommon.formatVoltage(state.voltage)
+            battAdvText = voltageText or consumptionText or ""
           end
         end
-
-        local consumptionText = nil
-        local consumedMah = tonumber(state and state.consumedMah)
-        if consumedMah and consumedMah >= 0 then
-          consumptionText = string.format("%d mah", math.floor(consumedMah + 0.5))
-        end
-
-        local singleLineDetails = utils.resolveValue(box.battadvsingleline, box, state)
-
-        if voltageText and consumptionText then
-          if singleLineDetails then
-            battAdvText = voltageText .. " " .. consumptionText
-          else
-            battAdvText = voltageText .. "\n" .. consumptionText
-          end
-        else
-          battAdvText = voltageText or consumptionText or ""
-        end
+        cachedBattAdvText = battAdvText
+        return cachedBattAdvText
       end
       
-      if battAdvText ~= "" then
-        local battAdvFont = utils.resolveValue(box.battadvfont, box, state) or 0
-        local battAdvPaddingTop = utils.toNumber(utils.resolveValue(box.battadvpaddingtop, box, state), math.floor((barHeight - 8) / 2))
-        local battAdvPaddingRight = utils.toNumber(utils.resolveValue(box.battadvpaddingright, box, state), 6)
-        local battAdvAlign = utils.resolveValue(box.battadvvaluealign, box, state) or RIGHT
-        
-        utils.pushLabel(
-          nodes,
-          rect.x + 4,
-          barY + battAdvPaddingTop,
-          barW - battAdvPaddingRight - 4,
-          battAdvText,
-          box.battadvtextcolor or WHITE,
-          battAdvAlign,
-          battAdvFont
-        )
+      local battAdvFontRef = nil
+      if type(box.battadvfont) ~= "function" then
+        battAdvFontRef = box.battadvfont or 0
       end
+      if battAdvFontRef == nil then
+        battAdvFontRef = function()
+          return utils.resolveValue(box.battadvfont, box, state) or 0
+        end
+      end
+      local battAdvPaddingTop = utils.toNumber(utils.resolveValue(box.battadvpaddingtop, box, state), math.floor((barHeight - 8) / 2))
+      local battAdvPaddingRight = utils.toNumber(utils.resolveValue(box.battadvpaddingright, box, state), 6)
+      local battAdvAlign = utils.resolveValue(box.battadvvaluealign, box, state) or RIGHT
+      
+      utils.pushLabel(
+        nodes,
+        rect.x + 4,
+        barY + battAdvPaddingTop,
+        barW - battAdvPaddingRight - 4,
+        battAdvTextGetter,
+        box.battadvtextcolor or WHITE,
+        battAdvAlign,
+        battAdvFontRef
+      )
     end
   end
 end
 
 local function renderArc(nodes, rect, box, state, themeCommon, utils)
   local source = utils.resolveValue(box.source, box, state)
-  local rawValue = utils.mapTelemetrySource(source, state)
-  local hasValue = type(rawValue) == "number"
-  local gaugeValue = utils.toNumber(rawValue, 0)
+  local unit = utils.resolveValue(box.unit, box, state)
+  local isTemp = isTempSource(source) or unit == "°C" or unit == "°F"
+  local fahrenheit = isTemp and useFahrenheit()
+  -- Compiled once, here where the box is rendered, rather than on every value change in the
+  -- reactive sweep -- the argument for why that is the same answer is on Utils.renderThresholds.
+  local compiledThresholds = utils.renderThresholds(box, state, fahrenheit, WHITE)
 
-  local gaugeMin, gaugeMax = resolveGaugeBounds(box, state, utils, 18.0, 25.2)
+  local defaultMin = isTemp and 20 or 18.0
+  local defaultMax = isTemp and 140 or 25.2
+  local gaugeMin, gaugeMax = resolveGaugeBounds(box, state, utils, defaultMin, defaultMax, isTemp)
 
   -- Schutz gegen extreme Werte
   if gaugeMin == gaugeMax or gaugeMax - gaugeMin < 0.1 then return end
-
-  local ratio = 0
-  if gaugeMax > gaugeMin then
-    ratio = utils.clamp((gaugeValue - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
-  end
 
   local titleReserved = (box and box.titlepos == "bottom") and 22 or 0
   local panelY = rect.y + 4
@@ -419,18 +718,10 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
   
   if endAngle <= startAngle then endAngle = startAngle + 250 end
   local sweep = endAngle - startAngle
-  local valueEndAngle = startAngle + math.floor(sweep * ratio + 0.5)
 
   local arcBgColor = box.fillbgcolor or ARC_BG_COLOR
-  local arcValueColor = box.fillcolor
-  if not arcValueColor then
-    if type(box.thresholds) == "table" and #box.thresholds > 0 and hasValue then
-      arcValueColor = resolveThresholdColor(gaugeValue, box.thresholds, ARC_OK_COLOR)
-    else
-      arcValueColor = getArcValueColor(gaugeValue, state, box, themeCommon, utils)
-    end
-  end
 
+  -- Background arc
   nodes[#nodes + 1] = {
     type = "arc",
     x = cx,
@@ -443,19 +734,64 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
     color = arcBgColor
   }
 
-  if ratio > 0 then
-    nodes[#nodes + 1] = {
-      type = "arc",
-      x = cx,
-      y = cy,
-      radius = radius,
-      thickness = thickness,
-      startAngle = startAngle,
-      endAngle = valueEndAngle,
-      rounded = true,
-      color = arcValueColor
-    }
+  -- Dynamic Value Arc with reactive endAngle and color getters
+  local lastRawAngle = nil
+  local cachedEndAngle = nil
+  local valueEndAngleGetter = function()
+    local curRaw = readDerived(state, source)
+    if curRaw == lastRawAngle and cachedEndAngle ~= nil then
+      return cachedEndAngle
+    end
+    lastRawAngle = curRaw
+    local curVal = utils.toNumber(curRaw, 0)
+    if fahrenheit and type(curRaw) == "number" then
+      curVal = cToF(curVal)
+    end
+    local curRatio = 0
+    if gaugeMax > gaugeMin then
+      curRatio = utils.clamp((curVal - gaugeMin) / (gaugeMax - gaugeMin), 0, 1)
+    end
+    cachedEndAngle = startAngle + math.floor(sweep * curRatio + 0.5)
+    return cachedEndAngle
   end
+
+  local lastRawArcColor = nil
+  local cachedArcColor = nil
+  local valueArcColorGetter = function()
+    local curRaw = readDerived(state, source)
+    if curRaw == lastRawArcColor and cachedArcColor ~= nil then
+      return cachedArcColor
+    end
+    lastRawArcColor = curRaw
+    local curHasValue = type(curRaw) == "number"
+    local curVal = utils.toNumber(curRaw, 0)
+    if fahrenheit and curHasValue then
+      curVal = cToF(curVal)
+    end
+    local arcValueColor = box.fillcolor
+    if not arcValueColor then
+      if type(box.thresholds) == "table" and #box.thresholds > 0 and curHasValue then
+        arcValueColor =
+          resolveThresholdColor(curVal, box.thresholds, ARC_OK_COLOR, fahrenheit, box, state, utils, compiledThresholds)
+      else
+        arcValueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit, source)
+      end
+    end
+    cachedArcColor = arcValueColor or ARC_OK_COLOR
+    return cachedArcColor
+  end
+
+  nodes[#nodes + 1] = {
+    type = "arc",
+    x = cx,
+    y = cy,
+    radius = radius,
+    thickness = thickness,
+    startAngle = startAngle,
+    endAngle = valueEndAngleGetter,
+    rounded = true,
+    color = valueArcColorGetter
+  }
 
   local valueYOffset = utils.toNumber(utils.resolveValue(box.value_offset_y, box, state), 0)
   local displayH = tonumber(state and state.zoneH) or tonumber(LCD_H) or 0
@@ -464,24 +800,90 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
   local valueY = cy - math.floor(thickness * 1.3) - valueCenterLift + valueYOffset
   if valueY < rect.y + 10 then valueY = rect.y + 10 end
 
-  local unit = utils.resolveValue(box.unit, box, state)
+  if fahrenheit then
+    unit = "°F"
+  elseif isTemp and (unit == nil or unit == "") then
+    unit = "°C"
+  end
   local decimals = utils.resolveValue(box.decimals, box, state)
-  local valueText = nil
-  if source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function" then
-    valueText = themeCommon.formatVoltage(gaugeValue)
-  elseif not hasValue then
-    if unit ~= nil and unit ~= "" then
-      valueText = "-- " .. tostring(unit)
-    else
-      valueText = "--"
+
+  local lastRawText = nil
+  local cachedValueText = nil
+  local valueTextGetter = function()
+    local curRaw = readDerived(state, source)
+    if curRaw == lastRawText and cachedValueText ~= nil then
+      return cachedValueText
     end
-  else
-    valueText = utils.appendUnit(utils.formatDisplayValue(gaugeValue, decimals), unit)
+    lastRawText = curRaw
+    local curHasValue = type(curRaw) == "number"
+    local curVal = utils.toNumber(curRaw, 0)
+    if fahrenheit and curHasValue then
+      curVal = cToF(curVal)
+    end
+    local valueText = nil
+    if source == "voltage" and themeCommon and type(themeCommon.formatVoltage) == "function" then
+      local ok, res = pcall(themeCommon.formatVoltage, curVal)
+      if ok and res ~= nil then valueText = res end
+    end
+    if valueText == nil then
+      if not curHasValue then
+        if unit ~= nil and unit ~= "" then
+          valueText = "-- " .. tostring(unit)
+        else
+          valueText = "--"
+        end
+      else
+        valueText = utils.appendUnit(utils.formatDisplayValue(curVal, decimals), unit)
+      end
+    end
+    cachedValueText = valueText or "--"
+    return cachedValueText
   end
 
-  local valueColor = utils.resolveTextColor(box, state, WHITE)
-  if unit == "%" and hasValue then
-    valueColor = getArcValueColor(gaugeValue, state, box, themeCommon, utils)
+
+  -- Only a percentage arc colours its own reading by the value. On every other unit this getter
+  -- reduces to resolveTextColor, and reads the telemetry source once per pass to answer with the
+  -- number the box already carries.
+  local valueColorRef = nil
+  if unit ~= "%" then
+    valueColorRef = utils.staticTextColor(box, state, WHITE)
+  end
+  if valueColorRef == nil then
+    local lastRawValColor = nil
+    local cachedValColor = nil
+    valueColorRef = function()
+      local curRaw = readDerived(state, source)
+      if curRaw == lastRawValColor and cachedValColor ~= nil then
+        return cachedValColor
+      end
+      lastRawValColor = curRaw
+      local curHasValue = type(curRaw) == "number"
+      local curVal = utils.toNumber(curRaw, 0)
+      if fahrenheit and curHasValue then
+        curVal = cToF(curVal)
+      end
+      local valueColor = nil
+      if curHasValue and type(box.thresholds) == "table" and #box.thresholds > 0 then
+        valueColor =
+          utils.resolveThresholdColor(curVal, box.thresholds, nil, fahrenheit, box, state, "textcolor", compiledThresholds)
+      end
+      if valueColor == nil then
+        if unit == "%" and curHasValue then
+          valueColor = getArcValueColor(curVal, state, box, themeCommon, utils, isTemp, fahrenheit, curHasValue, gaugeMax, unit, source)
+        else
+          valueColor = utils.resolveTextColor(box, state, WHITE, nil, nil, compiledThresholds)
+        end
+      end
+      cachedValColor = valueColor
+      return cachedValColor
+    end
+  end
+
+  local fontRef = utils.staticFont(box, state, DBLSIZE, "value_font", "value_font_lowres")
+  if fontRef == nil then
+    fontRef = function()
+      return utils.resolveFont(box, state, DBLSIZE, "value_font", "value_font_lowres")
+    end
   end
 
   utils.pushLabel(
@@ -489,53 +891,68 @@ local function renderArc(nodes, rect, box, state, themeCommon, utils)
     rect.x + 4,
     valueY,
     rect.w - 8,
-    valueText,
-    valueColor,
+    valueTextGetter,
+    valueColorRef,
     box.valuealign or box.titlealign or CENTER,
-    utils.resolveFont(box, state, DBLSIZE, "value_font", "value_font_lowres")
+    fontRef
   )
   
   -- MAX value display
   if box.arcmax then
-    local maxValue = getMaxValue(source, state, box, utils)
-    if maxValue and type(maxValue) == "number" and maxValue > 0 then
-      local maxPrefix = utils.resolveValue(box.maxprefix, box, state) or "Max: "
-      local maxDecimals = utils.resolveValue(box.maxdecimals, box, state)
-      local maxUnit = utils.resolveValue(box.maxunit, box, state) or unit or ""
-      local maxText = maxPrefix .. utils.formatDisplayValue(maxValue, maxDecimals) .. maxUnit
-      
-      local maxFont = utils.resolveValue(box.maxfont, box, state) or 0
-      local maxTextColor = utils.resolveValue(box.maxtextcolor, box, state) or "orange"
-      local maxPosition = utils.resolveValue(box.maxposition, box, state)
-      local maxAlign = utils.resolveValue(box.maxalign, box, state) or LEFT
-      local maxPaddingTop = utils.toNumber(utils.resolveValue(box.maxpaddingtop, box, state), 30)
-      local maxPaddingLeft = utils.toNumber(utils.resolveValue(box.maxpaddingleft, box, state), 20)
-      local maxPaddingRight = utils.toNumber(utils.resolveValue(box.maxpaddingright, box, state), 4)
-      local maxPaddingBottom = utils.toNumber(utils.resolveValue(box.maxpaddingbottom, box, state), 26)
+    local maxPrefix = utils.resolveValue(box.maxprefix, box, state) or "Max: "
+    local maxDecimals = utils.resolveValue(box.maxdecimals, box, state)
+    local maxUnit = utils.resolveValue(box.maxunit, box, state) or unit or ""
+    local maxFont = utils.resolveValue(box.maxfont, box, state) or 0
+    local maxTextColor = utils.resolveValue(box.maxtextcolor, box, state) or "orange"
+    local maxPosition = utils.resolveValue(box.maxposition, box, state)
+    local maxAlign = utils.resolveValue(box.maxalign, box, state) or LEFT
+    local maxPaddingTop = utils.toNumber(utils.resolveValue(box.maxpaddingtop, box, state), 30)
+    local maxPaddingLeft = utils.toNumber(utils.resolveValue(box.maxpaddingleft, box, state), 20)
+    local maxPaddingRight = utils.toNumber(utils.resolveValue(box.maxpaddingright, box, state), 4)
+    local maxPaddingBottom = utils.toNumber(utils.resolveValue(box.maxpaddingbottom, box, state), 26)
 
-      local maxX = rect.x + maxPaddingLeft
-      local maxY = rect.y + maxPaddingTop
-      local maxW = rect.w - maxPaddingLeft - maxPaddingRight
+    local maxX = rect.x + maxPaddingLeft
+    local maxY = rect.y + maxPaddingTop
+    local maxW = rect.w - maxPaddingLeft - maxPaddingRight
 
-      if maxPosition == "bottom" then
-        maxAlign = utils.resolveValue(box.maxalign, box, state) or CENTER
-        maxY = rect.y + rect.h - titleReserved - maxPaddingBottom
-        if maxY < rect.y + 6 then
-          maxY = rect.y + 6
-        end
+    if maxPosition == "bottom" then
+      maxAlign = utils.resolveValue(box.maxalign, box, state) or CENTER
+      maxY = rect.y + rect.h - titleReserved - maxPaddingBottom
+      if maxY < rect.y + 6 then
+        maxY = rect.y + 6
       end
-      
-      utils.pushLabel(
-        nodes,
-        maxX,
-        maxY,
-        maxW,
-        maxText,
-        maxTextColor,
-        maxAlign,
-        maxFont
-      )
     end
+    
+    local lastRawMax = nil
+    local cachedMaxText = nil
+    local maxKey = maxFields(source, utils)
+    local maxTextGetter = function()
+      local maxValue = utils.statFromRecord(state.flight, maxKey)
+      if maxValue == lastRawMax and cachedMaxText ~= nil then
+        return cachedMaxText
+      end
+      lastRawMax = maxValue
+      if maxValue and type(maxValue) == "number" and maxValue > 0 then
+        if fahrenheit then
+          maxValue = cToF(maxValue)
+        end
+        cachedMaxText = maxPrefix .. utils.formatDisplayValue(maxValue, maxDecimals) .. maxUnit
+        return cachedMaxText
+      end
+      cachedMaxText = ""
+      return cachedMaxText
+    end
+
+    utils.pushLabel(
+      nodes,
+      maxX,
+      maxY,
+      maxW,
+      maxTextGetter,
+      maxTextColor,
+      maxAlign,
+      maxFont
+    )
   end
 end
 

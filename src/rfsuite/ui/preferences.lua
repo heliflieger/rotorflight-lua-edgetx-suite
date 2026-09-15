@@ -10,81 +10,17 @@
 
 local PreferencesSafe = {}
 
-local function defaultPreferences()
-  return {
-    general = {
-      -- display
-      language                     = "en",
-      iconsize                     = 2,
-      txbatt_type                  = 0,
-      theme_loader                 = 1,
-      hs_loader                    = 0,
-      toolbar_timeout              = 10,
-      -- safety & prompts
-      save_confirm                 = true,
-      save_armed_warning           = true,
-      reload_confirm               = true,
-      -- integration
-      syncname                     = false,
-      -- development
-      developer_tools              = false,
-      continuous_memory_log        = false,
-      show_header_memory           = false,
-      enable_serial_debug          = false,
-      debug_level                  = "off",
-    },
-    localizations = {
-      temperature_unit = 0,
-      altitude_unit    = 0,
-    },
-    audio_events = {
-      arming_flags = true,
-      governor_state = true,
-      voltage_alert = true,
-      pid_profile = true,
-      rate_profile = true,
-      esc_temperature = false,
-      esc_threshold = 90,
-      adjustment_events = false,
-      fuel_alerts = true,
-      battery_profile = true,
-      model_announcement = false,
-      initial_fuel = true,
-    },
-    audio_switches = {
-      flight_mode_switch = false,
-      arm_disarm_switch = false,
-      stabilize_mode_switch = false,
-      acro_mode_switch = false,
-      altitude_hold_switch = false,
-      position_hold_switch = false,
-      return_to_home_switch = false,
-      channel_6_switch = false,
-      switch_feedback = false,
-    },
-    audio_timer = {
-      timer1_alerts = false,
-      timer2_alerts = false,
-      timer3_alerts = false,
-      flight_time_alert = false,
-      battery_timer = false,
-      armed_timer = false,
-      count_down_timer = false,
-      count_up_timer = false,
-      timer_bell_sound = false,
-    },
-    dashboard = {
-      theme_preflight = "system/default",
-      theme_inflight = "system/default",
-      theme_postflight = "system/default",
-      model_override = false,
-      model_theme_preflight = "nil",
-      model_theme_inflight = "nil",
-      model_theme_postflight = "nil",
-      theme_config_target = "system/default",
-      connection_guard = true,
-    },
-  }
+local UNAVAILABLE = "Preferences unavailable in this build"
+
+-- The defaults are not declared here. They belong to lib/preferences.lua, and a second
+-- copy in this file could only ever be reached in a build where that library is missing,
+-- which is also a build where nothing can be saved (see save() below). A copy that is
+-- unreachable while the tool works is a copy that drifts without anyone noticing.
+local function defaultsFrom(m)
+  if not m or type(m.defaults) ~= "function" then return nil end
+  local ok, defaults = pcall(m.defaults)
+  if ok and type(defaults) == "table" then return defaults end
+  return nil
 end
 
 -- Returns a { load, save, defaults } object.
@@ -97,9 +33,7 @@ function PreferencesSafe.new(loadModuleFn)
     if module == false then return nil end
     if module ~= nil   then return module end
 
-    local ok, result = pcall(function()
-      return loadModuleFn("lib/preferences.lua")
-    end)
+    local ok, result = pcall(loadModuleFn, "lib/preferences.lua")
     if ok and type(result) == "table" then
       module = result
       return module
@@ -108,26 +42,34 @@ function PreferencesSafe.new(loadModuleFn)
     return nil
   end
 
+  local function defaults()
+    return defaultsFrom(getModule())
+  end
+
   local function load()
-    local prefs = defaultPreferences()
     local m = getModule()
-    if not m or type(m.load) ~= "function" then return prefs end
-    local ok, loaded = pcall(m.load)
-    if ok and type(loaded) == "table" then return loaded end
-    return prefs
+    if m and type(m.load) == "function" then
+      local ok, loaded = pcall(m.load)
+      if ok and type(loaded) == "table" then return loaded end
+    end
+    -- The library is there but could not read the card: its own defaults are still the
+    -- right answer. If it is not there at all, say so rather than inventing a table.
+    local fallback = defaultsFrom(m)
+    if fallback then return fallback end
+    return {}, UNAVAILABLE
   end
 
   local function save(prefs)
     local m = getModule()
     if not m or type(m.save) ~= "function" then
-      return false, "Preferences unavailable in this build"
+      return false, UNAVAILABLE
     end
     local ok, saveOk, err = pcall(m.save, prefs)
     if not ok then return false, tostring(saveOk) end
     return saveOk, err
   end
 
-  return { load = load, save = save, defaults = defaultPreferences }
+  return { load = load, save = save, defaults = defaults }
 end
 
 return PreferencesSafe

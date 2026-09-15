@@ -5,7 +5,15 @@ local function loadSrbCommon()
     return _G.__rfsuiteThemeSrbCommonModule
   end
 
-  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@srb-rc/common.lua", "t")
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    local mod = _G.rfsuite.require("widgets/dashboard/themes/@srb-rc/common.lua")
+    if mod and type(mod) == "table" then
+      return mod
+    end
+  end
+
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@srb-rc/common.lua", mode)
   if not chunk then return nil end
   local ok, mod = pcall(chunk)
   if ok and type(mod) == "table" then
@@ -17,7 +25,7 @@ local function loadSrbCommon()
   return nil
 end
 
-local SrbCommon = loadSrbCommon()
+local SrbCommon = loadSrbCommon() or {}
 
 local function cfgValue(key, fallback, state)
   local cfg = state and state.themeConfig or nil
@@ -33,11 +41,9 @@ local function isCompactDisplay(state)
   return not (w and w >= 760)
 end
 
-Theme.layout = { cols = 13, rows = 10, padding = 1, showstats = false }
+Theme.layout = { cols = 13, rows = 10, padding = 1, showstats = false, bgcolor = WHITE }
 
 Theme.boxes = {
-  { col = 1, row = 1, colspan = 13, rowspan = 10, type = "text", subtype = "text", title = "", bgcolor = BLACK },
-
   { col = 1, row = 1, colspan = 4, rowspan = 3, type = "text", subtype = "telemetry", source = "model_name", title = "@i18n(widgets.dashboard.craft_name):upper()@", titlepos = "top", titlealign = CENTER, titlefont = SMLSIZE, font = DBLSIZE, textcolor = "orange", titlecolor = WHITE, bgcolor = BLACK },
 
   { col = 1, row = 4, colspan = 2, rowspan = 3, type = "text", subtype = "telemetry", source = "pid_profile", title = "@i18n(widgets.dashboard.profile):upper()@", titlepos = "top", transform = "floor", titlefont = SMLSIZE, font = DBLSIZE, textcolor = WHITE, titlecolor = WHITE, bgcolor = BLACK },

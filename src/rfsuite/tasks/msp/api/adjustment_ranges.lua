@@ -24,10 +24,15 @@ local function parseS16(lo, hi)
 end
 
 function Api.parse(buf)
-  if type(buf) ~= "table" or #buf < ADJUSTMENT_RANGE_BYTES then return { adjustment_ranges = {} } end
+  -- The firmware serialises every slot, so a reply that does not carry all of them is a failed
+  -- read rather than a shorter table. Returning the records it did carry, or an empty table,
+  -- puts the None function in every slot it could not read -- which is indistinguishable from a
+  -- flight controller with nothing configured.
+  if type(buf) ~= "table" or #buf < ADJUSTMENT_RANGE_MAX * ADJUSTMENT_RANGE_BYTES then
+    return nil
+  end
   local ranges = {}
-  local slotCount = math.floor(#buf / ADJUSTMENT_RANGE_BYTES)
-  if slotCount > ADJUSTMENT_RANGE_MAX then slotCount = ADJUSTMENT_RANGE_MAX end
+  local slotCount = ADJUSTMENT_RANGE_MAX
   for slot = 0, slotCount - 1 do
     local base = slot * ADJUSTMENT_RANGE_BYTES + 1
     local adjFunction = buf[base]

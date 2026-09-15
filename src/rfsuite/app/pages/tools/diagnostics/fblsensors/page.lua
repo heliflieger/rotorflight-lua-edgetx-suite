@@ -11,6 +11,7 @@ end
 
 local Common = nil
 local MspRuntime = nil
+local LoadingOverlay = nil
 local Controls = nil
 local RawImuApi = nil
 local t = nil
@@ -63,6 +64,7 @@ local function ensureDeps()
   if not MspRuntime then MspRuntime = loadModule("tasks/msp/runtime.lua") end
   if not Controls then Controls = loadModule("ui/controls.lua") end
   if not RawImuApi then RawImuApi = loadModule("tasks/msp/api/raw_imu.lua") end
+  if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
   if not t then t = Common and Common.pageT("diagnostics_fblsensors") or nil end
 end
 
@@ -91,6 +93,7 @@ local function requestData()
     simulatorResponse = RawImuApi.simulatorResponse,
     processReply = function(_, buf)
       state.pendingRequest = false
+      state.answered = true
       local parsed = RawImuApi.parse(buf)
       if parsed then
         state.values = parsed
@@ -152,6 +155,20 @@ function M.build(ctx)
   
   if not state.loaded then
     state.loaded = true
+  end
+
+  -- Until the first reply lands there is nothing to draw but zeroes, and the host paints no
+  -- frame in front of a page -- so without this the page simply appears empty and the pilot
+  -- cannot tell a slow read from a page that has no data. Only the FIRST read is covered:
+  -- this page polls, and an overlay on every poll would flash.
+  if not state.answered and LoadingOverlay and type(LoadingOverlay.append) == "function" then
+    LoadingOverlay.append(children, {
+      x = x, y = y, w = w, h = h,
+      title = pageText(i18n, "loading_title", "Loading"),
+      message = pageText(i18n, "loading_message", "Reading sensors..."),
+      progress = 0.3
+    })
+    return
   end
 
   local rowY = y + 5
@@ -217,7 +234,7 @@ function M.build(ctx)
   children[#children + 1] = {
     type   = "rectangle",
     x = x, y = rowY + rowH + 2, w = w, h = 1,
-    color  = GREY_DEFAULT, filled = true
+    color  = COLOR_THEME_SECONDARY2, filled = true
   }
 
   -- ── Graph Area (Responsive & Shorter to avoid scroll) ────────────────────────
@@ -233,7 +250,7 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "rectangle",
     x = graphX, y = graphY, w = graphW, h = graphH,
-    color = GREY_DEFAULT, filled = false
+    color = COLOR_THEME_SECONDARY2, filled = false
   }
   
   -- Zero line
@@ -242,7 +259,7 @@ function M.build(ctx)
     children[#children + 1] = {
       type = "rectangle",
       x = graphX, y = zeroY, w = graphW, h = 1,
-      color = GREY_DEFAULT, filled = true
+      color = COLOR_THEME_SECONDARY2, filled = true
     }
   end
 
@@ -324,6 +341,8 @@ function M.closePage()
   state.i18n = nil
   Common = nil
   MspRuntime = nil
+  LoadingOverlay = nil
+  state.answered = false
   Controls = nil
   RawImuApi = nil
   t = nil

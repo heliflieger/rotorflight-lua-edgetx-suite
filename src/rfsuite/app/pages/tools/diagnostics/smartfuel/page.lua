@@ -69,7 +69,7 @@ local SMART_SENSORS = {
 
 local function widgetLog(msg, level)
   if Log and type(Log.emit) == "function" then
-    Log.emit("rfsuite.smartfuel.diag", tostring(msg), level or "debug", true)
+    Log.emit("rfsuite.smartfuel.diag", tostring(msg), level or "debug")
   end
 end
 
@@ -93,21 +93,7 @@ local function ensureDeps()
   if not SmartfuelApi then SmartfuelApi = loadModule("tasks/msp/api/smartfuel_config.lua") end
   if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
   if not t then t = Common and Common.pageT("diagnostics_smartfuel") or nil end
-  if not SmartFuelReserve then
-    -- Simple inline implementation of applyPercent since we don't have the separate lib file yet
-    SmartFuelReserve = {
-      applyPercent = function(value, warningPercent, enabled)
-        if value == nil then return nil end
-        local fuel = math.min(100, math.max(0, tonumber(value) or 0))
-        if enabled == false then return math.floor(fuel + 0.5) end
-        local warning = math.min(99, math.max(0, tonumber(warningPercent) or 0))
-        if warning > 0 then
-          fuel = (fuel - warning) * 100 / (100 - warning)
-        end
-        return math.floor(math.min(100, math.max(0, fuel)) + 0.5)
-      end
-    }
-  end
+  if not SmartFuelReserve then SmartFuelReserve = loadModule("lib/smartfuel_reserve.lua") end
 end
 
 local function pageText(i18n, key, fallback)
@@ -240,10 +226,10 @@ local function requestData()
       processReply = function(_, buf)
         widgetLog("requestData: smartfuel_config received")
         local res = sfApi.parse(buf)
-        if res and res.parsed then
-          state.firmwareConfig = res.parsed
+        if res then
+          state.firmwareConfig = res
           local session = getSession()
-          if session then session.smartfuel_config = res.parsed end
+          if session then session.smartfuel_config = res end
         end
         onTaskDone()
       end,
@@ -312,7 +298,7 @@ local function rebuildRows(i18n)
   local activeProfile = tonumber(readTelemetryNumeric("battery_profile")) or 1
   local configIndex = math.max(0, activeProfile - 1)
   local capacity = bc["batteryCapacity_" .. tostring(configIndex)] or bc.batteryCapacity or 0
-  local reserve = bc.consumptionWarningPercentage or 0
+  local reserve = SmartFuelReserve and SmartFuelReserve.resolve(session, bc) or 0
   
   local rawFuel = nil
   if usingFirmware and protocol and protocol.fuel then
@@ -321,7 +307,7 @@ local function rebuildRows(i18n)
     -- Fallback to standard fuel sensor if not using firmware or specific protocol sensor
     rawFuel = readTelemetryNumeric("fuel")
   end
-  local targetFuel = SmartFuelReserve.applyPercent(rawFuel, reserve)
+  local targetFuel = SmartFuelReserve and SmartFuelReserve.applyPercent(rawFuel, reserve)
   
   local rows = {
     { label = pageText(i18n, "protocol", "Protocol"), value = protocolText },

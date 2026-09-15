@@ -797,8 +797,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueGeometryWrite()
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -807,8 +807,9 @@ function M.onSave(ctx)
   end
 
   ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
+  if ctx and type(ctx.reportSave) == "function" then
+    ctx.reportSave({
+      ok = true,
       title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
       message = pageText(ctx and ctx.i18n, "saved_message", "Swashplate geometry settings saved")
     })
@@ -861,9 +862,6 @@ function M.onStar(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if ui.inOverride then

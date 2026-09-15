@@ -68,7 +68,7 @@ function Api.parse(buf)
   parsed.motor_count = tonumber(buf[pos]) or 0; pos = pos + 1
   parsed.servo_count = tonumber(buf[pos]) or 0; pos = pos + 1
   parsed.gyro_detection_flags = tonumber(buf[pos]) or 0; pos = pos + 1
-  return { parsed = parsed }
+  return parsed
 end
 
 return Api

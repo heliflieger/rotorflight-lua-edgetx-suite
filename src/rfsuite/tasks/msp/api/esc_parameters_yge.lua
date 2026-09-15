@@ -14,12 +14,26 @@ local FIELD_SPEC = {
     {"serial_number","U32"}, {"unknown_1","U16"}, {"stick_zero_us","U16"}, {"stick_range_us","U16"},
     {"unknown_2","U16"}, {"motor_poll_pairs","U16"}, {"pinion_teeth","U16"}, {"main_teeth","U16"},
     {"min_start_power","U16"}, {"max_start_power","U16"}, {"unknown_3","U16"}, {"flags","U8"},
-    {"unknown_4","U8"}, {"current_limit","U16"}
+    {"unknown_4","U8"}, {"current_limit","U16"},
+    -- The last eight bytes of the block. Their meaning is unknown here, as it is in the older
+    -- suite this layout comes from -- but they are part of what the ESC sends and of what it
+    -- expects back. The firmware sizes the payload as 2 + 2 * N from the parameter count the
+    -- ESC reports in the first U16, and this fixture reports 32, so the block is 66 bytes.
+    -- Without these a write is eight bytes short and the firmware reads past its end.
+    {"unknown_5","U32"}, {"unknown_6","U32"}
 }
 
+-- 66 bytes, matching the field spec above. The previous fixture was 52: it left three U16s out
+-- of the middle of the block -- startup response, cutoff cell voltage and active freewheel --
+-- so every field from `acceleration` onwards decoded the value belonging to a later one.
+-- `auto_restart_time` came out as 848, which is the esc_type, and `cell_cutoff` as 38019,
+-- which is half of a firmware version.
 local SIM_RESPONSE = {
-    165,0,32,0, 3,0, 55,0, 0,0, 4,0, 3,0, 1,0, 1,0, 80,3, 131,148,1,0, 30,170,0,0, 3,0, 86,4, 22,3, 163,15,
-    1,0, 2,0, 2,0, 20,0, 20,0, 0,0, 0, 0, 2,19
+    165,0,  32,0,  3,0,  55,0,  0,0,  0,0,  4,0,  3,0,  1,0,  1,0,  2,0,  3,0,  80,3,
+    131,148,1,0,  30,170,0,0,
+    3,0,  86,4,  22,3,  163,15,  1,0,  2,0,  2,0,  20,0,  20,0,  0,0,
+    0,  0,  2,19,
+    2,0,20,0,  22,0,0,0
 }
 
 local TYPE_LEN = {U8=1,S8=1,U16=2,S16=2,U24=3,U32=4,U64=8,U120=15,U128=16}

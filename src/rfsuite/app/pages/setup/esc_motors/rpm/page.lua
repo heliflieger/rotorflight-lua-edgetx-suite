@@ -10,6 +10,7 @@ local function loadModule(path)
 end
 
 local Controls = nil
+local SavePipeline = nil
 local Common = nil
 local MspRuntime = nil
 local MotorConfigApi = nil
@@ -23,7 +24,6 @@ local ui = {
   loaded = false,
   dirty = false,
   loading = false,
-  saving = false,
   progress = 0,
   baseTitle = nil,
   config = {
@@ -107,6 +107,7 @@ end
 
 local function queueRpmRead(isAutoReload)
   if ui.runtime.readPending then return false, "read_pending" end
+  ui.runtime.readComplete = false
   if not MspRuntime or not MotorConfigApi or not FeatureConfigApi or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -117,6 +118,7 @@ local function queueRpmRead(isAutoReload)
     return false, "msp_queue_unavailable"
   end
 
+  local readValid = type(getSession()) == "table"
   ui.runtime.readPending = true
   if not isAutoReload then
     ui.loading = true
@@ -132,6 +134,7 @@ local function queueRpmRead(isAutoReload)
     simulatorResponse = MotorConfigApi.simulatorResponse,
     processReply = function(self, buf)
       local parsedMotor = MotorConfigApi.parse(buf)
+      if type(parsedMotor) ~= "table" then return Common.failPageRead(ui) end
       if parsedMotor then
         ui.config.motor_pwm_protocol = parsedMotor.motor_pwm_protocol or 0
         ui.config.use_dshot_telemetry = parsedMotor.use_dshot_telemetry or 0
@@ -150,6 +153,7 @@ local function queueRpmRead(isAutoReload)
         simulatorResponse = FeatureConfigApi.simulatorResponse,
         processReply = function(self, buf2)
           local parsedFeat = FeatureConfigApi.parse(buf2)
+          if type(parsedFeat) ~= "table" then return Common.failPageRead(ui) end
           if parsedFeat then
             ui.config.enabledFeatures = parsedFeat.enabledFeatures or 0
           end
@@ -174,11 +178,13 @@ local function queueRpmRead(isAutoReload)
           ui.loading = false
           ui.dirty = false
           ui.progress = 100
+          ui.runtime.readComplete = readValid
           if type(ui.runtime.requestRebuild) == "function" then
             ui.runtime.requestRebuild()
           end
         end,
         errorHandler = function()
+          readValid = false
           ui.runtime.readPending = false
           ui.loading = false
           if type(ui.runtime.requestRebuild) == "function" then
@@ -188,6 +194,7 @@ local function queueRpmRead(isAutoReload)
       })
     end,
     errorHandler = function()
+      readValid = false
       ui.runtime.readPending = false
       ui.loading = false
       if type(ui.runtime.requestRebuild) == "function" then
@@ -200,14 +207,9 @@ local function queueRpmRead(isAutoReload)
 end
 
 local function queueRpmWrite(requestRebuild)
-  if not MspRuntime or not MotorConfigApi or not FeatureConfigApi or type(MspRuntime.getState) ~= "function" then
+  if not SavePipeline then SavePipeline = loadModule("tasks/msp/save_pipeline.lua") end
+  if not SavePipeline or not MotorConfigApi or not FeatureConfigApi then
     return false, "msp_runtime_unavailable"
-  end
-
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue or type(queue.add) ~= "function" then
-    return false, "msp_queue_unavailable"
   end
 
   local writeData = {}
@@ -224,108 +226,39 @@ local function queueRpmWrite(requestRebuild)
   writeData.tail_rotor_gear_ratio_1 = ui.config.tail_rotor_gear_ratio_1
   writeData.motor_pole_count_0 = ui.config.motor_pole_count_0
 
-  local motorPayload = MotorConfigApi.buildWritePayload(writeData)
-  local featPayload = FeatureConfigApi.buildWritePayload({ enabledFeatures = ui.config.enabledFeatures })
-
-  ui.saving = true
-  ui.progress = 0
-  if type(requestRebuild) == "function" then
-    requestRebuild()
-  end
-
-  -- Step 1: Write MOTOR_CONFIG
-  queue:add({
-    command = MotorConfigApi.writeCommand,
-    payload = motorPayload,
-    isWrite = true,
-    simulatorResponse = {},
-    processReply = function()
-      -- Step 2: Write FEATURE_CONFIG
-      queue:add({
+  -- The chain that stood here cleared the dirty flag inside the REBOOT step's processReply --
+  -- the moment the restart was sent, not the moment the settings were stored. It is reported at
+  -- the EEPROM acknowledgement now, and everything after it belongs to the pipeline. This page
+  -- was also the only one of the nine that dropped its own session cache after the reboot; the
+  -- pipeline does that for all of them, from the declaration below.
+  return SavePipeline.start({
+    pageId = "setup_esc_motors_rpm",
+    steps = {
+      {
+        label = "MSP_SET_MOTOR_CONFIG",
+        command = MotorConfigApi.writeCommand,
+        payload = MotorConfigApi.buildWritePayload(writeData)
+      },
+      {
+        label = "MSP_SET_FEATURE_CONFIG",
         command = FeatureConfigApi.writeCommand,
-        payload = featPayload,
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function()
-          -- Step 3: Write EEPROM
-          local eepromApi = loadModule("tasks/msp/api/eeprom_write.lua")
-          if eepromApi then
-            queue:add({
-              command = eepromApi.writeCommand,
-              payload = {},
-              isWrite = true,
-              simulatorResponse = {},
-              processReply = function()
-                -- Step 4: Reboot FC
-                local rebootApi = loadModule("tasks/msp/api/reboot.lua")
-                if rebootApi then
-                  queue:add({
-                    command = rebootApi.writeCommand,
-                    payload = rebootApi.buildWritePayload({ rebootMode = 0 }),
-                    isWrite = true,
-                    simulatorResponse = {},
-                    processReply = function()
-                      ui.dirty = false
-                      ui.saving = false
-                      local session = getSession()
-                      if session then
-                        session.setup_esc_motors_rpm = nil
-                      end
-                      if type(requestRebuild) == "function" then
-                        requestRebuild()
-                      end
-                    end,
-                    errorHandler = function()
-                      ui.saving = false
-                      if type(requestRebuild) == "function" then
-                        requestRebuild()
-                      end
-                    end
-                  })
-                else
-                  ui.dirty = false
-                  ui.saving = false
-                  local session = getSession()
-                  if session then
-                    session.setup_esc_motors_rpm = nil
-                  end
-                  if type(requestRebuild) == "function" then
-                    requestRebuild()
-                  end
-                end
-              end,
-              errorHandler = function()
-                ui.saving = false
-                if type(requestRebuild) == "function" then
-                  requestRebuild()
-                end
-              end
-            })
-          else
-            ui.dirty = false
-            ui.saving = false
-            if type(requestRebuild) == "function" then
-              requestRebuild()
-            end
-          end
-        end,
-        errorHandler = function()
-          ui.saving = false
-          if type(requestRebuild) == "function" then
-            requestRebuild()
-          end
-        end
-      })
+        payload = FeatureConfigApi.buildWritePayload({ enabledFeatures = ui.config.enabledFeatures })
+      }
+    },
+    reboot = true,
+    invalidateSessionKeys = { "setup_esc_motors_rpm" },
+    onSaved = function()
+      ui.dirty = false
     end,
-    errorHandler = function()
-      ui.saving = false
+    onDone = function(result)
+      if result.status ~= "done" then
+        ui.dirty = true
+      end
       if type(requestRebuild) == "function" then
         requestRebuild()
       end
     end
   })
-
-  return true, nil
 end
 
 local function ensureLoaded()
@@ -368,6 +301,11 @@ end
 function M.onActivate()
   ensureDeps()
   ensureLoaded()
+  -- A save whose overlay was dismissed finished without a screen. Its outcome was held
+  -- back rather than raised over whatever page the user went to; claim it now.
+  if SavePipeline and type(SavePipeline.takeResult) == "function" then
+    SavePipeline.takeResult("setup_esc_motors_rpm")
+  end
 end
 
 function M.wakeup(ctx)
@@ -408,9 +346,9 @@ function M.build(ctx)
   local h = ctx.h
   local i18n = ctx.i18n
 
-  if ui.loading or ui.saving then
-    local titleText = ui.loading and pageText(i18n, "loading_rpm", "Loading") or pageText(i18n, "saving_rpm", "Saving")
-    local msgText = ui.loading and pageText(i18n, "loading_rpm", "Loading RPM configuration...") or pageText(i18n, "saving_rpm", "Saving RPM configuration...")
+  if ui.loading then
+    local titleText = "@i18n(app.loading)@"
+    local msgText = pageText(i18n, "loading_rpm", "Loading RPM configuration...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
       title = titleText,
@@ -551,11 +489,16 @@ function M.build(ctx)
   end
 end
 
+function M.canSave()
+  return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+  if not M.canSave() then return false, "loaded_data_missing" end
   local ok, err = queueRpmWrite(ctx and ctx.requestRebuild)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -583,9 +526,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

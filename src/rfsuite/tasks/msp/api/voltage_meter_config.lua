@@ -49,7 +49,7 @@ function Api.parse(buf)
     p["divider_"..i] = read_u16_le(buf, pos); pos = pos + 2
     p["divmul_"..i] = tonumber(buf[pos]); pos = pos + 1
   end
-  return { parsed = p }
+  return p
 end
 
 function Api.buildWritePayload(data)

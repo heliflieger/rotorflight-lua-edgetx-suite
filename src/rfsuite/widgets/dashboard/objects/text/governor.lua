@@ -75,15 +75,18 @@ local function armingDisableFlagsToText(state)
 
   local labels = {}
   for bitIndex = 0, 25 do
-    local label = translate(
-      state,
-      "app.modules.fblstatus.arming_disable_flag_" .. tostring(bitIndex),
-      ARMING_DISABLE_FLAG_LABELS[bitIndex] or ("FLAG" .. tostring(bitIndex))
-    )
-    if bit32 and bit32.band(flags, bit32.lshift(1, bitIndex)) ~= 0 then
-      labels[#labels + 1] = label
-    elseif not bit32 and (flags % (2 ^ (bitIndex + 1))) >= (2 ^ bitIndex) then
-      labels[#labels + 1] = label
+    local isSet = false
+    if bit32 then
+      isSet = bit32.band(flags, bit32.lshift(1, bitIndex)) ~= 0
+    else
+      isSet = (flags % (2 ^ (bitIndex + 1))) >= (2 ^ bitIndex)
+    end
+    if isSet then
+      labels[#labels + 1] = translate(
+        state,
+        "app.modules.fblstatus.arming_disable_flag_" .. tostring(bitIndex),
+        ARMING_DISABLE_FLAG_LABELS[bitIndex] or ("FLAG" .. tostring(bitIndex))
+      )
     end
   end
 
@@ -137,20 +140,38 @@ local function governorText(state)
   return translate(state, "widgets.governor." .. key, key)
 end
 
-local function governorColor(state, box)
+local function governorColor(state, box, utils, compiled)
   local armed = resolveArmedState(state)
   local value = tonumber(state and state.governor)
   if armFlagsToIsArmed(state and state.armFlags) == false then
     value = 101
   end
-  local defaultText = box.textcolor or WHITE
-  local warningColor = box.warningcolor or COLOR_THEME_WARNING or RED or defaultText
-  local activeColor = box.activecolor or COLOR_THEME_PRIMARY1 or GREEN or defaultText
 
-  if box.bgcolor ~= nil and warningColor == box.bgcolor then
+  if type(box and box.thresholds) == "table" and #box.thresholds > 0 and utils and type(utils.resolveThresholdColor) == "function" then
+    local govText = governorText(state)
+    local govKey = GOVERNOR_LABELS[value]
+    local threshColor = utils.resolveThresholdColor(govText, box.thresholds, nil, false, box, state, nil, compiled)
+    if threshColor == nil and govKey ~= nil then
+      threshColor = utils.resolveThresholdColor(govKey, box.thresholds, nil, false, box, state, nil, compiled)
+    end
+    if threshColor ~= nil then
+      return threshColor
+    end
+  end
+
+  local defaultText = (utils and utils.resolveTextColor
+    and utils.resolveTextColor(box, state, WHITE, nil, nil, compiled)) or (box and box.textcolor) or WHITE
+  local warningColor = box and box.warningcolor or COLOR_THEME_WARNING or RED or defaultText
+  local activeColor = box and box.activecolor or COLOR_THEME_PRIMARY1 or GREEN or defaultText
+  if utils and utils.normalizeColor then
+    warningColor = utils.normalizeColor(warningColor, defaultText)
+    activeColor = utils.normalizeColor(activeColor, defaultText)
+  end
+
+  if box and box.bgcolor ~= nil and warningColor == box.bgcolor then
     warningColor = defaultText
   end
-  if box.bgcolor ~= nil and activeColor == box.bgcolor then
+  if box and box.bgcolor ~= nil and activeColor == box.bgcolor then
     activeColor = defaultText
   end
 
@@ -166,21 +187,79 @@ local function governorColor(state, box)
     return warningColor
   end
 
-  return box.textcolor or WHITE
+  return defaultText
 end
 
 function Render.render(nodes, rect, box, state, _, utils)
-  local valueText = governorText(state)
-  valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
+  local lastFlags = nil
+  local lastArmFlags = nil
+  local lastArmed = nil
+  local lastGov = nil
+  local cachedText = nil
+
+  local textGetter = function()
+    local flags = state and state.armDisableFlags
+    local armFlags = state and state.armFlags
+    local armed = state and state.armed
+    local gov = state and state.governor
+
+    if flags == lastFlags and armFlags == lastArmFlags and armed == lastArmed and gov == lastGov and cachedText ~= nil then
+      return cachedText
+    end
+
+    lastFlags = flags
+    lastArmFlags = armFlags
+    lastArmed = armed
+    lastGov = gov
+
+    local valueText = governorText(state)
+    valueText = utils.applyLowResMaxChars(valueText, box, state, "max_chars_lowres")
+    cachedText = valueText or "--"
+    return cachedText
+  end
+
+  -- Compiled once, here where the box is rendered, rather than on every value change in the
+  -- reactive sweep -- the argument for why that is the same answer is on Utils.renderThresholds.
+  local compiledThresholds = utils.renderThresholds(box, state, false, WHITE)
+
+  local lastColorArmFlags = nil
+  local lastColorArmed = nil
+  local lastColorGov = nil
+  local cachedColor = nil
+
+  local colorGetter = function()
+    local armFlags = state and state.armFlags
+    local armed = state and state.armed
+    local gov = state and state.governor
+
+    if armFlags == lastColorArmFlags and armed == lastColorArmed and gov == lastColorGov and cachedColor ~= nil then
+      return cachedColor
+    end
+
+    lastColorArmFlags = armFlags
+    lastColorArmed = armed
+    lastColorGov = gov
+
+    cachedColor = governorColor(state, box, utils, compiledThresholds)
+    return cachedColor
+  end
+
+  local fontRef = utils.staticFont(box, state, 0, "font", "font_lowres")
+  if fontRef == nil then
+    fontRef = function()
+      return utils.resolveFont(box, state, 0, "font", "font_lowres")
+    end
+  end
+
   utils.pushLabel(
     nodes,
     rect.x + 4,
     utils.defaultValueY(rect, box),
     rect.w - 8,
-    valueText,
-    governorColor(state, box),
+    textGetter,
+    colorGetter,
     box.valuealign or box.titlealign or CENTER,
-    utils.resolveFont(box, state, 0, "font", "font_lowres")
+    fontRef
   )
 end
 

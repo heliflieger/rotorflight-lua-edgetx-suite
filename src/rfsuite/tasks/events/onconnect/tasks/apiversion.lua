@@ -2,6 +2,7 @@
 local M = {}
 
 local Log = nil
+local MspRuntime = nil
 local function loadModule(path)
   local fullPath = "/SCRIPTS/TOOLS/rfsuite-core/" .. path
   local chunk = loadScript(fullPath, "t")
@@ -33,11 +34,23 @@ function M.wakeup()
   local session = root.session
   if type(session) ~= "table" then return end
 
-  local msp = loadModule("tasks/msp/runtime.lua")
+  -- Bound once, in the module slot above, the way ensureDeps in tasks/events/runtime.lua
+  -- already binds this same module. `loadModule` here is a bare loadScript with no cache, and
+  -- this call sits ahead of the `return` below that the task takes on every wakeup it spends
+  -- waiting for the API version -- so acquiring it inline meant re-reading and recompiling the
+  -- whole MSP runtime once per wakeup for the length of the connect phase, and again after
+  -- every M.reset().
+  if MspRuntime == nil then
+    MspRuntime = loadModule("tasks/msp/runtime.lua") or false
+  end
+  local msp = MspRuntime or nil
   local mspState = msp and type(msp.getState) == "function" and msp.getState()
 
   -- Wait until API version has been read or MSP runtime decided it won't be read
-  if (not session.apiVersion or session.apiVersion == "") and mspState and mspState.pendingVersionRead == true then
+  local apiVersion = session.apiVersion
+  if (not apiVersion or apiVersion == "" or tostring(apiVersion) == "0")
+      and mspState
+      and (mspState.pendingVersionRead == true or mspState.versionReadCompleted ~= true) then
     return
   end
 
@@ -50,18 +63,16 @@ function M.wakeup()
 
     local dialog = loadModule("ui/msp_unsupported_dialog.lua")
     if dialog and type(dialog.show) == "function" then
-      pcall(function()
-        dialog.show({
-          title = title,
-          message = msg,
-          version = tostring(session.apiVersion or "?"),
-          onFallback = function(t, m)
-            if type(Log) == "table" and type(Log.emit) == "function" then
-              pcall(Log.emit, "rfsuite.tasks.apiversion", "Unsupported MSP API: " .. tostring(session.apiVersion), "warn", true)
-            end
+      pcall(dialog.show, {
+        title = title,
+        message = msg,
+        version = tostring(session.apiVersion or "?"),
+        onFallback = function(t, m)
+          if type(Log) == "table" and type(Log.emit) == "function" then
+            pcall(Log.emit, "rfsuite.tasks.apiversion", "Unsupported MSP API: " .. tostring(session.apiVersion), "warn")
           end
-        })
-      end)
+        end
+      })
     end
   end
 
@@ -70,6 +81,10 @@ end
 
 function M.isComplete()
   return done
+end
+
+function M.reset()
+  done = false
 end
 
 return M

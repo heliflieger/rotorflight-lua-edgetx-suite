@@ -5,7 +5,15 @@ local function loadAercCommon()
     return _G.__rfsuiteThemeAercCommonModule
   end
 
-  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@aerc/common.lua", "t")
+  if _G.rfsuite and type(_G.rfsuite.require) == "function" then
+    local mod = _G.rfsuite.require("widgets/dashboard/themes/@aerc/common.lua")
+    if mod and type(mod) == "table" then
+      return mod
+    end
+  end
+
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/themes/@aerc/common.lua", mode)
   if not chunk then return nil end
   local ok, mod = pcall(chunk)
   if ok and type(mod) == "table" then
@@ -14,7 +22,7 @@ local function loadAercCommon()
   return nil
 end
 
-local AercCommon = loadAercCommon()
+local AercCommon = loadAercCommon() or {}
 
 local function cfgValue(key, fallback, state)
   local cfg = state and state.themeConfig or nil
@@ -25,10 +33,10 @@ local function cfgValue(key, fallback, state)
   return fallback
 end
 
-Theme.layout = { cols = 3, rows = 10, padding = 1 }
+Theme.layout = { cols = 3, rows = 10, padding = 1, bgcolor = WHITE }
 
 Theme.boxes = {
-  { col = 1, row = 1, colspan = 1, rowspan = 2, type = "time", subtype = "flight", title = "@i18n(widgets.dashboard.flight_time):upper()@", titlepos = "bottom", titlecolor = GREY_DEFAULT, textcolor = WHITE, bgcolor = BLACK, font = AercCommon.compactStatsFont, value_offset_y = -6 },
+  { col = 1, row = 1, colspan = 1, rowspan = 2, type = "time", subtype = "flight", title = "@i18n(widgets.dashboard.flight_time):upper()@", titlepos = "bottom", titlecolor = COLOR_THEME_DISABLED, textcolor = WHITE, bgcolor = BLACK, font = AercCommon.compactStatsFont, value_offset_y = -6 },
   AercCommon and AercCommon.batteryBar and AercCommon.batteryBar("fuel", {
     col = 2,
     row = 1,
@@ -66,10 +74,10 @@ Theme.boxes = {
     maxpaddingbottom = 26,
     maxpaddingleft = 0,
     maxpaddingright = 0,
-    titlecolor = GREY_DEFAULT,
+    titlecolor = COLOR_THEME_DISABLED,
     textcolor = WHITE,
     bgcolor = BLACK,
-    fillbgcolor = GREY_DEFAULT,
+    fillbgcolor = COLOR_THEME_SECONDARY2,
     value_font = AercCommon.gaugeValueFont,
     value_offset_y = AercCommon.gaugeValueOffset
   },
@@ -94,10 +102,10 @@ Theme.boxes = {
     maxpaddingbottom = 26,
     maxpaddingleft = 0,
     maxpaddingright = 0,
-    titlecolor = GREY_DEFAULT,
+    titlecolor = COLOR_THEME_DISABLED,
     textcolor = WHITE,
     bgcolor = BLACK,
-    fillbgcolor = GREY_DEFAULT,
+    fillbgcolor = COLOR_THEME_SECONDARY2,
     value_font = AercCommon.gaugeValueFont,
     value_offset_y = AercCommon.gaugeValueOffset
   },
@@ -123,10 +131,10 @@ Theme.boxes = {
     maxpaddingbottom = 26,
     maxpaddingleft = 0,
     maxpaddingright = 0,
-    titlecolor = GREY_DEFAULT,
+    titlecolor = COLOR_THEME_DISABLED,
     textcolor = WHITE,
     bgcolor = BLACK,
-    fillbgcolor = GREY_DEFAULT,
+    fillbgcolor = COLOR_THEME_SECONDARY2,
     value_font = AercCommon.gaugeValueFont,
     value_offset_y = AercCommon.gaugeValueOffset
   }

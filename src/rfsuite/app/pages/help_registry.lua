@@ -8,24 +8,6 @@ function HelpRegistry.new(options)
   local hasHelpByMenuId = {}
   local moduleByMenuId = {}
 
-  local function fileExists(path)
-    if type(path) ~= "string" or path == "" then
-      return false
-    end
-    if type(io) ~= "table" or type(io.open) ~= "function" then
-      -- Keep previous behavior when file I/O is unavailable in the runtime.
-      return true
-    end
-    local handle = io.open(path, "r")
-    if not handle then
-      return false
-    end
-    if type(io.close) == "function" then
-      pcall(io.close, handle)
-    end
-    return true
-  end
-
   local function getHelpScriptPath(menuId)
     local pagePath = pagePathByMenuId[menuId]
     if type(pagePath) ~= "string" or pagePath == "" then
@@ -51,11 +33,6 @@ function HelpRegistry.new(options)
 
     local scriptPath = getHelpScriptPath(menuId)
     if not scriptPath then
-      hasHelpByMenuId[menuId] = false
-      return nil
-    end
-
-    if not fileExists(scriptPath) then
       hasHelpByMenuId[menuId] = false
       return nil
     end
