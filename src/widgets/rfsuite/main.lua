@@ -116,7 +116,10 @@ local function refresh(widget, event, touchState)
         widget._cpuBackoffUntil = now + 1.2
         letGoWhileBackedOff(widget)
       end
-      widget.built = false
+      -- Clear any pending job so the widget cannot be pinned in the JOB branch
+      -- for ever when a job step raises and unwinds past refresh (see #280).
+      widget._job   = nil
+      widget.built  = false
     end
   end
 end

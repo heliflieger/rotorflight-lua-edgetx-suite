@@ -130,6 +130,20 @@ local function widgetLog(self, msg, level)
   end
 end
 
+local function logFault(context, err)
+  local prefs = type(_G) == "table" and _G.rfsuite and _G.rfsuite.preferences or nil
+  local general = prefs and prefs.general
+  if type(general) ~= "table" or general.log_to_card ~= true then return end
+
+  local requireModule = _G.rfsuite and _G.rfsuite.require
+  if type(requireModule) ~= "function" then return end
+
+  local okLoad, sink = pcall(requireModule, "lib/log_sink.lua")
+  if okLoad and type(sink) == "table" and type(sink.fault) == "function" then
+    pcall(sink.fault, context, err)
+  end
+end
+
 local function nowSeconds()
   if getTime then
     local ok, value = pcall(getTime)
@@ -2527,7 +2541,25 @@ function Runtime.new(zone, options)
           _G.rfsuite.session.event_context = nil
         end
       end
-      if self._job.step(self) then
+      -- Run the step under pcall so that a raise (including a CPU-limit kill or a
+      -- theme build error) always clears _job.  Without this guard a raising step
+      -- pins the widget in the JOB branch for ever: the next pass finds _job still
+      -- set, reruns the same step, raises again, and the STATE branch — where
+      -- performBackgroundWork / MspRuntime.tick live — is never reached again.
+      local stepOk, stepDone = pcall(self._job.step, self)
+      if not stepOk then
+        local jobKind = self._job and self._job.kind or "unknown"
+        self._job   = nil
+        self.built  = false
+        -- The entry point owns the CPU-limit response: the hold-off, and the release of the two
+        -- variables the overlay may be holding. It cannot do either if the raise stops here.
+        if type(stepDone) == "string" and string.find(stepDone, "CPU limit", 1, true) then
+          error(stepDone, 0)
+        end
+        logFault("dashboard.job." .. tostring(jobKind), stepDone)
+        widgetLog(self, "job step error (" .. tostring(jobKind) .. "): " .. tostring(stepDone), "error")
+      elseif stepDone then
+        -- step returned true: job is done.
         self._job = nil
       end
       -- The second of the two clock reads the gap line is built from; see traceInstructionUsage.
