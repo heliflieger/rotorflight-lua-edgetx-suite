@@ -33,7 +33,17 @@ local FIELD_SPEC = {
     {"auto_restart_time", "U8"},
     {"restart_acc", "U8"},
     {"gov_p", "U8"},
-    {"gov_i", "U8"}
+    {"gov_i", "U8"},
+    {"active_freewheel", "U8"},
+    {"drive_freq", "U8"},
+    {"max_motor_erpm", "U24", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "big"},
+    {"throttle_protocol", "U8"},
+    {"telemetry_protocol", "U8"},
+    {"led_color", "U8"},
+    {"led_rgb", "U24", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "big"},
+    {"motor_temp_sensor", "U8"},
+    {"motor_temp", "U8"},
+    {"capacity_cutoff", "U16", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "big"}
 }
 
 local SIM_RESPONSE = {
@@ -63,12 +73,25 @@ local SIM_RESPONSE = {
     15, -- auto_restart_time
     15, -- restart_acc
     45, -- gov_p
-    35  -- gov_i
+    35, -- gov_i
+    1, -- active_freewheel
+    16, -- drive_freq
+    1, 251, 208, -- max_motor_erpm (big)
+    1, -- throttle_protocol
+    0, -- telemetry_protocol
+    3, -- led_color
+    0, 0, 0, -- led_rgb (big)
+    0, -- motor_temp_sensor
+    100, -- motor_temp
+    0, 0 -- capacity_cutoff (big)
 }
 
 local TYPE_LEN = {
     U8 = 1, S8 = 1, U16 = 2, S16 = 2, U24 = 3, U32 = 4, U64 = 8, U120 = 15, U128 = 16
 }
+
+local PAYLOAD_LEN = 0
+for _, f in ipairs(FIELD_SPEC) do PAYLOAD_LEN = PAYLOAD_LEN + (TYPE_LEN[f[2]] or 1) end
 
 -- pairs, not ipairs. The flag is the FOURTEENTH element of a field table whose elements 3 to
 -- 13 are nil, and ipairs stops at the first hole -- so with ipairs this returned false for
@@ -139,6 +162,8 @@ Api.simulatorResponse = SIM_RESPONSE
 
 function Api.parse(buf)
     if type(buf) ~= "table" then return nil end
+    if #buf < PAYLOAD_LEN then return nil end
+    if tonumber(buf[1]) ~= Api.mspSignature then return nil end
     local pos = 1
     local out = {}
     for _, f in ipairs(FIELD_SPEC) do

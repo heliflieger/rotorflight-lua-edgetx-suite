@@ -205,6 +205,13 @@ local function queueFlyrotorWrite(requestRebuild)
     return false, "msp_queue_unavailable"
   end
 
+  -- A FlyRotor write is the whole 56-byte block, not the changed fields, so it can only be
+  -- built from a block that was read. Without one, every field the page does not itself
+  -- carry would be packed as zero and written to the ESC.
+  if not ui.parsedCache then
+    return false, "esc_not_read"
+  end
+
   local writeData = {}
   if ui.parsedCache then
     for k, v in pairs(ui.parsedCache) do
@@ -216,6 +223,11 @@ local function queueFlyrotorWrite(requestRebuild)
     writeData[k] = v
   end
 
+  local payload = EscParametersFlyrotorApi.buildWritePayload(writeData)
+  if not payload or #payload ~= 56 then
+    return false, "invalid_payload_length"
+  end
+
   ui.saving = true
   if requestRebuild and type(ui.runtime.requestRebuild) == "function" then
     ui.runtime.requestRebuild()
@@ -225,7 +237,7 @@ local function queueFlyrotorWrite(requestRebuild)
     command = EscParametersFlyrotorApi.writeCommand,
     timeout = 5,
     maxRetries = 1,
-    payload = EscParametersFlyrotorApi.buildWritePayload(writeData),
+    payload = payload,
     isWrite = true,
     processReply = function(self, buf)
       ui.dirty = false
