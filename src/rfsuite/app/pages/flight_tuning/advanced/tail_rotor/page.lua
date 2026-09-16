@@ -25,7 +25,8 @@ local function newRuntime()
   return {
     readPending = false,
     requestRebuild = nil,
-    lastSessionSignature = nil
+    lastSessionSignature = nil,
+    governorReadComplete = false
   }
 end
 
@@ -115,6 +116,7 @@ local function queueRcRead(isAutoReload)
 
   local readValid = type(getSession()) == "table"
   ui.runtime.readPending = true
+  ui.runtime.governorReadComplete = false
   if not isAutoReload then
     ui.loading = true
     ui.progress = 0
@@ -155,9 +157,11 @@ local function queueRcRead(isAutoReload)
               simulatorResponse = GovernorProfileApi.simulatorResponse,
               processReply = function(self, buf)
                 local parsedGov = GovernorProfileApi.parse(buf)
-                if type(parsedGov) ~= "table" then return Common.failPageRead(ui) end
-                if parsedGov and session then
+                if type(parsedGov) == "table" and session then
                   session.governor_profile = parsedGov
+                  ui.runtime.governorReadComplete = true
+                else
+                  ui.runtime.governorReadComplete = false
                 end
                 
                 loadFromSession()
@@ -171,9 +175,13 @@ local function queueRcRead(isAutoReload)
                 end
               end,
               errorHandler = function()
-                readValid = false
+                ui.runtime.governorReadComplete = false
+                loadFromSession()
                 ui.runtime.readPending = false
                 ui.loading = false
+                ui.dirty = false
+                ui.progress = 100
+                ui.runtime.readComplete = readValid
                 if type(ui.runtime.requestRebuild) == "function" then
                   ui.runtime.requestRebuild()
                 end
@@ -274,16 +282,21 @@ local function queueRcWrite()
     payload = PidProfileApi.buildWritePayload(session.pid_profile),
     isWrite = true,
     processReply = function()
-      if isAtLeastVersion({12, 0, 9}) and GovernorProfileApi then
-        queue:add({
-          command = GovernorProfileApi.writeCommand,
-          payload = GovernorProfileApi.buildWritePayload(session.governor_profile),
-          isWrite = true,
-          processReply = function()
-            writeEeprom(queue)
-          end,
-          errorHandler = function() end
-        })
+      if isAtLeastVersion({12, 0, 9}) and GovernorProfileApi and ui.runtime.governorReadComplete then
+        local govPayload = GovernorProfileApi.buildWritePayload(session.governor_profile)
+        if govPayload then
+          queue:add({
+            command = GovernorProfileApi.writeCommand,
+            payload = govPayload,
+            isWrite = true,
+            processReply = function()
+              writeEeprom(queue)
+            end,
+            errorHandler = function() end
+          })
+        else
+          writeEeprom(queue)
+        end
       else
         writeEeprom(queue)
       end
@@ -535,7 +548,7 @@ function M.build(ctx)
 
   local session = getSession()
   local govMode = tonumber(session and session.governorMode or 0) or 0
-  local isTtaActive = (govMode >= 1)
+  local isTtaActive = (govMode >= 1) and (ui.runtime and ui.runtime.governorReadComplete == true)
 
   -- 1) Yaw stop gain (CW & CCW)
   cursorY = cursorY + appendDualFieldRow(children, x, cursorY, w,
@@ -608,6 +621,9 @@ function M.onReload(ctx)
   if session then
     loadFromSession()
     ui.dirty = false
+    if ui.runtime then
+      ui.runtime.governorReadComplete = false
+    end
     queueRcRead(false)
   end
   return true
@@ -628,6 +644,9 @@ function M.onClose()
       resetLoaded = true,
       resetDirty = true
     })
+  end
+  if ui.runtime then
+    ui.runtime.governorReadComplete = false
   end
   Controls = nil
   Common = nil

@@ -348,9 +348,14 @@ local function queueGovWrite(session)
 		return false, "config_unavailable"
 	end
 
+	local payload = GovernorApi.buildWritePayload(govConfig)
+	if not payload then
+		return false, "invalid_payload"
+	end
+
 	queue:add({
 		command = GovernorApi.writeCommand,
-		payload = GovernorApi.buildWritePayload(govConfig),
+		payload = payload,
 		timeout = 5.0,
 		isWrite = true,
 		processReply = function() end,

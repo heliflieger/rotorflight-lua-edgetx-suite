@@ -80,27 +80,50 @@ function Api.parse(buf)
 end
 
 function Api.buildWritePayload(data)
-  data = data or {}
+  if type(data) ~= "table" then return nil end
+
+  local headspeed = tonumber(data.governor_headspeed)
+  local gain = tonumber(data.governor_gain)
+  local p_gain = tonumber(data.governor_p_gain)
+  local i_gain = tonumber(data.governor_i_gain)
+  local d_gain = tonumber(data.governor_d_gain)
+  local f_gain = tonumber(data.governor_f_gain)
+  local tta_gain = tonumber(data.governor_tta_gain)
+  local tta_limit = tonumber(data.governor_tta_limit)
+  local yaw_w = tonumber(data.governor_yaw_weight or data.governor_yaw_ff_weight)
+  local cyc_w = tonumber(data.governor_cyclic_weight or data.governor_cyclic_ff_weight)
+  local col_w = tonumber(data.governor_collective_weight or data.governor_collective_ff_weight)
+  local max_th = tonumber(data.governor_max_throttle)
+  local min_th = tonumber(data.governor_min_throttle)
+  local fallback_drop = tonumber(data.governor_fallback_drop)
+  local flags = tonumber(data.governor_flags)
+
+  if headspeed == nil or gain == nil or p_gain == nil or i_gain == nil or
+     d_gain == nil or f_gain == nil or tta_gain == nil or tta_limit == nil or
+     yaw_w == nil or cyc_w == nil or col_w == nil or max_th == nil or
+     min_th == nil or fallback_drop == nil or flags == nil then
+    return nil
+  end
+
   local p = {}
   local function push(v) p[#p+1] = v end
 
-  -- build >=12.0.9 layout by default
-  local lo, hi = from_u16(data.governor_headspeed or 2000)
+  local lo, hi = from_u16(headspeed)
   push(lo); push(hi)
-  push(data.governor_gain or 100)
-  push(data.governor_p_gain or 10)
-  push(data.governor_i_gain or 125)
-  push(data.governor_d_gain or 5)
-  push(data.governor_f_gain or 20)
-  push(data.governor_tta_gain or 0)
-  push(data.governor_tta_limit or 20)
-  push(data.governor_yaw_weight or 10)
-  push(data.governor_cyclic_weight or 40)
-  push(data.governor_collective_weight or 100)
-  push(data.governor_max_throttle or 100)
-  push(data.governor_min_throttle or 10)
-  push(data.governor_fallback_drop or 10)
-  lo, hi = from_u16(data.governor_flags or 1019)
+  push(gain & 0xFF)
+  push(p_gain & 0xFF)
+  push(i_gain & 0xFF)
+  push(d_gain & 0xFF)
+  push(f_gain & 0xFF)
+  push(tta_gain & 0xFF)
+  push(tta_limit & 0xFF)
+  push(yaw_w & 0xFF)
+  push(cyc_w & 0xFF)
+  push(col_w & 0xFF)
+  push(max_th & 0xFF)
+  push(min_th & 0xFF)
+  push(fallback_drop & 0xFF)
+  lo, hi = from_u16(flags)
   push(lo); push(hi)
 
   return p
