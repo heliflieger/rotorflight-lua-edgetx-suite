@@ -159,6 +159,7 @@ end
 
 Api.fields = FIELD_SPEC
 Api.simulatorResponse = SIM_RESPONSE
+Api.payloadLength = PAYLOAD_LEN
 
 function Api.parse(buf)
     if type(buf) ~= "table" then return nil end

@@ -148,6 +148,15 @@ local function queueFlyrotorReadActual(queue)
             session.setup_esc_motors_esc_tools_flrtr.config[k] = v
           end
         end
+      else
+        -- A reply that is shorter than the 56-byte block or carries the wrong signature is
+        -- dropped by `Api.parse`; log it so the refused read does not stay silent.
+        logMsg(
+          "processReply: FlyRotor reply rejected (len " .. tostring(buf and #buf or 0)
+            .. ", first byte " .. tostring(buf and buf[1] or "none")
+            .. ", expected 0x" .. string.format("%02X", EscParametersFlyrotorApi.mspSignature or 0) .. ")",
+          "warn"
+        )
       end
 
       ui.runtime.readPending = false
@@ -194,6 +203,13 @@ local function queueFlyrotorRead(isAutoReload)
   return true, nil
 end
 
+-- `M.onSave` passes the reason string straight into the report dialog, so a reason that is an
+-- ordinary situation has to be a translated key, not a code token. A FlyRotor save without a
+-- read is exactly that: an ESC that did not answer, or a page saved before the read came back.
+local MESSAGE_KEYS = {
+  esc_not_read = { "save_error_not_read", "Read the ESC before saving." }
+}
+
 local function queueFlyrotorWrite(requestRebuild)
   if not MspRuntime or not EscParametersFlyrotorApi or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
@@ -224,7 +240,7 @@ local function queueFlyrotorWrite(requestRebuild)
   end
 
   local payload = EscParametersFlyrotorApi.buildWritePayload(writeData)
-  if not payload or #payload ~= 56 then
+  if not payload or #payload ~= EscParametersFlyrotorApi.payloadLength then
     return false, "invalid_payload_length"
   end
 
@@ -422,9 +438,14 @@ function M.onSave(ctx)
   local ok, err = queueFlyrotorWrite(ctx and ctx.requestRebuild)
   if not ok then
     if ctx and type(ctx.reportSave) == "function" then
+      local mapped = MESSAGE_KEYS[err]
+      local message = tostring(err or "MSP write failed")
+      if mapped then
+        message = pageText(ctx and ctx.i18n, mapped[1], mapped[2])
+      end
       ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
-        message = tostring(err or "MSP write failed")
+        message = message
       })
     end
     return false
