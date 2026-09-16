@@ -2036,7 +2036,13 @@ return {
         mode_native = "Nativ",
         mode_custom = "Benutzerdefiniert",
         loading_title = "Laden",
-        loading_message = "Lese Link-Konfiguration..."
+        loading_message = "Lese Link-Konfiguration...",
+        confirm_title = "Bestätigen",
+        confirm_rf_to_elrs = "Paketrate und Telemetrie-Verhältnis des ELRS-Moduls an Rotorflight angleichen?",
+        confirm_elrs_to_rf = "Telemetrie-Konfiguration von Rotorflight an das ELRS-Modul angleichen und speichern?",
+        confirm_cancelled = "Es wurde nichts geschrieben",
+        confirm_no_dialog = "Dieses Radio kann die Rückfrage nicht anzeigen.",
+        help_message = "Vergleicht Paketrate und Telemetrie-Verhältnis des ExpressLRS-Sendemoduls mit Link-Rate und -Verhältnis, für die der Flight Controller konfiguriert ist. Prüfen liest nur. RF -> ELRS schreibt das Modul passend zum Flight Controller, ELRS -> RF schreibt den Flight Controller und speichert ihn. Beide fragen vor dem Schreiben nach."
       },
       diagnostics_validate_sensors = {
         status_ok = "OK",
