@@ -16,16 +16,19 @@ local function clamp(value, min, max)
 end
 
 local function normalizeTimingAdvance(raw)
-  if raw == nil then return 0 end
+  if raw == nil then return 0, "legacy" end
   if raw >= 10 and raw <= 42 then
-    return clamp(math.floor((raw - 10) / 8 + 0.5), 0, 3)
+    return clamp(math.floor((raw - 10) / 8 + 0.5), 0, 3), "new"
   end
-  return clamp(math.floor(raw), 0, 3)
+  return clamp(math.floor(raw + 0.5), 0, 3), "legacy"
 end
 
-local function encodeTimingAdvance(normalized)
-  local n = clamp(math.floor(normalized or 0), 0, 3)
-  return 10 + (n * 8)
+local function encodeTimingAdvance(value, encoding)
+  local n = clamp(math.floor((value or 0) + 0.5), 0, 3)
+  if encoding == "new" then
+    return 10 + (n * 8)
+  end
+  return n
 end
 
 local function normalizeMotorKv(raw)
@@ -90,6 +93,7 @@ end
 
 function Api.parse(buf)
   if type(buf) ~= "table" or #buf < 50 then return nil end
+  local timingAdvance, timingAdvanceEncoding = normalizeTimingAdvance(buf[26])
   return {
     esc_signature = buf[1] or 0,
     esc_command = buf[2] or 0,
@@ -116,7 +120,8 @@ function Api.parse(buf)
     complementary_pwm = buf[23] or 0,
     variable_pwm_frequency = buf[24] or 0,
     stuck_rotor_protection = buf[25] or 0,
-    timing_advance = normalizeTimingAdvance(buf[26]),
+    timing_advance = timingAdvance,
+    timing_advance_encoding = timingAdvanceEncoding,
     pwm_frequency = buf[27] or 0,
     startup_power = buf[28] or 0,
     motor_kv = normalizeMotorKv(buf[29]),
@@ -171,7 +176,7 @@ function Api.buildWritePayload(data)
   payload[23] = tonumber(data.complementary_pwm) or 0
   payload[24] = tonumber(data.variable_pwm_frequency) or 0
   payload[25] = tonumber(data.stuck_rotor_protection) or 0
-  payload[26] = encodeTimingAdvance(data.timing_advance)
+  payload[26] = encodeTimingAdvance(data.timing_advance, data.timing_advance_encoding)
   payload[27] = tonumber(data.pwm_frequency) or 0
   payload[28] = tonumber(data.startup_power) or 0
   payload[29] = encodeMotorKv(data.motor_kv)
