@@ -509,6 +509,7 @@ return {
         tail_torque_assist = "Tail Torque Assist",
         tta_gain = "Gain",
         tta_limit = "Limit",
+        tta_unavailable = "Tail Torque Assist unavailable — governor profile could not be read. PID settings can still be saved.",
         loading_title = "Loading",
         loading_message = "Reading Tail Rotor settings",
         help_title = "Tail Rotor Help",

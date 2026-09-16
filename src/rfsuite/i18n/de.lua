@@ -509,6 +509,7 @@ return {
         tail_torque_assist = "Heck-Drehm.-Assist.",
         tta_gain = "Verst.",
         tta_limit = "Limit",
+        tta_unavailable = "Heck-Drehmoment-Unterstützung nicht verfügbar — Governorprofil konnte nicht gelesen werden. PID-Einstellungen können weiterhin gespeichert werden.",
         loading_title = "Laden",
         loading_message = "Lese Heckrotoreinstellungen",
         help_title = "Heckrotor-Hilfe",

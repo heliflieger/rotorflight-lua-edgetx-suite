@@ -597,7 +597,21 @@ function M.build(ctx)
   if isAtLeastVersion({12, 0, 9}) then
     local specTtaGain = { scale=1, mult=1, min=0, max=250, suffix="", decimals=0, active = isTtaActive }
     local specTtaLimit = { scale=1, mult=1, min=0, max=100, suffix="%", decimals=0, active = isTtaActive }
-    
+
+    -- Hint when TTA is inactive due to failed governor read
+    if govMode >= 1 and not isTtaActive then
+      children[#children + 1] = {
+        type = "label",
+        x = x,
+        y = cursorY,
+        w = w,
+        text = pageText(i18n, "tta_unavailable", "Tail Torque Assist unavailable — governor profile could not be read. PID settings can still be saved."),
+        color = COLOR_THEME_WARNING,
+        font = SMLSIZE
+      }
+      cursorY = cursorY + 20
+    end
+
     cursorY = cursorY + appendDualFieldRow(children, x, cursorY, w,
       pageText(i18n, "tail_torque_assist", "Tail Torque Assist"),
       pageText(i18n, "tta_gain", "Gain"), "governor_tta_gain", specTtaGain,

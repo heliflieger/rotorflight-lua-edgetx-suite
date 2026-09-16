@@ -98,10 +98,11 @@ function Api.buildWritePayload(data)
   local fallback_drop = tonumber(data.governor_fallback_drop)
   local flags = tonumber(data.governor_flags)
 
+  -- 13 fields required by both layouts
   if headspeed == nil or gain == nil or p_gain == nil or i_gain == nil or
      d_gain == nil or f_gain == nil or tta_gain == nil or tta_limit == nil or
      yaw_w == nil or cyc_w == nil or col_w == nil or max_th == nil or
-     min_th == nil or fallback_drop == nil or flags == nil then
+     min_th == nil then
     return nil
   end
 
@@ -110,19 +111,25 @@ function Api.buildWritePayload(data)
 
   local lo, hi = from_u16(headspeed)
   push(lo); push(hi)
-  push(gain & 0xFF)
-  push(p_gain & 0xFF)
-  push(i_gain & 0xFF)
-  push(d_gain & 0xFF)
-  push(f_gain & 0xFF)
-  push(tta_gain & 0xFF)
-  push(tta_limit & 0xFF)
-  push(yaw_w & 0xFF)
-  push(cyc_w & 0xFF)
-  push(col_w & 0xFF)
-  push(max_th & 0xFF)
-  push(min_th & 0xFF)
-  push(fallback_drop & 0xFF)
+  push(math.floor(gain) & 0xFF)
+  push(math.floor(p_gain) & 0xFF)
+  push(math.floor(i_gain) & 0xFF)
+  push(math.floor(d_gain) & 0xFF)
+  push(math.floor(f_gain) & 0xFF)
+  push(math.floor(tta_gain) & 0xFF)
+  push(math.floor(tta_limit) & 0xFF)
+  push(math.floor(yaw_w) & 0xFF)
+  push(math.floor(cyc_w) & 0xFF)
+  push(math.floor(col_w) & 0xFF)
+  push(math.floor(max_th) & 0xFF)
+  push(math.floor(min_th) & 0xFF)
+
+  -- 17-byte layout only when the profile carried the extra fields;
+  -- otherwise emit the 13-byte record the profile was read as.
+  if fallback_drop == nil or flags == nil then
+    return p
+  end
+  push(math.floor(fallback_drop) & 0xFF)
   lo, hi = from_u16(flags)
   push(lo); push(hi)
 
