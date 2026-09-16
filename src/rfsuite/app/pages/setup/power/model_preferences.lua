@@ -21,7 +21,7 @@ end
 
 local function logWarn(msg)
 	if Log and type(Log.emit) == "function" then
-		pcall(Log.emit, "rfsuite.power.modelprefs", tostring(msg), "warn", true)
+		pcall(Log.emit, "rfsuite.power.modelprefs", tostring(msg), "warn")
 	end
 end
 

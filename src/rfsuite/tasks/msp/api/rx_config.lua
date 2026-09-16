@@ -65,7 +65,7 @@ function Api.parse(buf)
   parsed.rx_spi_id = read_u32_le(buf, pos); pos = pos + 4
   parsed.rx_spi_rf_channel_count = tonumber(buf[pos]) or 0; pos = pos + 1
   parsed.pinSwap = tonumber(buf[pos]) or 0; pos = pos + 1
-  return { parsed = parsed }
+  return parsed
 end
 
 function Api.buildWritePayload(data)

@@ -26,7 +26,8 @@ local function tryLoad(locale)
     return cached
   end
 
-  local chunk = loadScript(BASE_PATH .. locale .. ".lua", "t")
+  local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
+  local chunk = loadScript(BASE_PATH .. locale .. ".lua", mode)
   if not chunk then
     bundleCache[locale] = false
     return nil

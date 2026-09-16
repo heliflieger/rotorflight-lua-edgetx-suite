@@ -72,7 +72,7 @@ function Api.parse(buf)
     parsed["port_" .. i .. "_telem_baud_index"] = tonumber(buf[pos]) or 0; pos = pos + 1
     parsed["port_" .. i .. "_blackbox_baud_index"] = tonumber(buf[pos]) or 0; pos = pos + 1
   end
-  return { parsed = parsed }
+  return parsed
 end
 
 function Api.buildWritePayload(data)

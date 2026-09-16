@@ -9,8 +9,8 @@ local Api = {
 local FIELD_SPEC = {
     {"esc_signature","U8"},
     {"esc_command","U8"},
-    {"esc_model","U8"},
     {"esc_version","U8"},
+    {"esc_model","U8"},
     {"governor","U16"},
     {"cell_cutoff","U16"},
     {"timing","U16"},

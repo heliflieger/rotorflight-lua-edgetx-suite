@@ -146,13 +146,6 @@ function M.getHeaderActions()
   return { save = true, reload = true, help = true }
 end
 
-function M.allowMemAutoRefresh()
-  local module = ui.activeModule
-  if type(module) == "table" and type(module.allowMemAutoRefresh) == "function" then
-    return module.allowMemAutoRefresh()
-  end
-  return true
-end
 
 function M.onReload(ctx)
   ensureDeps()
@@ -184,8 +177,8 @@ function M.onSave(ctx)
         return true
       end
       local ok, err = ctx.savePreferences()
-      if not ok and lvgl and lvgl.alert then
-        lvgl.alert({ title = t(ctx.i18n, "save_error_title", "Error"), message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io") })
+      if not ok and ctx and type(ctx.reportSave) == "function" then
+        ctx.reportSave({ title = t(ctx.i18n, "save_error_title", "Error"), message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io") })
       end
       return true
     end

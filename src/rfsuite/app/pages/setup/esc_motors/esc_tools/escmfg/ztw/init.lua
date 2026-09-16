@@ -6,26 +6,28 @@
 local MSP_API = "ESC_PARAMETERS_ZTW"
 local toolName = "ZTW"
 
-local function getPageValue(page, index) return page[index] end
+local function getPageValue(page, index)
+    if type(page) ~= "table" then return nil end
+    return page[index]
+end
 
 local function getEscModel(self)
-
     local escModelID = getPageValue(self, 4)
     local escModels = {"RESERVED", "35A", "65A", "85A", "125A", "155A", "130A", "195A", "300A"}
 
-    if escModelID == nil then return "UNKNOWN" end
+    if escModelID == nil or escModels[escModelID] == nil then return toolName end
 
-    return "ZTW " .. escModels[escModelID] .. " "
-
+    return "ZTW " .. escModels[escModelID]
 end
 
-local function getEscVersion(self) return " " end
+local function getEscVersion(self) return "" end
 
 local function getEscFirmware(self)
+    local val = getPageValue(self, 3)
+    if val == nil then return "" end
 
-    local version = "SW" .. (getPageValue(self, 3) >> 4) .. "." .. (getPageValue(self, 3) & 0xF)
+    local version = "SW" .. (val >> 4) .. "." .. (val & 0xF)
     return version
-
 end
 
 local function to16bit(high, low) return low + (high * 256) end

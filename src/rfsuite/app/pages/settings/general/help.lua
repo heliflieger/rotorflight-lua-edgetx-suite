@@ -1,15 +1,8 @@
 return function(ctx)
   local i18n = ctx and ctx.i18n or nil
-  local key = "app.pages.settings_general.help_message"
-  local fallback = "Configure safety prompts, integration options, and developer visibility in general settings."
-
-  local message = fallback
-  if i18n and i18n.t then
-    local translated = i18n.t(key)
-    if translated and translated ~= key and translated ~= "" then
-      message = translated
-    end
-  end
+  local message = i18n and i18n.t and i18n.t("app.pages.settings_general.help_message")
+    or "Configure safety prompts, preview features and developer visibility in general settings. A preview feature is already "
+    .. "in the suite but not finished: it stays hidden until it is switched on here."
 
   return { message = message }
 end

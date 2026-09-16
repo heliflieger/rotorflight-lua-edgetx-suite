@@ -35,11 +35,11 @@ function Api.parse(buf)
     parsed.voltage_drop_rate = tonumber(buf[2]) or 0
     parsed.charge_drop_rate = tonumber(buf[3]) or 0
     parsed.sag_gain = tonumber(buf[4]) or 0
-    return { parsed = parsed }
+    return parsed
   end
   local def = {}
   for _, e in ipairs(FIELD_SPEC) do def[e[1]] = e[5] or 0 end
-  return { parsed = def }
+  return def
 end
 
 function Api.buildWritePayload(data)

@@ -2,6 +2,11 @@
 -- Supports shared state between Tool and Widget contexts
 local M = {}
 
+-- This has to stay ABOVE the give-up of anything a task puts on the MSP queue, or the runner
+-- re-queues a task whose request is still in flight and the queue ends up holding two copies of
+-- the same read. The queue's own give-up is (maxRetries + 1) x the message timeout, and its
+-- transport-wide maxRetries is 5 on CRSF -- so a 5 s read there ran for 30 s against this 25 s.
+-- The connect reads now carry a maxRetries of their own for exactly this reason.
 local DEFAULT_TASK_TIMEOUT_SECONDS = 25
 local MAX_RETRIES = 3
 local RETRY_BACKOFF_SECONDS = 1
@@ -13,6 +18,18 @@ local function loadModule(path)
   local ok, mod = pcall(chunk)
   if not ok then return nil end
   return mod
+end
+
+-- getTime() is hundredths of a second since boot and is always available; the os
+-- library is not opened by the Lua state at all, so os.clock() alone leaves `now`
+-- at 0 and every elapsed-time test below reads as "no time has passed".
+local function nowSeconds()
+  if type(getTime) == "function" then
+    local ok, v = pcall(getTime)
+    if ok and type(v) == "number" then return v / 100 end
+  end
+  if type(os) == "table" and type(os.clock) == "function" then return os.clock() end
+  return 0
 end
 
 function M.new(category)
@@ -27,6 +44,7 @@ function M.new(category)
 
   local Log = nil
   local Env = nil
+  local lastStartedTask = nil
 
   local function ensureEnv()
     if not Env then Env = loadModule("lib/env.lua") end
@@ -36,13 +54,13 @@ function M.new(category)
     if Log == nil then Log = loadModule("lib/log.lua") or false end
     local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/" .. MANIFEST_PATH, "t")
     if type(chunk) ~= "function" then
-      if type(Log) == "table" and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "manifest missing: " .. tostring(MANIFEST_PATH), "debug", true) end
+      if type(Log) == "table" and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "manifest missing: " .. tostring(MANIFEST_PATH), "debug") end
       tasksLoaded = true
       return
     end
     local ok, manifest = pcall(chunk)
     if not ok or type(manifest) ~= "table" then
-      if type(Log) == "table" and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "invalid manifest: " .. tostring(MANIFEST_PATH), "debug", true) end
+      if type(Log) == "table" and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "invalid manifest: " .. tostring(MANIFEST_PATH), "debug") end
       tasksLoaded = true
       return
     end
@@ -168,13 +186,13 @@ function M.new(category)
 
     if not task then
       if not tasksDoneLogged then
-        if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "all eligible " .. category .. " tasks complete for " .. currentEnv, "debug", true) end
+        if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "all eligible " .. category .. " tasks complete for " .. currentEnv, "debug") end
         tasksDoneLogged = true
       end
       return
     end
 
-    local now = (type(os) == "table" and type(os.clock) == "function") and os.clock() or 0
+    local now = nowSeconds()
 
     if task.nextEligibleAt and task.nextEligibleAt > now then return end
 
@@ -185,11 +203,31 @@ function M.new(category)
       task.failed = true
       task.startTime = nil
       task.nextEligibleAt = 0
-      if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "failed to load task " .. tostring(task.name) .. ": " .. tostring(err or "?"), "info", true) end
+      if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "failed to load task " .. tostring(task.name) .. ": " .. tostring(err or "?"), "info") end
       return
     end
 
     if type(module.wakeup) == "function" then
+      -- Said BEFORE the call, and into the step file as well as the log. The runner reports
+      -- tasks it has finished; a task that never finishes is reported by nothing, and the
+      -- connect chain is where a start with a flight controller attached spends its time. The
+      -- step file is closed immediately, so it survives a wakeup that does not come back.
+      -- Only when the task CHANGES. wakeup runs once per pass and a task stays eligible until
+      -- it reports itself complete, so a line per call was a third of the file and said the
+      -- same thing thirty times. What a hang looks like is unaffected: the last name written
+      -- with no `completed` after it is the one that never returned, and the step file -- which
+      -- is rewritten every pass and carries a counter -- is where the repetition is visible.
+      if lastStartedTask ~= task.name then
+        lastStartedTask = task.name
+        if Log and type(Log.emitf) == "function" then
+          pcall(Log.emitf, "rfsuite.tasks." .. category, "debug", "start task %s attempt=%s",
+            tostring(task.name), tostring(task.attempts or 1))
+        end
+      end
+      local step = _G.rfsuite and _G.rfsuite.logStep
+      if type(step) == "function" then
+        pcall(step, "task " .. category .. ":" .. tostring(task.name))
+      end
       pcall(module.wakeup, args)
     end
 
@@ -198,7 +236,7 @@ function M.new(category)
       task.startTime = nil
       task.nextEligibleAt = 0
       releaseTaskModule(task, false)
-      if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "completed task " .. tostring(task.name), "debug", true) end
+      if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, "completed task " .. tostring(task.name), "debug") end
       return
     end
 
@@ -210,12 +248,18 @@ function M.new(category)
         task.nextEligibleAt = now + backoff
         task.initialized = false
         task.startTime = nil
-        if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, string.format("Task '%s' timed out. Re-queueing (attempt %d/%d) in %.1fs.", task.name, task.attempts, MAX_RETRIES, backoff), "info", true) end
+        -- The module instance goes with the attempt, or the next one sends nothing. Every task
+        -- latches its request in a module-local flag and returns on its first line while that
+        -- flag is set, so a re-queue that kept the instance re-ran a wakeup that does nothing
+        -- and the line below announced work that never happened. Releasing it with its reset is
+        -- what the complete and the give-up branches around this one already do.
+        releaseTaskModule(task, true)
+        if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, string.format("Task '%s' timed out. Re-queueing (attempt %d/%d) in %.1fs.", task.name, task.attempts, MAX_RETRIES, backoff), "info") end
       else
         task.failed = true
         task.startTime = nil
         releaseTaskModule(task, false)
-        if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, string.format("Task '%s' failed after %d attempts. Skipping.", task.name, MAX_RETRIES), "info", true) end
+        if Log and type(Log.emit) == "function" then pcall(Log.emit, "rfsuite.tasks." .. category, string.format("Task '%s' failed after %d attempts. Skipping.", task.name, MAX_RETRIES), "info") end
       end
     end
   end

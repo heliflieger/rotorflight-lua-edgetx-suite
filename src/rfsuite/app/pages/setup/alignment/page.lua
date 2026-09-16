@@ -10,6 +10,7 @@ local function loadModule(path)
 end
 
 local Controls = nil
+local SavePipeline = nil
 local Common = nil
 local MspRuntime = nil
 local BoardAlignmentApi = nil
@@ -259,6 +260,7 @@ end
 
 local function queueAlignmentRead(isAutoReload)
   if ui.runtime.readPending then return false, "read_pending" end
+  ui.runtime.readComplete = false
   if not MspRuntime or not BoardAlignmentApi or not SensorAlignmentApi or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -269,6 +271,7 @@ local function queueAlignmentRead(isAutoReload)
     return false, "msp_queue_unavailable"
   end
 
+  local readValid = true
   ui.runtime.readPending = true
   if not isAutoReload then
     ui.loading = true
@@ -284,6 +287,7 @@ local function queueAlignmentRead(isAutoReload)
     simulatorResponse = BoardAlignmentApi.simulatorResponse,
     processReply = function(self, buf)
       local parsed = BoardAlignmentApi.parse(buf)
+      if type(parsed) ~= "table" then return Common.failPageRead(ui) end
       if parsed then
         local roll = toSigned16(parsed.roll_degrees)
         local pitch = toSigned16(parsed.pitch_degrees)
@@ -307,8 +311,8 @@ local function queueAlignmentRead(isAutoReload)
         command = SensorAlignmentApi.command,
         simulatorResponse = SensorAlignmentApi.simulatorResponse,
         processReply = function(self2, buf2)
-          local parsedObj2 = SensorAlignmentApi.parse(buf2)
-          local parsed2 = parsedObj2 and parsedObj2.parsed
+          local parsed2 = SensorAlignmentApi.parse(buf2)
+          if type(parsed2) ~= "table" then return Common.failPageRead(ui) end
           if parsed2 then
             ui.display.gyro_1_alignment = math.max(0, math.min(255, tonumber(parsed2.gyro_1_alignment) or 0))
             ui.display.gyro_2_alignment = math.max(0, math.min(255, tonumber(parsed2.gyro_2_alignment) or 0))
@@ -320,11 +324,13 @@ local function queueAlignmentRead(isAutoReload)
           ui.loading = false
           ui.dirty = false
           ui.progress = 100
+          ui.runtime.readComplete = readValid
           if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
             ui.runtime.requestRebuild()
           end
         end,
         errorHandler = function()
+          readValid = false
           if ui.runtime then ui.runtime.readPending = false end
           ui.loading = false
           if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
@@ -334,6 +340,7 @@ local function queueAlignmentRead(isAutoReload)
       })
     end,
     errorHandler = function()
+      readValid = false
       if ui.runtime then ui.runtime.readPending = false end
       ui.loading = false
       if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
@@ -346,74 +353,50 @@ local function queueAlignmentRead(isAutoReload)
 end
 
 local function queueAlignmentWrite()
-  if not MspRuntime or not BoardAlignmentApi or not SensorAlignmentApi or type(MspRuntime.getState) ~= "function" then
+  if not SavePipeline then SavePipeline = loadModule("tasks/msp/save_pipeline.lua") end
+  if not SavePipeline or not BoardAlignmentApi or not SensorAlignmentApi then
     return false, "msp_runtime_unavailable"
   end
 
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue or type(queue.add) ~= "function" then
-    return false, "msp_queue_unavailable"
-  end
-
-  local boardPayload = BoardAlignmentApi.buildWritePayload({
-    roll_degrees = toU16(ui.display.roll_degrees),
-    pitch_degrees = toU16(ui.display.pitch_degrees),
-    yaw_degrees = toU16(ui.display.yaw_degrees)
-  })
-  local sensorPayload = SensorAlignmentApi.buildWritePayload({
-    gyro_1_alignment = ui.display.gyro_1_alignment,
-    gyro_2_alignment = ui.display.gyro_2_alignment,
-    mag_alignment = ui.display.mag_alignment
-  })
-
-  -- Step 1: Write BOARD_ALIGNMENT_CONFIG
-  queue:add({
-    command = BoardAlignmentApi.writeCommand,
-    payload = boardPayload,
-    isWrite = true,
-    simulatorResponse = {},
-    processReply = function()
-      -- Step 2: Write SENSOR_ALIGNMENT
-      queue:add({
+  -- The four nested queue:add calls that stood here ended with an empty processReply on the
+  -- reboot and an empty errorHandler on every step, so a failed alignment write was silent and
+  -- nothing waited for the board. The pipeline owns the process and reports its outcome.
+  return SavePipeline.start({
+    pageId = "setup_alignment",
+    steps = {
+      {
+        label = "MSP_SET_BOARD_ALIGNMENT_CONFIG",
+        command = BoardAlignmentApi.writeCommand,
+        payload = BoardAlignmentApi.buildWritePayload({
+          roll_degrees = toU16(ui.display.roll_degrees),
+          pitch_degrees = toU16(ui.display.pitch_degrees),
+          yaw_degrees = toU16(ui.display.yaw_degrees)
+        })
+      },
+      {
+        label = "MSP_SET_SENSOR_ALIGNMENT",
         command = SensorAlignmentApi.writeCommand,
-        payload = sensorPayload,
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function()
-          -- Step 3: Write EEPROM
-          local eepromApi = loadModule("tasks/msp/api/eeprom_write.lua")
-          if eepromApi then
-            queue:add({
-              command = eepromApi.writeCommand,
-              payload = {},
-              isWrite = true,
-              simulatorResponse = {},
-              processReply = function()
-                -- Step 4: Reboot
-                local rebootApi = loadModule("tasks/msp/api/reboot.lua")
-                if rebootApi then
-                  queue:add({
-                    command = rebootApi.writeCommand,
-                    payload = rebootApi.buildWritePayload({ rebootMode = 0 }),
-                    isWrite = true,
-                    simulatorResponse = {},
-                    processReply = function() end,
-                    errorHandler = function() end
-                  })
-                end
-              end,
-              errorHandler = function() end
-            })
-          end
-        end,
-        errorHandler = function() end
-      })
+        payload = SensorAlignmentApi.buildWritePayload({
+          gyro_1_alignment = ui.display.gyro_1_alignment,
+          gyro_2_alignment = ui.display.gyro_2_alignment,
+          mag_alignment = ui.display.mag_alignment
+        })
+      }
+    },
+    reboot = true,
+    invalidateSessionKeys = { "setup_alignment" },
+    onSaved = function()
+      ui.dirty = false
     end,
-    errorHandler = function() end
+    onDone = function(result)
+      if result.status ~= "done" then
+        ui.dirty = true
+      end
+      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
+        ui.runtime.requestRebuild()
+      end
+    end
   })
-
-  return true, nil
 end
 
 local function rotatePoint(x, y, z, cx, sx, cy, sy, cz, sz)
@@ -553,6 +536,11 @@ end
 function M.onActivate()
   ensureDeps()
   ensureLoaded()
+  -- A save whose overlay was dismissed finished without a screen. Its outcome was held
+  -- back rather than raised over whatever page the user went to; claim it now.
+  if SavePipeline and type(SavePipeline.takeResult) == "function" then
+    SavePipeline.takeResult("setup_alignment")
+  end
 end
 
 function M.wakeup(ctx)
@@ -637,7 +625,9 @@ function M.build(ctx)
   local rightPad = 8
   local gap = 6
   local fieldW = w - leftPad - rightPad
-  local rowH = 40
+  local rowH = (Controls and Controls.ROW_H) or 64
+  local labelY1 = (Controls and Controls.labelY and Controls.labelY(y, rowH)) or (y + math.floor((rowH - 21) / 2))
+  local cellTop1 = (Controls and Controls.controlY and Controls.controlY(y, rowH)) or (y + math.floor((rowH - 32) / 2))
 
   -- Row 1: Roll, Nick, Yaw
   local editW = 68 -- 68px wide text fields so -180° never wraps
@@ -652,7 +642,7 @@ function M.build(ctx)
   -- Slot 1: Roll
   children[#children + 1] = {
     type = "label",
-    x = slotX1, y = y + 9,
+    x = slotX1, y = labelY1,
     w = labelW,
     text = pageText(i18n, "roll", "Roll"),
     color = COLOR_THEME_PRIMARY1,
@@ -660,8 +650,8 @@ function M.build(ctx)
   }
   children[#children + 1] = {
     type = "numberEdit",
-    x = slotX1 + labelW, y = y,
-    w = editW, h = rowH,
+    x = slotX1 + labelW, y = cellTop1,
+    w = editW,
     min = -180, max = 360,
     active = function() return not ui.liveViewEnabled end,
     get = function() return ui.display.roll_degrees end,
@@ -676,7 +666,7 @@ function M.build(ctx)
   -- Slot 2: Pitch (Nick)
   children[#children + 1] = {
     type = "label",
-    x = slotX2, y = y + 9,
+    x = slotX2, y = labelY1,
     w = labelW,
     text = pageText(i18n, "pitch", "Pitch"),
     color = COLOR_THEME_PRIMARY1,
@@ -684,8 +674,8 @@ function M.build(ctx)
   }
   children[#children + 1] = {
     type = "numberEdit",
-    x = slotX2 + labelW, y = y,
-    w = editW, h = rowH,
+    x = slotX2 + labelW, y = cellTop1,
+    w = editW,
     min = -180, max = 360,
     active = function() return not ui.liveViewEnabled end,
     get = function() return ui.display.pitch_degrees end,
@@ -700,7 +690,7 @@ function M.build(ctx)
   -- Slot 3: Yaw (Gier)
   children[#children + 1] = {
     type = "label",
-    x = slotX3, y = y + 9,
+    x = slotX3, y = labelY1,
     w = labelW,
     text = pageText(i18n, "yaw", "Yaw"),
     color = COLOR_THEME_PRIMARY1,
@@ -708,8 +698,8 @@ function M.build(ctx)
   }
   children[#children + 1] = {
     type = "numberEdit",
-    x = slotX3 + labelW, y = y,
-    w = editW, h = rowH,
+    x = slotX3 + labelW, y = cellTop1,
+    w = editW,
     min = -180, max = 360,
     active = function() return not ui.liveViewEnabled end,
     get = function() return ui.display.yaw_degrees end,
@@ -724,15 +714,15 @@ function M.build(ctx)
   -- Divider line below first row of fields
   children[#children + 1] = {
     type = "rectangle",
-    x = x, y = y + 46,
+    x = x, y = y + rowH,
     w = w, h = 1,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true
   }
 
-  -- Row 2: Mag and Buttons (aligned on controlY = y + 50)
-  local controlY = y + 50
-  local controlH = 34
+  -- Row 2: Mag and Buttons (aligned on controlY)
+  local controlY = (Controls and Controls.controlY and Controls.controlY(y + rowH, rowH)) or (y + rowH + math.floor((rowH - 32) / 2))
+  local labelY2 = (Controls and Controls.labelY and Controls.labelY(y + rowH, rowH)) or (y + rowH + math.floor((rowH - 21) / 2))
 
   -- Slot 4: Mag
   local magLabelW = 38
@@ -740,7 +730,7 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "label",
-    x = x + leftPad, y = controlY + 6,
+    x = x + leftPad, y = labelY2,
     w = magLabelW,
     text = pageText(i18n, "mag", "Mag"),
     color = COLOR_THEME_PRIMARY1,
@@ -755,7 +745,7 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "choice",
     x = x + leftPad + magLabelW, y = controlY,
-    w = magEditW, h = controlH,
+    w = magEditW,
     title = pageText(i18n, "mag", "Mag"),
     values = magAlignChoicesValues,
     active = function() return not ui.liveViewEnabled end,
@@ -784,7 +774,7 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "button",
     x = btnStart, y = controlY,
-    w = btnW, h = controlH,
+    w = btnW,
     text = liveBtnText,
     press = function()
       if ui.liveViewEnabled then
@@ -810,7 +800,7 @@ function M.build(ctx)
   children[#children + 1] = {
     type = "button",
     x = btnStart + btnW + gap, y = controlY,
-    w = btnW, h = controlH,
+    w = btnW,
     text = pageText(i18n, "refresh_visual", "Refresh"),
     active = function() return not ui.liveViewEnabled end,
     press = function()
@@ -822,15 +812,25 @@ function M.build(ctx)
     end
   }
 
+  -- Divider line below second row of fields
+  children[#children + 1] = {
+    type = "rectangle",
+    x = x, y = y + 2 * rowH,
+    w = w, h = 1,
+    color = COLOR_THEME_SECONDARY2,
+    filled = true
+  }
+
   -- Split layout start
-  local splitY = y + 90
+  local splitY = y + 2 * rowH + 4
   -- Use actual screen height remaining to strictly prevent scrollbars
+  local pageBodyH = (lvgl and lvgl.PAGE_BODY_HEIGHT)
   local headerH = 48
-  if LCD_H > 300 then
+  if LCD_H and LCD_H > 300 then
     headerH = 64
   end
-  local availH = (LCD_H - headerH) - y
-  local splitH = availH - 90 - 4
+  local availH = (h and h > 0) and h or (pageBodyH and (pageBodyH - y)) or ((LCD_H - headerH) - y)
+  local splitH = max(50, availH - (2 * rowH) - 8)
   local leftW = floor(w * 0.40)
   local rightW = w - leftW - 4
   local rightX = x + leftW + 4
@@ -840,7 +840,7 @@ function M.build(ctx)
     type = "rectangle",
     x = x + leftW, y = splitY,
     w = 1, h = splitH,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true
   }
 
@@ -854,8 +854,8 @@ function M.build(ctx)
   
   children[#children + 1] = {
     type = "label",
-    x = x + 8, y = splitY + 4,
-    w = leftW - 12,
+    x = x + 6, y = splitY + 2,
+    w = leftW - 10,
     text = liveText,
     color = COLOR_THEME_PRIMARY1,
     font = SMLSIZE
@@ -864,8 +864,8 @@ function M.build(ctx)
   local offsetText = string.format(pageText(i18n, "offset_fmt", "Offset R:%d  P:%d  Y:%d  Mag:%d"), ui.display.roll_degrees, ui.display.pitch_degrees, ui.display.yaw_degrees, ui.display.mag_alignment)
   children[#children + 1] = {
     type = "label",
-    x = x + 8, y = splitY + 20,
-    w = leftW - 12,
+    x = x + 6, y = splitY + 18,
+    w = leftW - 10,
     text = offsetText,
     color = COLOR_THEME_PRIMARY1,
     font = SMLSIZE
@@ -874,29 +874,29 @@ function M.build(ctx)
   local viewYawText = string.format(pageText(i18n, "view_yaw_fmt", "View Yaw:%0.1f"), ui.viewYawOffset)
   children[#children + 1] = {
     type = "label",
-    x = x + 8, y = splitY + 36,
-    w = leftW - 12,
+    x = x + 6, y = splitY + 34,
+    w = leftW - 10,
     text = viewYawText,
     color = COLOR_THEME_PRIMARY1,
     font = SMLSIZE
   }
 
   -- Nose Direction Box
-  local boxY = splitY + 54
-  local boxH = splitH - 58
-  if boxH > 40 then
+  local boxY = splitY + 50
+  local boxH = splitH - 52
+  if boxH > 28 then
     children[#children + 1] = {
       type = "rectangle",
-      x = x + 8, y = boxY,
-      w = leftW - 16, h = boxH,
-      color = GREY_DEFAULT,
+      x = x + 6, y = boxY,
+      w = leftW - 12, h = boxH,
+      color = COLOR_THEME_SECONDARY2,
       filled = false
     }
     
     children[#children + 1] = {
       type = "label",
-      x = x + 12, y = boxY + 4,
-      w = leftW - 24,
+      x = x + 10, y = boxY + 2,
+      w = leftW - 20,
       text = pageText(i18n, "nose_direction", "Nose Direction"),
       color = COLOR_THEME_PRIMARY1,
       font = SMLSIZE
@@ -921,21 +921,34 @@ function M.build(ctx)
       secondary = pageText(i18n, "leaning_left", "Leaning Left")
     end
 
-    children[#children + 1] = {
-      type = "label",
-      x = x + 12, y = boxY + 20,
-      w = leftW - 24,
-      text = primary,
-      color = COLOR_THEME_SECONDARY1 or YELLOW,
-      font = SMLSIZE
-    }
-    if secondary ~= "" then
+    if boxH >= 52 and secondary ~= "" then
       children[#children + 1] = {
         type = "label",
-        x = x + 12, y = boxY + 40,
-        w = leftW - 24,
+        x = x + 10, y = boxY + 18,
+        w = leftW - 20,
+        text = primary,
+        color = COLOR_THEME_SECONDARY1 or YELLOW,
+        font = SMLSIZE
+      }
+      children[#children + 1] = {
+        type = "label",
+        x = x + 10, y = boxY + 34,
+        w = leftW - 20,
         text = secondary,
         color = COLOR_THEME_PRIMARY1,
+        font = SMLSIZE
+      }
+    else
+      local combinedText = primary
+      if secondary ~= "" then
+        combinedText = primary .. ", " .. secondary
+      end
+      children[#children + 1] = {
+        type = "label",
+        x = x + 10, y = boxY + 16,
+        w = leftW - 20,
+        text = combinedText,
+        color = COLOR_THEME_SECONDARY1 or YELLOW,
         font = SMLSIZE
       }
     end
@@ -951,8 +964,8 @@ function M.build(ctx)
   }
 
   local mx = rightX + floor(rightW * 0.5)
-  local my = splitY + floor(splitH * 0.52)
-  local scale = max(8, min(rightW, splitH) * 0.22)
+  local my = splitY + floor(splitH * 0.5)
+  local scale = max(6, min(rightW, splitH) * 0.22)
   
   local loadedRoll = ui.loaded_roll_degrees or 0
   local loadedPitch = ui.loaded_pitch_degrees or 0
@@ -975,9 +988,9 @@ function M.build(ctx)
 
   local mainColor = WHITE
   local accent = COLOR_THEME_SECONDARY1 or YELLOW
-  local disc = GREY_DEFAULT
-  local bodyLight = COLOR_THEME_PRIMARY2 or GREY_DEFAULT
-  local bodyMid = GREY_DEFAULT
+  local disc = COLOR_THEME_SECONDARY2
+  local bodyLight = COLOR_THEME_PRIMARY2
+  local bodyMid = COLOR_THEME_SECONDARY2
   local bodyDark = COLOR_THEME_PRIMARY3 or BLACK
 
   local nose = {2.35, 0.0, -0.02}
@@ -1096,11 +1109,16 @@ function M.build(ctx)
   drawLine3D(children, strutLBTop, strutRBTop, mx, my, scale, cx, sx, cy, sy, cz, sz, mainColor)
 end
 
+function M.canSave()
+  return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+  if not M.canSave() then return false, "loaded_data_missing" end
   local ok, err = queueAlignmentWrite()
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -1112,13 +1130,12 @@ function M.onSave(ctx)
   ui.loaded_pitch_degrees = ui.display.pitch_degrees
   ui.loaded_yaw_degrees = ui.display.yaw_degrees
   saveToSession()
-  ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
-      title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
-      message = pageText(ctx and ctx.i18n, "saved_message", "Alignment offsets saved to FBL")
-    })
-  end
+  -- Nothing is announced here. This function has only QUEUED the save: the writes, the commit
+  -- and -- on this page -- the restart are all still ahead of it, and a dialog saying the
+  -- settings are saved would be a claim it cannot make. It was also drawn on TOP of the
+  -- overlay that reports the save, from a place where that overlay could not be repainted away
+  -- first, and while a native dialog stands the tool's run() does not run at all. The pipeline
+  -- reports the outcome in the overlay, once, when it knows it.
   return true
 end
 
@@ -1162,9 +1179,6 @@ function M.onStar(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

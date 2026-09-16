@@ -7,7 +7,7 @@ local function loadModule(path)
   local ok, mod = pcall(chunk)
   if not ok then 
     if _G and _G.rfsuite and _G.rfsuite.Log then
-      _G.rfsuite.Log.emit("rfsuite.elrs", "loadModule pcall error: " .. tostring(mod), "error", true)
+      _G.rfsuite.Log.emit("rfsuite.elrs", "loadModule pcall error: " .. tostring(mod), "error")
     end
     return nil 
   end
@@ -43,15 +43,18 @@ local function nowSeconds()
   return 0
 end
 
+local LoadingOverlay = nil
+
 local function ensureDeps()
   if not Common then Common = loadModule("app/pages/settings/common.lua") end
   if not ElrsTask then 
     ElrsTask = loadModule("app/pages/tools/diagnostics/elrs_link/elrslink_task.lua") 
     if not ElrsTask and _G and _G.rfsuite and _G.rfsuite.Log then
-      _G.rfsuite.Log.emit("rfsuite.elrs", "Failed to load elrslink_task.lua", "error", true)
+      _G.rfsuite.Log.emit("rfsuite.elrs", "Failed to load elrslink_task.lua", "error")
     end
   end
   if not t then t = Common and Common.pageT("diagnostics_elrs_link") or nil end
+  if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
 end
 
 local function pageText(i18n, key, fallback)
@@ -68,12 +71,12 @@ end
 local function log(msg, level)
   local rf = _G.rfsuite
   if rf and rf.Log and type(rf.Log.emit) == "function" then
-    rf.Log.emit("rfsuite.elrs.page", msg, level or "debug", true)
+    rf.Log.emit("rfsuite.elrs.page", msg, level or "debug")
   end
 end
 
-local function requestTelemetryConfig()
-  if state.fetchingConfig then return end
+local function requestTelemetryConfig(force)
+  if state.fetchingConfig and not force then return end
   local session = getSession()
   if not session or not session.isConnected then return end
   
@@ -85,7 +88,7 @@ local function requestTelemetryConfig()
     return 
   end
   
-  log("requestTelemetryConfig: requesting MSP 73")
+  log("requestTelemetryConfig: requesting MSP 73 (force=" .. tostring(force) .. ")")
   state.fetchingConfig = true
   mspState.queue:add({
     command = TelemetryApi.command,
@@ -103,6 +106,7 @@ local function requestTelemetryConfig()
         log("requestTelemetryConfig: successfully populated session config")
       end
       state.fetchingConfig = false
+      state.answered = true
       if type(state.requestRebuild) == "function" then state.requestRebuild() end
     end,
     errorHandler = function()
@@ -127,7 +131,9 @@ local function formatRotorflightSummary(i18n)
     end
 
     local modeLabel = fcConfig.mode == 0 and pageText(i18n, "mode_native", "Native") or pageText(i18n, "mode_custom", "Custom")
-    return "mode=" .. modeLabel .. ", rate=" .. tostring(fcConfig.linkRate) .. ", ratio=1:" .. tostring(fcConfig.linkRatio)
+    local rateLabel = (fcConfig.linkRate and fcConfig.linkRate > 0) and (tostring(fcConfig.linkRate) .. "Hz") or tostring(fcConfig.linkRate or "?")
+    local ratioLabel = (fcConfig.linkRatio and fcConfig.linkRatio > 0) and ("1:" .. tostring(fcConfig.linkRatio)) or tostring(fcConfig.linkRatio or "?")
+    return "mode=" .. modeLabel .. ", rate=" .. rateLabel .. ", ratio=" .. ratioLabel
 end
 
 local function formatElrsSummary(i18n)
@@ -137,8 +143,24 @@ local function formatElrsSummary(i18n)
         return pageText(i18n, "status_not_probed", "Not probed yet")
     end
 
-    local rateText = linkConfig.packetRateLabel or (linkConfig.packetRate and (tostring(linkConfig.packetRate) .. "Hz")) or "?"
-    local ratioText = linkConfig.telemetryRatioLabel or "?"
+    local rateText = linkConfig.packetRateLabel
+    if not rateText or rateText == "" then
+        if linkConfig.packetRate and linkConfig.packetRate > 0 then
+            rateText = tostring(linkConfig.packetRate) .. "Hz"
+        else
+            rateText = "?"
+        end
+    end
+
+    local ratioText = linkConfig.telemetryRatioLabel
+    if not ratioText or ratioText == "" then
+        if linkConfig.telemetryRatio and linkConfig.telemetryRatio > 0 then
+            ratioText = "1:" .. tostring(linkConfig.telemetryRatio)
+        else
+            ratioText = "?"
+        end
+    end
+
     return "rate=" .. tostring(rateText) .. ", ratio=" .. tostring(ratioText)
 end
 
@@ -187,7 +209,7 @@ function M.getModuleTitle()
 end
 
 function M.getHeaderActions()
-  return { reload = false, save = false, help = false }
+  return { reload = true, save = false, help = false }
 end
 
 function M.isPageOpen()
@@ -195,7 +217,11 @@ function M.isPageOpen()
 end
 
 function M.onReload()
-  return false
+  requestTelemetryConfig(true)
+  if ElrsTask then
+    ElrsTask.start(ElrsTask.MODE_PROBE)
+  end
+  return true
 end
 
 function M.build(ctx)
@@ -207,6 +233,7 @@ function M.build(ctx)
   
   if not state.loaded then
     state.loaded = true
+    requestTelemetryConfig(true)
   end
   
   rebuildRows(i18n)
@@ -215,6 +242,21 @@ function M.build(ctx)
   local x = ctx.x
   local y = ctx.y
   local w = ctx.w
+
+  -- Until the first reply lands there is nothing to draw but zeroes, and the host paints no
+  -- frame in front of a page -- so without this the page simply appears empty and the pilot
+  -- cannot tell a slow read from a page that has no data. Only the FIRST read is covered:
+  -- the page re-reads on demand, and an overlay on every re-read would flash.
+  if not state.answered and state.fetchingConfig and LoadingOverlay
+     and type(LoadingOverlay.append) == "function" then
+    LoadingOverlay.append(children, {
+      x = x, y = y, w = w, h = ctx.h,
+      title = pageText(i18n, "loading_title", "Loading"),
+      message = pageText(i18n, "loading_message", "Reading link configuration..."),
+      progress = 0.3
+    })
+    return
+  end
   local rowY = y + 6
   local rowH = 44
   local labelW = math.floor(w * 0.35)
@@ -277,7 +319,10 @@ function M.build(ctx)
       text = pageText(i18n, "action_probe", "Probe"),
       textColor = WHITE,
       active = buttonsEnabled,
-      press = function() ElrsTask.start(ElrsTask.MODE_PROBE) end
+      press = function()
+        requestTelemetryConfig(true)
+        ElrsTask.start(ElrsTask.MODE_PROBE)
+      end
     }
 
     -- RF -> ELRS
@@ -288,7 +333,10 @@ function M.build(ctx)
       text = pageText(i18n, "action_rf_to_elrs", "RF -> ELRS"),
       textColor = WHITE,
       active = buttonsEnabled,
-      press = function() ElrsTask.start(ElrsTask.MODE_ROTORFLIGHT_TO_ELRS) end
+      press = function()
+        requestTelemetryConfig(true)
+        ElrsTask.start(ElrsTask.MODE_ROTORFLIGHT_TO_ELRS)
+      end
     }
 
     -- ELRS -> RF
@@ -299,7 +347,10 @@ function M.build(ctx)
       text = pageText(i18n, "action_elrs_to_rf", "ELRS -> RF"),
       textColor = WHITE,
       active = buttonsEnabled,
-      press = function() ElrsTask.start(ElrsTask.MODE_ELRS_TO_ROTORFLIGHT) end
+      press = function()
+        requestTelemetryConfig(true)
+        ElrsTask.start(ElrsTask.MODE_ELRS_TO_ROTORFLIGHT)
+      end
     }
   end
 end
@@ -336,6 +387,8 @@ function M.closePage()
   state.lastRefreshAt = 0
   state.i18n = nil
   state.fetchingConfig = false
+  state.answered = false
+  LoadingOverlay = nil
   Common = nil
   ElrsTask = nil
   t = nil

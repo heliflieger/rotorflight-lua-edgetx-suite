@@ -22,7 +22,8 @@ local ConfirmDialog = nil
 local t = nil
 
 local MODE_LOGIC_OPTIONS = {"OR", "AND"}
-local AUX_CHANNEL_COUNT_FALLBACK = 20
+-- Rotorflight firmware limit: MAX_SUPPORTED_RC_CHANNEL_COUNT (18) - CONTROL_CHANNEL_COUNT (5) = 13 (AUX 1..13, indices 0..12)
+local AUX_CHANNEL_COUNT = 13
 local RANGE_MIN = 875
 local RANGE_MAX = 2125
 local RANGE_STEP = 5
@@ -114,7 +115,7 @@ local function channelRawToUs(value)
 end
 
 local function auxIndexToMember(auxIndex)
-  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+  local idx = clamp(auxIndex or 0, 0, AUX_CHANNEL_COUNT - 1)
   local session = getSession()
   local rx = session and session.rx
   local map = rx and rx.map or nil
@@ -142,7 +143,7 @@ end
 
 local function buildAuxOptions(i18n)
   local options = { "AUTO" }
-  for i = 1, AUX_CHANNEL_COUNT_FALLBACK do
+  for i = 1, AUX_CHANNEL_COUNT do
     options[#options + 1] = "AUX " .. tostring(i)
   end
   return options
@@ -225,22 +226,24 @@ end
 
 local function onPressSetRange(slot, rawRange, i18n)
   if ui.autoDetectSlots[slot] then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
-        title = pageText(i18n, "title", "Modes"),
-        message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Modes"),
+      message = pageText(i18n, "msg_auto_detect_lock_first", "Auto-detect is active for this row. Toggle to lock AUX first.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return
   end
 
   local us = getAuxPulseUs(rawRange.auxChannelIndex or 0)
   if not us then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
-        title = pageText(i18n, "title", "Modes"),
-        message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Modes"),
+      message = pageText(i18n, "msg_live_channel_unavailable", "Live channel value unavailable.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return
   end
@@ -286,11 +289,12 @@ local function addRangeToSelectedMode(i18n)
   end
 
   if not freeSlot then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
-        title = pageText(i18n, "title", "Modes"),
-        message = pageText(i18n, "msg_no_free_slots", "No free mode slots remain. Delete an existing range first.")
-      })
+    ui.notice = {
+      title = pageText(i18n, "title", "Modes"),
+      message = pageText(i18n, "msg_no_free_slots", "No free mode slots remain. Delete an existing range first.")
+    }
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
     end
     return
   end
@@ -319,11 +323,11 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   local rawExtra = slot and ui.modeRangesExtra[slot] or nil
   if not rawRange or not rawExtra or not rawRange.range then return 0 end
 
-  local rowH = 130
+  local singleRowH = (Controls and Controls.ROW_H) or 64
+  local labelY1 = (Controls and Controls.labelY and Controls.labelY(y, singleRowH)) or (y + math.floor((singleRowH - 21) / 2))
+  local controlY1 = (Controls and Controls.controlY and Controls.controlY(y, singleRowH)) or (y + math.floor((singleRowH - 32) / 2))
   local rightPadding = 10
   local gap = 6
-  local ctrlH = 50
-  local inputH = 62
 
   -- Line 1: "Range X", Live Value, "Set" Button
   local wSet = 60
@@ -334,7 +338,7 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   -- Range Label
   children[#children + 1] = {
     type = "label",
-    x = x + 10, y = y + 10,
+    x = x + 10, y = labelY1,
     text = pageText(i18n, "range", "Range") .. " " .. tostring(rangeIndex),
     color = COLOR_THEME_PRIMARY1,
     font = MIDSIZE
@@ -356,7 +360,7 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
 
   children[#children + 1] = {
     type = "label",
-    x = xLive, y = y + 10,
+    x = xLive, y = labelY1,
     w = wLive,
     text = liveText,
     color = COLOR_THEME_SECONDARY1,
@@ -367,8 +371,8 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   -- Set button
   children[#children + 1] = {
     type = "button",
-    x = xSet, y = y + 6,
-    w = wSet, h = inputH,
+    x = xSet, y = controlY1,
+    w = wSet,
     text = pageText(i18n, "set", "Set"),
     press = function()
       onPressSetRange(slot, rawRange, i18n)
@@ -388,21 +392,18 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   local xLogic = xStart - gap - wLogic
   local xAux = xLogic - gap - wAux
 
-  local line2Y = y + 60
+  local line2Y = y + singleRowH
+  local controlY2 = (Controls and Controls.controlY and Controls.controlY(line2Y, singleRowH)) or (line2Y + math.floor((singleRowH - 32) / 2))
 
   -- AUX Choice
   local auxOptions = buildAuxOptions(i18n)
-  local auxValues = {}
-  for idx, label in ipairs(auxOptions) do
-    auxValues[idx] = label
-  end
 
   children[#children + 1] = {
     type = "choice",
-    x = xAux, y = line2Y,
-    w = wAux, h = inputH,
+    x = xAux, y = controlY2,
+    w = wAux,
     title = pageText(i18n, "mode", "Mode"),
-    values = auxValues,
+    values = auxOptions,
     get = function()
       if ui.autoDetectSlots[slot] then return 1 end
       return clamp((rawRange.auxChannelIndex or 0) + 2, 2, #auxOptions)
@@ -413,12 +414,9 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
         ui.autoDetectSlots[slot] = { baseline = nil }
       else
         ui.autoDetectSlots[slot] = nil
-        rawRange.auxChannelIndex = clamp(val - 2, 0, AUX_CHANNEL_COUNT_FALLBACK - 1)
+        rawRange.auxChannelIndex = clamp(val - 2, 0, AUX_CHANNEL_COUNT - 1)
       end
       ui.dirty = true
-      if type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
     end
   }
 
@@ -426,8 +424,8 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   local logicValues = { "OR", "AND" }
   children[#children + 1] = {
     type = "choice",
-    x = xLogic, y = line2Y,
-    w = wLogic, h = inputH,
+    x = xLogic, y = controlY2,
+    w = wLogic,
     title = pageText(i18n, "mode", "Mode"),
     values = logicValues,
     get = function()
@@ -437,17 +435,14 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
       local val = tonumber(value) or 1
       rawExtra.modeLogic = clamp(val - 1, 0, 1)
       ui.dirty = true
-      if type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
     end
   }
 
   -- Start value field
   children[#children + 1] = {
     type = "numberEdit",
-    x = xStart, y = line2Y,
-    w = wNum, h = inputH,
+    x = xStart, y = controlY2,
+    w = wNum,
     min = math.floor(RANGE_MIN / RANGE_STEP),
     max = math.floor(RANGE_MAX / RANGE_STEP),
     get = function()
@@ -461,9 +456,6 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
         rawRange.range["end"] = rawRange.range.start
       end
       ui.dirty = true
-      if type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
     end,
     display = function(val)
       local shown = (tonumber(val) or math.floor(RANGE_MIN / RANGE_STEP)) * RANGE_STEP
@@ -474,8 +466,8 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   -- End value field
   children[#children + 1] = {
     type = "numberEdit",
-    x = xEnd, y = line2Y,
-    w = wNum, h = inputH,
+    x = xEnd, y = controlY2,
+    w = wNum,
     min = math.floor(RANGE_MIN / RANGE_STEP),
     max = math.floor(RANGE_MAX / RANGE_STEP),
     get = function()
@@ -489,9 +481,6 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
         rawRange.range.start = rawRange.range["end"]
       end
       ui.dirty = true
-      if type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
     end,
     display = function(val)
       local shown = (tonumber(val) or math.floor(RANGE_MAX / RANGE_STEP)) * RANGE_STEP
@@ -502,8 +491,8 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   -- Delete button
   children[#children + 1] = {
     type = "button",
-    x = xDel, y = line2Y,
-    w = wDel, h = inputH,
+    x = xDel, y = controlY2,
+    w = wDel,
     text = "X",
     press = function()
       removeRangeSlot(slot)
@@ -513,12 +502,12 @@ local function appendRangeRow(children, x, y, w, rangeIndex, modeRange, i18n)
   -- Row divider
   children[#children + 1] = {
     type = "rectangle",
-    x = x, y = y + rowH,
+    x = x, y = line2Y + singleRowH,
     w = w, h = 1,
-    color = GREY_DEFAULT, filled = true
+    color = COLOR_THEME_SECONDARY2, filled = true
   }
 
-  return rowH + 1
+  return (singleRowH * 2) + 1
 end
 
 local function buildSessionSignature()
@@ -555,6 +544,8 @@ end
 
 local function startLoad(requestRebuild)
   if ui.runtime.readPending then return false end
+  ui.runtime.readComplete = false
+  local readValid = type(getSession()) == "table"
   ui.runtime.readPending = true
   ui.loading = true
   ui.progress = 0
@@ -577,6 +568,7 @@ local function startLoad(requestRebuild)
   end
 
   local function failed(reason)
+    readValid = false
     ui.runtime.readPending = false
     ui.loading = false
     ui.progress = 0
@@ -589,6 +581,7 @@ local function startLoad(requestRebuild)
     simulatorResponse = BoxIdsApi.simulatorResponse,
     processReply = function(self, buf)
       local parsedObj = BoxIdsApi.parse(buf)
+      if type(parsedObj) ~= "table" then return Common.failPageRead(ui) end
       if parsedObj and parsedObj.box_ids then
         ui.boxIds = parsedObj.box_ids
       end
@@ -601,6 +594,7 @@ local function startLoad(requestRebuild)
         simulatorResponse = BoxNamesApi.simulatorResponse,
         processReply = function(self2, buf2)
           local parsedObj2 = BoxNamesApi.parse(buf2)
+          if type(parsedObj2) ~= "table" then return Common.failPageRead(ui) end
           if parsedObj2 and parsedObj2.box_names then
             ui.boxNames = parsedObj2.box_names
           end
@@ -613,6 +607,7 @@ local function startLoad(requestRebuild)
             simulatorResponse = ModeRangesApi.simulatorResponse,
             processReply = function(self3, buf3)
               local parsedObj3 = ModeRangesApi.parse(buf3)
+              if type(parsedObj3) ~= "table" then return Common.failPageRead(ui) end
               if parsedObj3 and parsedObj3.mode_ranges then
                 ui.modeRanges = parsedObj3.mode_ranges
               end
@@ -625,9 +620,9 @@ local function startLoad(requestRebuild)
                 simulatorResponse = ModeRangesExtraApi.simulatorResponse,
                 processReply = function(self4, buf4)
                   local parsedObj4 = ModeRangesExtraApi.parse(buf4)
-                  local extParsed = parsedObj4 and parsedObj4.parsed
-                  if extParsed and extParsed.mode_ranges_extra then
-                    ui.modeRangesExtra = extParsed.mode_ranges_extra
+                  if type(parsedObj4) ~= "table" then return Common.failPageRead(ui) end
+                  if parsedObj4 and parsedObj4.mode_ranges_extra then
+                    ui.modeRangesExtra = parsedObj4.mode_ranges_extra
                   end
                   ui.progress = 80
                   triggerRebuild()
@@ -637,8 +632,8 @@ local function startLoad(requestRebuild)
                     command = RxMapApi.command,
                     simulatorResponse = RxMapApi.simulatorResponse,
                     processReply = function(self5, buf5)
-                      local parsedObj5 = RxMapApi.parse(buf5)
-                      local rxParsed = parsedObj5 and parsedObj5.parsed
+                      local rxParsed = RxMapApi.parse(buf5)
+                      if type(rxParsed) ~= "table" then return Common.failPageRead(ui) end
                       if rxParsed then
                         local session = getSession()
                         if session then
@@ -653,6 +648,7 @@ local function startLoad(requestRebuild)
                       ui.loading = false
                       ui.dirty = false
                       ui.progress = 100
+                      ui.runtime.readComplete = readValid
                       triggerRebuild()
                     end,
                     errorHandler = failed
@@ -673,7 +669,7 @@ local function startLoad(requestRebuild)
   return true
 end
 
-local function queueModesWrite(requestRebuild)
+local function queueModesWrite(requestRebuild, i18n, ctx)
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -699,10 +695,11 @@ local function queueModesWrite(requestRebuild)
     if type(requestRebuild) == "function" then
       requestRebuild()
     end
-    if lvgl and lvgl.alert then
-      lvgl.alert({
-        title = "Error",
-        message = tostring(reason or "Save failed")
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
+        ok = false,
+        title = pageText(i18n, "save_error_title", "Error"),
+        message = tostring(reason or pageText(i18n, "save_error_message", "Save failed"))
       })
     end
   end
@@ -724,10 +721,11 @@ local function queueModesWrite(requestRebuild)
             if type(requestRebuild) == "function" then
               requestRebuild()
             end
-            if lvgl and lvgl.alert then
-              lvgl.alert({
-                title = "Saved",
-                message = "Mode configuration saved"
+            if ctx and type(ctx.reportSave) == "function" then
+              ctx.reportSave({
+                ok = true,
+                title = pageText(i18n, "saved_title", "Saved"),
+                message = pageText(i18n, "saved_message", "Mode configuration saved")
               })
             end
           end,
@@ -741,6 +739,13 @@ local function queueModesWrite(requestRebuild)
         if type(requestRebuild) == "function" then
           requestRebuild()
         end
+        if ctx and type(ctx.reportSave) == "function" then
+          ctx.reportSave({
+            ok = true,
+            title = pageText(i18n, "saved_title", "Saved"),
+            message = pageText(i18n, "saved_message", "Mode configuration saved")
+          })
+        end
       end
       return
     end
@@ -753,7 +758,7 @@ local function queueModesWrite(requestRebuild)
     local payload = {
       slot - 1,
       clamp(range.id or 0, 0, 255),
-      clamp(range.auxChannelIndex or 0, 0, 255),
+      clamp(range.auxChannelIndex or 0, 0, AUX_CHANNEL_COUNT - 1),
       toS8Byte(startStep),
       toS8Byte(endStep),
       clamp(extra.modeLogic or 0, 0, 1),
@@ -814,7 +819,7 @@ local function checkLiveUpdates()
     if rawRange then
       local autoState = ui.autoDetectSlots[slot]
       if autoState then
-        for auxIdx = 0, AUX_CHANNEL_COUNT_FALLBACK - 1 do
+        for auxIdx = 0, AUX_CHANNEL_COUNT - 1 do
           local us = getAuxPulseUs(auxIdx)
           if us then
             if not autoState.baseline then autoState.baseline = {} end
@@ -936,9 +941,24 @@ function M.build(ctx)
   local h = ctx.h
   local i18n = ctx.i18n
 
-  if ui.loading or ui.saving then
-    local titleText = ui.loading and pageText(i18n, "loading_config", "Loading") or pageText(i18n, "saving_config", "Saving")
-    local msgText = ui.loading and pageText(i18n, "loading", "Loading mode data...") or pageText(i18n, "saving_config", "Saving mode configuration...")
+  if ui.notice and LoadingOverlay and type(LoadingOverlay.appendNotice) == "function" then
+    LoadingOverlay.appendNotice(children, {
+      x = x, y = y, w = w, h = h,
+      title = ui.notice.title,
+      message = ui.notice.message,
+      press = function()
+        ui.notice = nil
+        if type(ui.runtime.requestRebuild) == "function" then
+          ui.runtime.requestRebuild()
+        end
+      end
+    })
+    return
+  end
+
+  if ui.loading then
+    local titleText = "@i18n(app.loading)@"
+    local msgText = pageText(i18n, "loading", "Loading mode data...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
       title = titleText,
@@ -990,13 +1010,14 @@ function M.build(ctx)
   -- Action bar
   local rightPadding = 10
   local buttonW = math.floor(w * 0.24)
-  local buttonH = 32
-  local lineH = 40
+  local rowH = (Controls and Controls.ROW_H) or 64
+  local labelY = (Controls and Controls.labelY and Controls.labelY(cursorY, rowH)) or (cursorY + math.floor((rowH - 21) / 2))
+  local btnY = (Controls and Controls.controlY and Controls.controlY(cursorY, rowH)) or (cursorY + math.floor((rowH - 32) / 2))
 
   local activeStr = pageText(i18n, "active_ranges", "Active ranges") .. ": " .. tostring(#ranges) .. " / " .. tostring(#ui.modeRanges)
   children[#children + 1] = {
     type = "label",
-    x = x + 10, y = cursorY + 10,
+    x = x + 10, y = labelY,
     text = activeStr,
     color = COLOR_THEME_PRIMARY1,
     font = SMLSIZE
@@ -1005,7 +1026,7 @@ function M.build(ctx)
   if ui.dirty then
     children[#children + 1] = {
       type = "label",
-      x = x + 200, y = cursorY + 10,
+      x = x + 200, y = labelY,
       text = pageText(i18n, "unsaved_changes", "Unsaved changes"),
       color = COLOR_THEME_SECONDARY1,
       font = SMLSIZE
@@ -1014,27 +1035,26 @@ function M.build(ctx)
 
   children[#children + 1] = {
     type = "button",
-    x = x + w - buttonW - rightPadding, y = cursorY + 4,
-    w = buttonW, h = buttonH,
+    x = x + w - buttonW - rightPadding, y = btnY,
+    w = buttonW,
     text = "+ Add",
     press = function()
       addRangeToSelectedMode(i18n)
     end
   }
 
-  cursorY = cursorY + lineH
   children[#children + 1] = {
     type = "rectangle",
-    x = x, y = cursorY,
+    x = x, y = cursorY + rowH,
     w = w, h = 1,
-    color = GREY_DEFAULT, filled = true
+    color = COLOR_THEME_SECONDARY2, filled = true
   }
-  cursorY = cursorY + 8
+  cursorY = cursorY + rowH + 1
 
   if #ranges == 0 then
     children[#children + 1] = {
       type = "label",
-      x = x + 10, y = cursorY + 10,
+      x = x + 10, y = (Controls and Controls.labelY and Controls.labelY(cursorY, rowH)) or (cursorY + math.floor((rowH - 21) / 2)),
       text = pageText(i18n, "no_ranges", "No ranges configured for this mode."),
       color = COLOR_THEME_PRIMARY1,
       font = SMLSIZE
@@ -1047,13 +1067,19 @@ function M.build(ctx)
   end
 end
 
+function M.canSave()
+  return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
-  local ok, err = queueModesWrite(ctx and ctx.requestRebuild)
+  if not M.canSave() then return false, "loaded_data_missing" end
+  local ok, err = queueModesWrite(ctx and ctx.requestRebuild, ctx and ctx.i18n, ctx)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
+        ok = false,
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
-        message = tostring(err or "MSP write failed")
+        message = tostring(err or pageText(ctx and ctx.i18n, "save_error_message", "Save failed"))
       })
     end
     return false
@@ -1079,9 +1105,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

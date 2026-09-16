@@ -14,7 +14,7 @@ local function isCompactDisplay(state)
   return not (w and w >= 760)
 end
 
-Theme.layout = { cols = 6, rows = 12, padding = 1 }
+Theme.layout = { cols = 6, rows = 12, padding = 1, bgcolor = WHITE }
 
 Theme.boxes = {
   -- Left: RPM Arc Gauge
@@ -34,9 +34,9 @@ Theme.boxes = {
     unit = "",
     transform = "floor",
     bgcolor = BLACK,
-    titlecolor = GREY_DEFAULT,
+    titlecolor = COLOR_THEME_DISABLED,
     textcolor = WHITE,
-    fillbgcolor = GREY_DEFAULT,
+    fillbgcolor = COLOR_THEME_SECONDARY2,
     maxtextcolor = YELLOW,
     maxfont = SMLSIZE,
     maxposition = "top",
@@ -66,7 +66,7 @@ Theme.boxes = {
       return -22
     end,
     bgcolor = BLACK,
-    titlecolor = GREY_DEFAULT,
+    titlecolor = COLOR_THEME_DISABLED,
     textcolor = YELLOW
   },
 
@@ -93,8 +93,8 @@ Theme.boxes = {
     gaugepaddingright = 4,
     gaugepaddingbottom = 5,
     bgcolor = BLACK,
-    fillbgcolor = GREY_DEFAULT,
-    titlecolor = GREY_DEFAULT,
+    fillbgcolor = COLOR_THEME_SECONDARY2,
+    titlecolor = COLOR_THEME_DISABLED,
     textcolor = WHITE,
     min = function(_, state) return cfgValue("bec_min", 3.0, state) end,
     max = function(_, state) return cfgValue("bec_max", 13.0, state) end,
@@ -122,9 +122,9 @@ Theme.boxes = {
     unit = "%",
     transform = "floor",
     bgcolor = BLACK,
-    titlecolor = GREY_DEFAULT,
+    titlecolor = COLOR_THEME_DISABLED,
     textcolor = WHITE,
-    fillbgcolor = GREY_DEFAULT,
+    fillbgcolor = COLOR_THEME_SECONDARY2,
     maxtextcolor = YELLOW,
     maxfont = SMLSIZE,
     maxposition = "top",

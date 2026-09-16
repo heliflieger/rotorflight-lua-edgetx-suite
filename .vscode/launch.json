@@ -104,45 +104,6 @@
       "console": "internalConsole",
       "internalConsoleOptions": "neverOpen",
       "preLaunchTask": "Sensors: Build + Run Tool"
-    },
-    {
-      "name": "Updater: Run Tool",
-      "type": "pwa-node",
-      "request": "launch",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": [
-        "/c",
-        "echo Updater tool start triggered"
-      ],
-      "console": "internalConsole",
-      "internalConsoleOptions": "neverOpen",
-      "preLaunchTask": "Updater: Run Tool"
-    },
-    {
-      "name": "Updater: Build + Run Tool",
-      "type": "pwa-node",
-      "request": "launch",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": [
-        "/c",
-        "echo Updater tool build and start triggered"
-      ],
-      "console": "internalConsole",
-      "internalConsoleOptions": "neverOpen",
-      "preLaunchTask": "Updater: Build + Run Tool"
-    },
-    {
-      "name": "Updater: Run Python Source (Dev)",
-      "type": "pwa-node",
-      "request": "launch",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": [
-        "/c",
-        "echo Updater Python source run triggered"
-      ],
-      "console": "internalConsole",
-      "internalConsoleOptions": "neverOpen",
-      "preLaunchTask": "Updater: Run Python Source (Dev)"
     }
   ]
 }

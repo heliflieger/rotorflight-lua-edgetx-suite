@@ -105,7 +105,7 @@ local function logMsg(msg, level)
     end
 
     if logModule and type(logModule.emit) == "function" then
-        logModule.emit(t, msg, lvl, true)
+        logModule.emit(t, msg, lvl)
     end
 end
 
@@ -128,71 +128,88 @@ local function clearPendingWrites()
     pendingWriteIndex = 1
 end
 
-local function readString(data, offset)
-    local parts = {}
-    while data[offset] and data[offset] ~= 0 do
-        parts[#parts + 1] = string.char(data[offset])
-        offset = offset + 1
-    end
-    return table.concat(parts), offset + 1
-end
+local function fieldGetStrOrOpts(data, offset, isOpts)
+  local r = isOpts and {} or nil
+  local opt = ""
+  local vcnt = 0
+  repeat
+    local b = data[offset]
+    if b == nil then break end
+    offset = offset + 1
 
-local function readU32Be(data, offset)
-    local value = 0
-    for i = 0, 3 do
-        value = value * 256 + (data[offset + i] or 0)
-    end
-    return value
-end
-
-local function parseChoiceField(data, offset)
-    local optionsStr
-    local options = {}
-    local selectedIndex = 0
-    local selectedLabel = nil
-    local idx = 0
-
-    optionsStr, offset = readString(data, offset)
-    selectedIndex = data[offset] or 0
-
-    for part in string_gmatch(optionsStr .. ";", "([^;]*);") do
-        options[#options + 1] = part
-        if idx == selectedIndex then
-            selectedLabel = part
+    if isOpts then
+      if b == 59 or b == 0 then -- ';' or '\0'
+        r[#r+1] = opt
+        if opt ~= "" then
+          vcnt = vcnt + 1
         end
-        idx = idx + 1
+        opt = ""
+      else
+        opt = opt .. string.char(b)
+      end
+    else
+      if b ~= 0 then
+        opt = opt .. string.char(b)
+      end
     end
+  until b == 0
 
-    return options, selectedIndex, selectedLabel
+  return (r or opt), offset, vcnt
 end
 
 local function optionLooksLikeRatio(text)
-    local lowerText = string_lower(text or "")
+    if type(text) ~= "string" or text == "" then return false end
+    local lowerText = string_lower(text)
     if string_find(lowerText, "std", 1, true) then return true end
     if string_find(lowerText, "race", 1, true) then return true end
-    if string_find(lowerText, "1:", 1, true) then return true end
+    if string_find(lowerText, "1:", 1, true) or string_find(lowerText, "1/", 1, true) then return true end
+    if string.match(lowerText, "^:%d+") then return true end
     return false
 end
 
 local function optionLooksLikeRate(text)
-    local lowerText = string_lower(text or "")
+    if type(text) ~= "string" or text == "" then return false end
+    local lowerText = string_lower(text)
+    if string_find(lowerText, "ghz", 1, true) then return false end
+    if string_find(lowerText, "mhz", 1, true) then return false end
     if string_find(lowerText, "hz", 1, true) then return true end
-    if string_find(lowerText, "dbm", 1, true) then return true end
-    if string.match(lowerText, "^%s*[a-z]+%d") then return true end
+    if string.match(lowerText, "^%s*[dfk]%d+") then return true end
     return false
 end
 
 local function classifyChoiceField(lowerName, options)
     if string_find(lowerName, "packet rate", 1, true)
         or string_find(lowerName, "pkt rate", 1, true)
+        or string_find(lowerName, "pkt. rate", 1, true)
+        or string_find(lowerName, "pkt.rate", 1, true)
         or string_find(lowerName, "air rate", 1, true)
-        or string_find(lowerName, "rf mode", 1, true) then
+        or string_find(lowerName, "rf rate", 1, true)
+        or lowerName == "packet rate"
+        or lowerName == "pkt rate"
+        or lowerName == "rate" then
         return "rate"
     end
 
     if string_find(lowerName, "telem ratio", 1, true)
-        or string_find(lowerName, "telemetry ratio", 1, true) then
+        or string_find(lowerName, "telemetry ratio", 1, true)
+        or string_find(lowerName, "tlm ratio", 1, true)
+        or string_find(lowerName, "tlm. ratio", 1, true)
+        or lowerName == "telem ratio"
+        or lowerName == "tlm ratio"
+        or lowerName == "ratio" then
         return "ratio"
+    end
+
+    if string_find(lowerName, "power", 1, true)
+        or string_find(lowerName, "switch", 1, true)
+        or string_find(lowerName, "model", 1, true)
+        or string_find(lowerName, "vtx", 1, true)
+        or string_find(lowerName, "wifi", 1, true)
+        or string_find(lowerName, "ble", 1, true)
+        or string_find(lowerName, "band", 1, true)
+        or string_find(lowerName, "domain", 1, true)
+        or string_find(lowerName, "bind", 1, true) then
+        return nil
     end
 
     local hasRateOptions = false
@@ -208,34 +225,37 @@ local function classifyChoiceField(lowerName, options)
     return nil
 end
 
-local function parseTelemetryField()
-    if #fieldData < 3 then return end
-
-    local fieldTypeByte = fieldData[2] or 0
-    local fieldType = fieldTypeByte % 128
-    local hidden = fieldTypeByte >= 128
-    if hidden or fieldType ~= TYPE_TEXT_SELECTION then return end
-
-    local name, offset = readString(fieldData, 3)
-    local options, selectedIndex, selectedLabel = parseChoiceField(fieldData, offset)
-    local lowerName = string_lower(name)
-    local fieldKind = classifyChoiceField(lowerName, options)
-    if selectedLabel == nil or fieldKind == nil then return end
-
-    if fieldKind == "rate" and rateField == nil then
-        rateField = { id = currentField, name = name, options = options, selectedIndex = selectedIndex, selectedLabel = selectedLabel }
-        moduleRateLabel = selectedLabel
-    elseif fieldKind == "ratio" and ratioField == nil then
-        ratioField = { id = currentField, name = name, options = options, selectedIndex = selectedIndex, selectedLabel = selectedLabel }
-        moduleRatioLabel = selectedLabel
+local function parseRateFromLabel(label)
+    if type(label) ~= "string" or label == "" then return nil end
+    local lower = string_lower(label)
+    
+    if string_find(lower, "2.4g", 1, true) and not string_find(lower, "hz", 1, true) then return nil end
+    if string_find(lower, "ghz", 1, true) then return nil end
+    if string_find(lower, "mhz", 1, true) and not string_find(lower, "hz", 1, true) then return nil end
+    
+    local rateStr = string.match(lower, "(%d+)%s*hz")
+    if rateStr then
+        local rateNum = tonumber(rateStr)
+        if rateNum and rateNum >= 25 and rateNum <= 1000 then
+            return rateNum
+        end
     end
-end
-
-local function extractFirstInteger(text)
-    if type(text) ~= "string" then return nil end
-    for digits in string_gmatch(text, "(%d+)") do
-        return tonumber(digits)
+    
+    local _, modeDigits = string.match(lower, "^%s*([dfk])(%d+)")
+    if modeDigits then
+        local modeNum = tonumber(modeDigits)
+        if modeNum and modeNum >= 25 and modeNum <= 1000 then
+            return modeNum
+        end
     end
+    
+    local KNOWN_RATES = { 1000, 500, 333, 250, 200, 150, 100, 50, 25 }
+    for _, rate in ipairs(KNOWN_RATES) do
+        if string_find(lower, "%f[%d]" .. tostring(rate) .. "%f[%D]") then
+            return rate
+        end
+    end
+    
     return nil
 end
 
@@ -245,10 +265,59 @@ local function parseRatioLabel(label)
     if string_find(lowerLabel, "std", 1, true) then return nil, "std" end
     if string_find(lowerLabel, "race", 1, true) then return nil, "race" end
     if string_find(lowerLabel, "off", 1, true) then return nil, "off" end
-    local ratio = string_gmatch(lowerLabel, "1%s*:%s*(%d+)")
-    local digits = ratio()
-    if digits then return tonumber(digits), "explicit" end
+    
+    local ratio = string.match(lowerLabel, "1%s*[:/]%s*(%d+)")
+    if ratio then return tonumber(ratio), "explicit" end
+    
+    local colonRatio = string.match(lowerLabel, "[:/]%s*(%d+)")
+    if colonRatio then return tonumber(colonRatio), "explicit" end
+    
+    local num = tonumber(string.match(lowerLabel, "(%d+)"))
+    if num and (num == 2 or num == 4 or num == 8 or num == 16 or num == 32 or num == 64 or num == 128) then
+        return num, "explicit"
+    end
+    
     return nil, "unknown"
+end
+
+local function parseTelemetryField()
+    if #fieldData < 3 then return end
+
+    local fieldTypeByte = fieldData[2] or 0
+    local fieldType = fieldTypeByte % 128
+    local hidden = fieldTypeByte >= 128
+    if hidden or fieldType ~= TYPE_TEXT_SELECTION then return end
+
+    local name, offset = fieldGetStrOrOpts(fieldData, 3, false)
+    local options, valOffset = fieldGetStrOrOpts(fieldData, offset, true)
+    local selectedIndex = fieldData[valOffset] or 0
+    local selectedLabel = options and options[selectedIndex + 1] or nil
+
+    if not selectedLabel and options and #options > 0 then
+        selectedLabel = options[1]
+    end
+
+    local lowerName = string_lower(name or "")
+    local fieldKind = classifyChoiceField(lowerName, options or {})
+
+    logMsg("parseTelemetryField: fieldId=" .. tostring(currentField) .. " name='" .. tostring(name) .. "' kind=" .. tostring(fieldKind) .. " selectedIndex=" .. tostring(selectedIndex) .. " selectedLabel='" .. tostring(selectedLabel) .. "'")
+
+    if selectedLabel == nil or fieldKind == nil then return end
+
+    if fieldKind == "rate" then
+        local rateNum = parseRateFromLabel(selectedLabel)
+        if rateNum then
+            rateField = { id = currentField, name = name, options = options, selectedIndex = selectedIndex, selectedLabel = selectedLabel, rate = rateNum }
+            moduleRateLabel = selectedLabel
+            logMsg("parseTelemetryField: rateField matched - rate=" .. tostring(rateNum) .. " label='" .. tostring(selectedLabel) .. "'")
+        else
+            logMsg("parseTelemetryField: fieldKind rate rejected parseRateFromLabel for label='" .. tostring(selectedLabel) .. "'", "warn")
+        end
+    elseif fieldKind == "ratio" then
+        ratioField = { id = currentField, name = name, options = options, selectedIndex = selectedIndex, selectedLabel = selectedLabel }
+        moduleRatioLabel = selectedLabel
+        logMsg("parseTelemetryField: ratioField matched - label='" .. tostring(selectedLabel) .. "'")
+    end
 end
 
 local function resolveEffectiveRatio(packetRate, ratioKind, explicitRatio)
@@ -268,25 +337,17 @@ local function findRateTarget(field, targetRate)
 
     for i = 1, #field.options do
         local label = field.options[i]
-        if extractFirstInteger(label) == targetRate then
+        if parseRateFromLabel(label) == targetRate then
             local score = 0
             local lowerLabel = string_lower(label)
-            
-            -- ELRS modes often have prefixes:
-            -- D = Dense (e.g. D500)
-            -- F = Full Res (e.g. F1000)
-            -- L = Long Range (e.g. L50Hz)
-            -- Standard rates usually start with the number directly (e.g. 500Hz)
             
             local prefix = string.match(lowerLabel, "^%s*([a-z]+)%d")
             if not prefix or prefix == "" then
                 score = 10 -- Standard rate (no letter prefix)
             else
-                -- Prefixed modes get lower priority
                 score = 1
             end
             
-            -- Prefer "Hz" in the label
             if string_find(lowerLabel, "hz", 1, true) then
                 score = score + 2
             end
@@ -349,11 +410,13 @@ end
 local function syncElrsToRotorflight(fcConfig, moduleRate, moduleRatioLabel, ratioKind, effectiveRatio)
     local session = getSession()
     if not effectiveRatio or not moduleRate or not session or not session.telemetryConfigBuffer then
+        logMsg("syncElrsToRotorflight: missing parameters - rate=" .. tostring(moduleRate) .. " ratio=" .. tostring(effectiveRatio), "warn")
+        setStatus("status_rotorflight_write_failed", "Write failed")
         completeTask()
         return
     end
 
-    if fcConfig.linkRate == moduleRate and fcConfig.linkRatio == effectiveRatio then
+    if fcConfig and fcConfig.linkRate == moduleRate and fcConfig.linkRatio == effectiveRatio and fcConfig.mode == 1 then
         setStatus("status_rf_matches_elrs", "RF matches ELRS")
         completeTask()
         return
@@ -362,12 +425,14 @@ local function syncElrsToRotorflight(fcConfig, moduleRate, moduleRatioLabel, rat
     local writeBuffer = {}
     for i=1, #session.telemetryConfigBuffer do writeBuffer[i] = session.telemetryConfigBuffer[i] end
     
-    -- Update rate (U16 LE at offset 9) and ratio (U16 LE at offset 11)
+    -- Set mode to CUSTOM (1), rate (U16 LE at offset 9) and ratio (U16 LE at offset 11)
+    writeBuffer[8] = 1
     writeBuffer[9] = moduleRate % 256
     writeBuffer[10] = math_floor(moduleRate / 256)
     writeBuffer[11] = effectiveRatio % 256
     writeBuffer[12] = math_floor(effectiveRatio / 256)
 
+    logMsg("syncElrsToRotorflight: writing to RF mode=1 rate=" .. tostring(moduleRate) .. " ratio=" .. tostring(effectiveRatio))
     setStatus("status_writing_rotorflight", "Writing RF...")
     
     local msp = loadModule("tasks/msp/runtime.lua")
@@ -391,16 +456,26 @@ local function syncElrsToRotorflight(fcConfig, moduleRate, moduleRatioLabel, rat
                 payload = {},
                 isWrite = true,
                 processReply = function()
+                    if session then
+                        session.crsfTelemetryConfig = session.crsfTelemetryConfig or {}
+                        session.crsfTelemetryConfig.mode = 1
+                        session.crsfTelemetryConfig.linkRate = moduleRate
+                        session.crsfTelemetryConfig.linkRatio = effectiveRatio
+                        session.telemetryConfigBuffer = writeBuffer
+                    end
+                    logMsg("syncElrsToRotorflight: successfully saved to RF")
                     setStatus("status_rotorflight_updated", "RF updated")
                     completeTask()
                 end,
                 errorHandler = function()
+                    logMsg("syncElrsToRotorflight: eeprom save failed", "warn")
                     setStatus("status_rotorflight_save_failed", "Save failed")
                     completeTask()
                 end
             })
         end,
         errorHandler = function()
+            logMsg("syncElrsToRotorflight: MSP write failed", "warn")
             setStatus("status_rotorflight_write_failed", "Write failed")
             completeTask()
         end
@@ -411,18 +486,22 @@ local function finalize()
     local session = getSession()
     local fcConfig = session and session.crsfTelemetryConfig
     
-    local moduleRate = extractFirstInteger(moduleRateLabel)
+    local moduleRate = parseRateFromLabel(moduleRateLabel)
     local explicitRatio, ratioKind = parseRatioLabel(moduleRatioLabel)
     local effectiveRatio = resolveEffectiveRatio(moduleRate, ratioKind, explicitRatio)
 
-    session.elrsLinkConfig = {
-        packetRateLabel = moduleRateLabel,
-        packetRate = moduleRate,
-        telemetryRatioLabel = moduleRatioLabel,
-        telemetryRatio = effectiveRatio,
-        telemetryRatioEffective = effectiveRatio,
-        telemetryRatioKind = ratioKind
-    }
+    logMsg("finalize: moduleRateLabel='" .. tostring(moduleRateLabel) .. "' moduleRate=" .. tostring(moduleRate) .. " ratioLabel='" .. tostring(moduleRatioLabel) .. "' effectiveRatio=" .. tostring(effectiveRatio))
+
+    if session then
+        session.elrsLinkConfig = {
+            packetRateLabel = moduleRateLabel,
+            packetRate = moduleRate,
+            telemetryRatioLabel = moduleRatioLabel,
+            telemetryRatio = effectiveRatio,
+            telemetryRatioEffective = effectiveRatio,
+            telemetryRatioKind = ratioKind
+        }
+    end
 
     if manualSyncMode == SYNC_MODE_OFF then
         setStatus("status_probe_complete", "Probe complete")
@@ -462,19 +541,23 @@ local function handleDeviceInfo(data)
     -- If we are already reading or writing a specific device, ignore others
     if state ~= "ping" then return end
 
-    local _, offset = readString(data, 3)
-    local serial = readU32Be(data, offset)
+    local newName, offset = fieldGetStrOrOpts(data, 3, false)
+    local serial = 0
+    for i = 0, 3 do
+        serial = serial * 256 + (data[offset + i] or 0)
+    end
     
-    -- We MUST check for the ELRS serial ID to distinguish between 
-    -- the ELRS module (0xEE) and the Flight Controller (0xC8) or other devices.
-    if serial ~= ELRS_SERIAL_ID then 
-        logMsg("handleDeviceInfo: ignoring non-ELRS device at " .. string.format("0x%02X", srcAddr) .. " serial=" .. string.format("0x%08X", serial))
+    local lowerName = string_lower(newName or "")
+    local isElrs = (serial == ELRS_SERIAL_ID) or (srcAddr == CRSF_ADDRESS_CRSF_TRANSMITTER) or string_find(lowerName, "elrs", 1, true) or string_find(lowerName, "expresslrs", 1, true)
+    
+    if not isElrs then 
+        logMsg("handleDeviceInfo: ignoring non-ELRS device '" .. tostring(newName) .. "' at " .. string.format("0x%02X", srcAddr) .. " serial=" .. string.format("0x%08X", serial))
         return 
     end
 
     deviceId = srcAddr
     fieldCount = data[offset + 12] or 0
-    logMsg("handleDeviceInfo: found ELRS module at " .. string.format("0x%02X", deviceId) .. " with " .. tostring(fieldCount) .. " fields")
+    logMsg("handleDeviceInfo: found ELRS module '" .. tostring(newName) .. "' at " .. string.format("0x%02X", deviceId) .. " with " .. tostring(fieldCount) .. " fields")
     
     currentField = 1
     currentChunk = 0
@@ -587,6 +670,7 @@ function M.wakeup()
             if currentField == 1 then
                 local dummyRate = {
                     CRSF_ADDRESS_RADIO_TRANSMITTER, deviceId, currentField, 0x00,
+                    0x00, -- parent
                     TYPE_TEXT_SELECTION,
                     string.byte('P'), string.byte('a'), string.byte('c'), string.byte('k'), string.byte('e'), string.byte('t'), string.byte(' '), string.byte('R'), string.byte('a'), string.byte('t'), string.byte('e'), 0x00,
                     string.byte('5'), string.byte('0'), string.byte('0'), string.byte('H'), string.byte('z'), 0x00,
@@ -596,6 +680,7 @@ function M.wakeup()
             elseif currentField == 2 then
                 local dummyRatio = {
                     CRSF_ADDRESS_RADIO_TRANSMITTER, deviceId, currentField, 0x00,
+                    0x00, -- parent
                     TYPE_TEXT_SELECTION,
                     string.byte('T'), string.byte('e'), string.byte('l'), string.byte('e'), string.byte('m'), string.byte(' '), string.byte('R'), string.byte('a'), string.byte('t'), string.byte('i'), string.byte('o'), 0x00,
                     string.byte('1'), string.byte(':'), string.byte('4'), 0x00,
@@ -672,6 +757,39 @@ function M.start(mode)
     manualSyncMode = mode or SYNC_MODE_OFF
     M.reset()
     taskComplete = false
+    return true
+end
+
+-- What the walk found, so a caller can offer the CHOICE rather than only the two syncs.
+--
+-- Both sync modes answer the question "which side wins"; neither lets the pilot say what the link
+-- should actually run at, and the option list needed for that is already here -- it was read off
+-- the module and then used only to compare. Returned as-is rather than copied: the caller reads
+-- it, and the walk owns it.
+function M.getRateField() return rateField end
+function M.getRatioField() return ratioField end
+
+-- Write ONE option of one field, without the comparison the sync modes make.
+--
+-- The same queue and the same state the sync modes use, so the write is paced, reported and
+-- completed identically -- the difference is only that the value comes from the pilot instead of
+-- from the other side of the link. `index` is the module's own zero-based option index, which is
+-- what the parameter frame carries.
+function M.selectOption(kind, index)
+    local field = (kind == "rate") and rateField or ratioField
+    if type(field) ~= "table" or type(index) ~= "number" then return false end
+
+    local label = field.options and field.options[index + 1] or nil
+    clearPendingWrites()
+    pendingWriteCount = 1
+    pendingWrites[1] = { fieldKind = kind, fieldId = field.id, fieldName = field.name,
+                         value = index, label = label }
+
+    manualSyncMode = SYNC_MODE_OFF
+    taskComplete = false
+    state = "write"
+    nextActionAt = 0
+    setStatus("status_writing_elrs", "Writing ELRS...")
     return true
 end
 

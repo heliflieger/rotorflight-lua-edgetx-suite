@@ -1,0 +1,615 @@
+# 0.1.7
+
+### Features & Enhancements
+- **The flight log records each flight's statistics (`tasks/events/ondisarm/tasks/flight_log.lua`, `tasks/events/telemetry/flight_record.lua`, `docs/pages/tools/flight_log.md`) (fixes #250)**:
+  - The log has always declared columns for a flight's capacity, voltages, current, ESC temperature and BEC voltage, and has always written them empty because nothing could reach the numbers. They are filled now, from the flight record the event runtimes keep, so a line in the log says what the flight actually did rather than only how long it lasted.
+  - Per-cell voltage uses the flight controller's battery cell count; where that has not been read, those two columns stay empty rather than being divided by a guess. The headspeed-per-profile and voltage-sag columns stay empty, because the suite records neither yet.
+  - A flight that produced no statistics at all is still written as the five-field line it has always been, rather than as a line of empty columns.
+  - The flight log now has a documentation page, which is also the first page under Tools to get one.
+- **Flight statistics are recorded without a dashboard on screen (`tasks/events/telemetry/flight_record.lua`, `widgets/dashboard/runtime.lua`, `docs/reference/flight-statistics.md`) (fixes #249)**:
+  - The extremes of a flight and its armed time are kept by the event runtimes rather than by a dashboard widget, and published under `rfsuite.session.flight`. A model that does not use the dashboard -- one running the service widget so that other widgets have the MSP surface -- now records its flights all the same, and a dashboard placed afterwards shows the last one.
+  - A flight now starts and ends on one definition of the arm edge, the flight controller's arm flag as the event runtimes read it, which is the edge the flight log and the post-disarm reads already fire on. The record is closed first of everything on that edge, so a task behind it reads a finished flight.
+  - The flight clock advances on every wakeup instead of only on a pass in which telemetry changed, so a hover with the numbers standing still is no longer missing from the flight time. A single step of it is capped at one second, because a widget can be suspended for a whole tool session.
+  - **The total flight time and the flight count now come from the flight controller, and a tile showing either will jump.** The total used to be the armed seconds the dashboard widget instance had counted since it was built: never stored, so it restarted at zero each time; undercounted, because its clock only ran in a pass where telemetry had changed; and separate per placement. It is now the board's own lifetime total for the model (`stats_total_time_s`), plus the flight in progress while armed -- so a pilot who saw this session's minutes sees the machine's hours. The board adds a flight only once its armed time passes the board's own minimum (`stats_min_armed_time_s`, 15 s by default), so the totals can fall by a very short flight when the board is read again after the disarm; that is the board's definition and it is documented rather than worked around. Where the board has not answered, the suite falls back to its own count.
+  - A theme reading the old flat field names off the widget state (`currentFlightMaxRpm`, `lastMinVoltage` and the rest) keeps working: those names are mapped onto the record. They are deprecated in favour of `state.flight` and the box `stattype`.
+  - Added an offline accounting scenario that is **armed** and whose sensors **move** between passes, with rows `pass.state.armed` and `unit.events.wakeup.armed`. Every other steady-state row of that instrument is measured disarmed against a frozen sensor set, so none of them can see what a flight costs.
+- **Background Custom-Telemetry Decoder (`SCRIPTS/FUNCTIONS/rfsbg.lua`)**:
+  - Added an optional special-function script that runs the custom-telemetry drain and the adjustment announcements in the radio's script state, where a long call is yielded rather than cut off at a fixed instruction count, so every queued frame is decoded instead of only the newest few.
+  - While the script is taking frames off the wire it publishes a moving counter in a shared-memory slot; the dashboard and service widgets read it and skip their own drain and announcements for as long as it moves, and resume within one second if it stops (a tool session, a radio without the special function, or another permanent script consuming the frames first).
+  - Extracted the drain into `tasks/events/telemetry_bg/drain.lua` so both hosts run the same decoder, frame accounting and publish-on-change throttle.
+  - The suite adds that special function itself to a model that does not carry it, and decides by reading the model's own special-function slots. It keeps no record of its own, so it writes nothing to the preferences and asks the flight controller nothing.
+  - A model that already runs another background decoder from a special function (Rotorflight's earlier Lua suite installs `rf2bg`) is left alone: every special-function script shares one telemetry queue, so a second decoder would occupy one of the radio's few script slots and receive nothing. The reason is written to the log, and the dashboard decodes for itself exactly as it does on a radio without the script.
+  - The script now writes to the card like the tool and the widgets do while *Log Session To Card* is on, under a `function_` prefix of its own: a session file on the same cadence, and a one-line step file that is closed on the spot and carries the Lua heap figure it used to print only at *TRACE*. It is the one part of the suite that keeps writing when the widgets do not — a widget whose pass overruns its instruction budget is not called again and so cannot record that it stopped, while this script is yielded and resumed — so its step file's timestamp is what says how far a radio that stopped answering got. What it writes is a debug record and is gated like one: it needs *Log Session To Card* on **and** a debug level of *DEBUG* or higher, the same condition the rest of the suite writes under, so nothing appears in the log directory while the level says otherwise. Two things then keep it off a radio that is not using it: the sink module is loaded the first time both are found set and never before, so a pilot who leaves them alone pays nothing for it in the script state's Lua memory; and the script takes the longer of the sink's two flush cadences unconditionally rather than reading the arm sensor for it, so it puts no further module into that state either. Documented in `docs/troubleshooting/collecting-logs.md`.
+  - **The script now also watches the dashboard widget and records the moment it stops.** A widget that overruns the per-cycle instruction budget is not called again, so it can never write down that this happened to it, and until now nothing on the card could. The dashboard publishes a pass counter and its previous pass's instruction usage into one of EdgeTX's shared-memory variables — the one channel there is between two Lua states — and the background decoder, which is yielded rather than cut off, notices the counter standing still and writes `dashboard widget silent 3.0 s, last pass 56 %`. It reports once per stop, never while the counter is moving, and never for a radio that has simply never had the dashboard on screen. The publish costs 17 instructions on the passes it happens, against a per-pass budget of 12200, and is behind the same debug level as everything else that writes.
+  - **The widget's own step file now names the class of work the pass was doing** — *splash*, *scene*, *menu* or a tuning surface — instead of standing frozen at whichever task the connect sequence last ran, which is worse than an empty file because it looks like an answer. One line per job pass, with the constant key the module's throttle needs: measured on a card, 32 writes over the first 25 seconds of connecting and building and none at all over 32 seconds of render load afterwards, against a throttle ceiling of four a second that is never reached.
+- **Audio: telemetry lost and recovered, the voltage spoken, main power lost (`lib/audio.lua`, `Settings > Audio > Events`)**:
+  - The low-voltage alert now speaks the pack voltage it fired at, and a new *Hold (s)* setting (0-10 s, default 2) makes the reading stay below the warning level for that long before anything is said, so a pack sagging under a hard collective pull is no longer announced as a pack that is down. The level itself is unchanged: it stays the flight controller's own `vbatwarningcellvoltage`.
+  - New *Main Power Lost* announcement on the Voltage page (default off), for a setup with a backup guard or a separate receiver battery: the main pack reads as gone while a BEC voltage is still there, repeated every 10 seconds with the BEC voltage spoken and once more, with the pack voltage, when the pack comes back.
+  - New *Telemetry Lost* announcement on the Link page (default off): a model lost while it was armed, and again when it answers. Only a flight controller that stops answering while the radio link is still up is announced, so it cannot double up with the radio's own telemetry-lost callout; a drop while disarmed is a normal power-off and stays silent.
+  - Every spoken value goes through the radio's own `playNumber`, so the digits and the unit follow the language set on the radio.
+  - Documented in `docs/audio/events.md`, which now covers every announcement category.
+- **Audio: repeat and haptic are properties of an alert category (`lib/audio.lua`, `Settings > Audio > Events`)**:
+  - Every alert that reports a condition now takes two settings from its category page: *Repeat*, which is *Until cleared* or a count from 1 to 10, and *Haptic*, which decides whether the transmitter vibrates with the voice. That is one pair per page rather than one pair per announcement.
+  - The pair covers the low voltage, main power lost and BEC / receiver alerts on the Voltage page, the link quality and lost telemetry announcements on the Link page, the ESC and MCU temperature alerts on the ESC page, and the empty alarm on the Fuel page.
+  - The two settings the Fuel page already had (`fuel_repeat_below_zero`, `fuel_haptic_below_zero`) are those keys, so an existing `preferences.ini` reads exactly as it did; the other categories default to the behaviour they had, which is *Until cleared* with the haptic on.
+  - Seven alerts buzzed with the vibration written into the code and no way for the pilot to switch it off. There is now one place that vibrates, and the pilot decides per category whether it does.
+  - Fixed: the main power alert's repeat interval was the only one not cleared when a model reconnects, so the first announcement of a new connection could be held back by up to ten seconds by the previous one.
+  - Documented in `docs/audio/events.md` under *Repeat and Haptic*.
+- **Audio: Adaptive WAV Volume and Master-Volume Bridge (`Settings > Audio > Volume`, `lib/audio.lua`, `docs/pages/settings/audio/volume.md`) (fixes #172)**:
+  - **Layer A (Adaptive WAV Volume):** Configure a fixed WAV volume level (1..5) for all RFSuite speech announcements, or keep "Radio default" (0). An optional "Connected only" switch restricts the volume override to active flights, keeping bench and menu work at the transmitter's own volume.
+  - **Layer B (Master Volume Bridge):** Dynamically drives a model Global Variable (GVAR) to control overall transmitter volume via EdgeTX Special Functions and Inputs. Automatically applies a configured *Normal* level during flight, boosts to *Alert* level during sustained critical alarms (Low Voltage, ESC Over-Temperature, Empty Fuel/Battery), and drops back to `-1024` (sentinel) when disconnected or disarmed so transmitter pot control is cleanly restored.
+  - New dedicated settings page under `Settings > Audio > Volume` with a warning when the chosen GVAR has popup enabled.
+- **In-Flight Tuning (preview) (`widgets/dashboard/inflight`, `settings/dashboard/inflight`, `setup/controls/inflight`)**:
+  - Added an in-flight tuning surface to the dashboard widget as a **preview feature**, hidden until it is switched on under `Settings > General > Preview`. One key covers every way in: both menu entries carry it as their visibility condition, the widget builds no drive and reads no file of the overlay without it, and the Quick Settings offer the way into the surface only while it is on.
+  - A pilot-chosen interlock switch is the only entry, and what it shows follows the flight rather than the switch: on the ground before a flight the setup check and the values read from the flight controller, in the air one adjustment parameter at a time with bank chips, a row list, the value it had a step ago and the value it started the flight with, and step controls; on the ground after a flight the list of what changed and the restore. The step controls and the trims are live in the air and nowhere else.
+  - The flight controller is driven through its own adjustment functions, by pulsing two declared EdgeTX global variables onto the enable and value channels. A press writes the row's magnitude for at least the configured pulse length however early it is let go, which is what the board's 100 ms trigger delay and 200 ms repeat delay ask for: the plateau has to outlast the one and end before the other, which is exactly one step. The pulse is **180 ms by default, settable from 100 to 250**. What the board sees is the setting plus up to one widget pass, since the pulse is cleared on the first pass at or after its deadline, plus the link's own jitter -- so 180 leaves about 40 ms to each edge, and 250 is the upper bound because it is the largest setting whose overrun alone cannot reach the repeat at 300 ms. Trims are pulses in the same way, in either of two layouts belonging to the radio: walk and adjust, which claims up to three trims, or one trim per row, the documented six-band layout.
+  - Works while armed by construction: everything the overlay does in the air is a global variable write, so it is unaffected by the armed queue clear. Every write is recorded before it is made, and the value variable is taken back to zero on every exit path -- interlock released, fullscreen closed, widget backgrounded, link lost, and a held step control let go before the rebuild that would delete the button reporting its release -- including a clear made from the widget entry point while the widget is backed off after an instruction-limit fault, during which none of the paths inside the widget runs. Both variables are cleared in the flight mode they were written in, since the radio resolves a "same as FMx" link on the write itself.
+  - The MSP half is a separate module that runs on the ground only. It refuses while the flight controller is armed, while the rotor is turning and while the arm sensor has not been read at all -- a model whose arm sensor is not in the telemetry list reads as disarmed for ever, so that case is named on screen rather than treated as safe.
+  - On the ground the overlay primes itself over MSP: the receiver map, the board's own adjustment slot table and nine value reads that between them answer every adjustment function, once per connect or on demand. In the **Standard** set layout the six banks of six parameters are the layout the project's own generic radio setup documents, named before the flight controller has said anything, and the board's slot table is read to be held against that set; in **Custom** the set is whatever the board carries, derived from the enable and increment windows of the slots on this model's declared channels, and nothing is ever written to it.
+  - Undo for a flight: the ground screen copies the flying PID profile into a spare one and restores it afterwards, using the same MSP pair as the Copy Profiles tool, and takes that backup by itself when the interlock is switched on with the machine on the ground, the link up and the values read. After a flight that moved something the overlay lists every parameter that has left the snapshot, largest change first, paged with the trim that walks the parameters in the air, with a footer saying that the flight controller has already written all of it to its own storage.
+  - The overlay follows the PID and rate profiles the flight controller is flying, since the firmware's adjustment functions act on the active profile: a profile change marks every cached value belonging to that profile as unknown and names the new profile on the screen, the nine value reads are sent again once the profile switch has stood still, and a restore into a profile other than the one the backup was taken from is refused.
+  - Added `Settings > Dashboard > In-Flight Tuning` for the radio's half -- the master switch, the interlock switch, the enable and value channels and global variables, the pulse length and the trims -- with **Set up the model**, which builds a plan of the mixer lines, variable details and trim modes it would change, puts it up for confirmation and only then writes, in the order that keeps every intermediate state safe. The page reads the model back and reports what is missing, including a bank and a value pointed at one variable or one channel and one trim claimed by two rows. **These settings live with the radio**, in its own preferences file, and apply to every model on it; no flight controller has to be connected to change them.
+  - Added `Setup > Controls > In-Flight Tuning`, beside Adjustments, for the flight controller's half -- **a switch of the model's own**, set layout, step size and backup PID profile, all of them stored with the model. **Both switches have to be on before anything drives**: the radio's is the master, so with it off nothing happens on any model, and the model's decides which of the machines on that radio the overlay is set up for. The page carries **Set up the flight controller**, which reads the board in two replies, puts up what each slot holds and what it would hold, writes one adjustment range per slot on confirmation followed by a single EEPROM write, and reads every written slot back field by field. The page is gated on the link and locked while armed like its neighbours, and each of the two pages names the other.
+  - Added a per-model **step size** of 1, 2, 5 or 10, which is what one press moves a parameter by on the board, and a second per-model **head speed step** of 10, 25, 50 or 100, defaulting to 50, which reaches the governor head speed alone -- its range is 0 to 10000 rpm where no other parameter of the set is bounded above 250, so the step that makes a gain move by a feelable amount would take thousands of presses to cross it. Both are written into the slots the setup action puts there, so a changed step means the flight controller has to be set up again, which the board comparison reports by name.
+  - Added offline instruction accounting rows `pass.tuning.state`, `pass.tuning.prime` and `pass.job.tuning` with measured figures, and the switch, global variable, mixer and flight-mode surface the accounting stubs needed for them. The ground half has a row of its own because the pass an MSP reply arrives in pays that reply's parse, and at most one reply is parsed per pass.
+  - The model's setup check now **gates the overlay** instead of only describing it. It walks the mixer lines, the global variable details and the trim modes, and it names the conditions under which a press would move something other than the parameter on the screen -- a bank and a value pointed at one variable or one channel, a missing or wrong mixer line, a variable whose range or precision cannot carry the codes, a trim the active flight mode still moves the stick neutral with. A **fault refuses the interlock**: nothing goes live and no variable is written, and the zone surface comes up with the fault named rather than the switch doing nothing silently. An **unknown verdict does not refuse** -- a radio whose script seam cannot answer those questions returns no verdict at all, and a check that could not run is not a check that failed. The model is walked at most once per settings change and once per interlock closing, and never in the air, so a model repaired with the interlock still on is re-checked by switching it off and on.
+  - The settings help names the ExpressLRS precondition: Wide switch mode or a full-resolution packet rate, since Hybrid mode's 16- and 6-position channels miss several of the decoded windows.
+  - Both settings pages lay their explanatory notes out for the room they take. A label narrower than its text wraps rather than clipping, and the pages advanced by a constant after each note, so the longest of them was drawn over by the line that follows it. The action button on the flight controller page is wider for the same reason: a button label is clipped rather than wrapped, and 240 pixels cut a character off each end of its English text.
+
+### Bug Fixes & Improvements
+- **Telemetry dropout reconnect while armed reopens the flight record (`tasks/events/runtime.lua`) (fixes #278)**:
+  - A telemetry dropout longer than 2 seconds triggers `publishConnected(false)`, which resets the flight record state. When telemetry reconnected while still armed, `state.lastArmed` remained `true`, preventing the arm edge detection (`armed ~= state.lastArmed`) and `Record.open()` from firing. As a result, flight time and statistics were lost for the remainder of the flight, and the subsequent disarm overwrote `flight.last` with an empty record.
+  - Resetting `state.lastArmed = false` on disconnect and gating arm/disarm edge transitions on `state.linkStableUp` ensures that reconnecting while armed cleanly triggers the onarm edge and reopens the flight record, while dropouts without reconnect or returning disarmed do not trigger phantom records.
+- **Accelerometer calibration (`setup/accelerometer`) (fixes #302):** Ask the pilot to hold the disarmed model level and still before starting. Wait for the flight controller's calibration status to become active and then clear, show a completion notice, and leave persistence to the firmware. Missing or invalid status samples leave monitoring active until its deadline, which starts at the command acknowledgement. Preflight retains the shared reply timeout; the shorter sampling timeout applies only after the start acknowledgement. Separate checking/starting displays and notices distinguish a refused start from an unconfirmed result; Save, Reload and another calibration are blocked during the operation.
+- **The Battery page sends the battery profile only when the pilot selects one (`app/pages/setup/power/battery/page.lua`, `docs/pages/setup/power/battery.md`) (fixes #304)**:
+  - Every save on `Setup > Power > Battery` sent `MSP_SET_BATTERY_PROFILE` with an index the page had resolved from the `BatP` telemetry sensor, and committed it to the board's own storage. `BATTERY_PROFILE` is part of the custom CRSF sensor set and does not exist on a native CRSF link, so on such a setup there was nothing to resolve and the resolution fell through to 0, which the flight controller reads as profile 1. A pilot editing a cell voltage on a board running profile 3 was switched to profile 1 by the save.
+  - The write now goes out only when the pilot actually selects a profile in the combo on that page, mirroring the Consumption reserve, which has worked that way since #52. Selecting a profile still sends it; the six capacities, the cell count, the four cell voltages and the reserve are written exactly as before.
+  - The sensor reading no longer accepts 0. The flight controller reports this sensor as index + 1, so a live reading is 1 to 6; 0 is what a sensor the radio has stopped receiving reads through EdgeTX, and it was being mapped onto profile 1. A telemetry dropout while the page is open therefore produced the same wrong write on a setup that otherwise resolves correctly.
+  - Where the page has no source for the active profile it no longer records one either: the profile and the pack capacity it read off the flight controller are left as they were, rather than being replaced by the values of the profile the combo happens to be showing. The combo itself still shows the first profile, as it always has.
+  - The page now has a documentation page, which names what the Save does and does not send.
+  - The page's state is module-level and outlives a visit, so leaving the page without saving no longer
+    carries a pending profile selection into the next one: the flag is cleared when the page closes, as
+    the reserve's already is.
+- **The tool decodes the flight controller's telemetry while it is connecting, so it notices an arming (`tasks/events/runtime.lua`, `docs/reference/background-decoder.md`)**:
+  - The custom telemetry frame is decoded by Lua, and while a tool is open the radio pauses the special-function script that would do it, so inside the tool the suite's own drain is the only decoder there is. That drain was deferred for the whole connect sequence, which is also the only source the `ARM` sensor has -- so a model armed during those seconds was invisible to the tool and the MSP queue kept sending, including the clock write, to a flight controller in the air. The tool now runs the drain during its connect sequence as well.
+  - The deferral is unchanged for the dashboard and the service widget, where it is what keeps a connect pass inside the radio's per-cycle instruction budget. A tool call is not billed against that budget.
+- **Arming during the connect sequence no longer leaves the link reported dead (`tasks/msp/runtime.lua`, `tasks/events/common/runner.lua`, the twelve connect tasks under `tasks/events/`, `docs/troubleshooting/no-connection.md`) (fixes #297)**:
+  - Configuration traffic is stopped while the model is armed by clearing the MSP queue, which is right; what was wrong was that everything the clear reported to was reading it as an answer. Arming within the first few seconds of a power-up therefore left the suite reporting no flight controller for the rest of the session, with `session.fblConnected` false, the start progress never complete and the model preferences never loaded, and it did not recover on landing.
+  - The API version and unique-id reads now count a cleared request as still outstanding rather than as failed, so the handshake is retried on the first disarmed pass. This is done in the two reads themselves and not beside the armed gate, because every caller of `Queue:clear` has the same effect on them.
+  - The twelve connect tasks -- status, telemetry configuration, battery and governor configuration, SmartFuel, ESC sensor configuration, model name, pilot configuration, clock, unique id, dataflash summary and flight statistics -- no longer mark themselves finished when their request was taken off the queue before it was sent. The task stays incomplete and asks again once the model is disarmed, instead of the session being left without the data while the log reported the task complete.
+  - A task the runner re-queues after its own timeout now releases the task module with it, so the retry actually issues the request again rather than re-running a wakeup that returns on its first line while the log says *Re-queueing*.
+  - Five of the tasks latched their request before a guard that can return without sending one, which produced a task that could neither complete nor retry if its MSP API module failed to load. They now latch after the guards and give up the way the tasks next to them already do.
+- **Configuration stores survive a full card (`lib/config_store.lua`, `lib/log_sink.lua`, `docs/reference/configuration-files.md`) (fixes #276)**:
+  - `Store:save` checks the return value of `io.write`. On a short write or full card, the incomplete temporary file is removed and the original store is left untouched, preventing settings from reverting to defaults on next load.
+  - `LogSink.writeFile` checks the return value of `io.write` instead of assuming success once `io.open` succeeds, so a full card does not silently discard unwritten log lines from memory or reset the lost line counter.
+- **Controls: `Controls.appendNumberField` anchors stepped quantization on `min` rather than zero (`ui/controls.lua`) (fixes #271)**:
+  - Fixed an offset defect where number fields with a step size whose minimum is not a multiple of `step` (such as AM32 Motor KV with `min = 20, step = 40` and YGE Current Limit with `min = 1, step = 100`) mapped values onto `{0, step, 2*step, ...}` instead of `{min, min + step, min + 2*step, ...}`.
+  - An ESC holding 1380 KV previously rendered as 1360 KV and stepping by one click wrote 1400 KV to the page and 1420 KV to the ESC.
+  - The native `numberEdit` widget index range is now anchored at `0 .. ceil((max - min) / step)` with `min + index * step`. Both `display` and `set` apply identical clamping to `[min, max]`, and `stepVal` is guarded against non-positive values.
+  - Separately from the minimum-anchoring, `get` now rounds to the nearest step grid point (with ties rounding upward via `floor(x + 0.5)`) rather than flooring unaligned values, affecting stepped fields (for example, an unaligned YGE stick position of 1785 us on a 10 us step now renders as 1790 rather than 1780).
+- **Configuration saves require a completed read (ui/home.lua, app/pages/flight_tuning/, app/pages/setup/, docs/reference/saving.md) (fixes #273)**:
+  - Thirty configuration pages refuse Save until their complete read sequence has succeeded. A pending read, a failed step or a rejected parser response cannot turn initial defaults into FC writes.
+  - Reload invalidates the previous completion. The shared Save handler checks again after confirmation and before dispatch, reports why the save was refused, and queues no EEPROM commit for that refusal. Local radio settings keep their existing save behaviour.
+  - A page change during confirmation reports that nothing was saved. Arming before dispatch uses the same configured notice or banner as the initial Save check.
+- **Dashboard: bar gauge fill length and fill colour update reactively during flight (`widgets/dashboard/objects/gauge.lua`) (fixes #274)**:
+  - Fixed an issue where horizontal and vertical bar gauges' filled rectangles and threshold colors were frozen at scene build time because their dimensions and colors were computed as static numbers instead of reactive getters.
+  - Implemented reactive `size` and `color` getters for horizontal bar gauges, and `pos`, `size`, and `color` getters for vertical bar gauges (which grow upward from the bottom).
+  - Both orientation paths share cached evaluation of derived telemetry readings, bound scaling, and threshold lookups between getters on each frame.
+  - Removed the `if ratio > 0` condition guarding node insertion so bar gauge nodes are always emitted into the LVGL scene tree from the start, allowing bars starting at nil or 0 to render and update as soon as live telemetry arrives.
+  - Updated offline instruction accounting budgets (`bin/accounting/budgets.lua`), passing all 51 rows and maintaining safety margins under EdgeTX widget instruction ceilings.
+- **In-Flight Tuning (preview): the enable channel follows the selected bank at all times (`widgets/dashboard/inflight/drive.lua`, `docs/dashboard/inflight-tuning.md`)**:
+  - The bank global variable was written only when the bank CHANGED -- by a chip, by the bank trim, or by a walk step that crossed a bank boundary. Nothing wrote it on the way into the air, and the interlock's own defensive clear takes it to zero while the selection stands, so between switching the interlock on and the first bank gesture the enable channel sat at its centre, which is inside none of the six windows the flight controller decodes. Every step in that window moved the value channel against no adjustment function and the board stepped nothing: a pilot who walks rows with a bank trim, and so never makes a bank change at all, got that for the whole flight.
+  - The selected bank is now asserted once per pass for as long as the interlock is on, in all three phases the switch shows, so switching the interlock on, an arming, a row walk, a profile change, a landing and a recovery from an instruction-limit back-off all leave the enable channel where the screen says it is. It costs one comparison per pass once the variable holds the right code, and it is refused while a step is still on the wire -- moving the enable channel under a magnitude that sits in a step window is how one press ends up counted against another parameter -- with the write landing on the first pass after the pulse. The bank variable still goes to zero when the interlock is released, the fullscreen is closed, the widget is backgrounded or the link drops; what no longer clears it is the landing, since the surface is still up and still naming that bank. The value variable is unchanged in every respect: it is zero whenever no pulse is running and nothing is held, on every path out of the overlay.
+  - The channel reading the surface shows is still the channel's own, so a missing mixer line stays visible as a bank that does not move; it is no longer adopted as the selection once the overlay is driving the variable itself, where a frame arriving one pass late could otherwise pull the selection back into the band it had just left.
+- **In-Flight Tuning, the flight controller page: the read-back, its German text and its save (`widgets/dashboard/inflight/fcsetup.lua`, `app/pages/setup/controls/inflight/`, `i18n/en.lua`, `i18n/de.lua`, `docs/pages/setup/controls/inflight.md`)**:
+  - **A board set up with any step but the default read back as thirty-five differences.** The read-back held each slot against the standard set without naming the two step sizes the write had been built from, so it compared them against the module's own defaults of 5 and 50 instead. A model configured with a step of 1 was told *"Written, but the read-back does not match (35)"* about a board the same run had just written byte for byte, the head speed slot agreeing only because its own default happened to be what was written. The read-back now names both steps, as the write plan and the overlay's own comparison already did.
+  - The read-back report also carries how many slots differ in the **step alone**, and the page says so where that is the whole of it, instead of reporting a count of differing slots. The step is the one field of a slot this page's own settings decide, so naming it names the remedy.
+  - **Every string of the flight controller action was English on every radio.** The action is a module of its own so that the page does not pay for the writer on entry, and it took its text helper from the page -- which left it without a key prefix of its own, so the locale precompiler could not resolve any of its twenty-nine lookups and a packaged install, which ships no locale bundle, had nothing to resolve them against at runtime either. The confirmation dialog, the eight refusals, the three progress lines and every verdict the read-back reports were affected. The translations had been in the locale files all along.
+  - **A failed save looked like a save that had worked.** The page reported its outcome through a callback the suite's save flow does not pass, so both branches were dead: a store write with no MCU id to key the model's settings by, or one the card refused, was swallowed. It now reports through the same callback every other page uses, and the save overlay says which it was.
+- **In-flight tuning: the profile, the read and the undo (`widgets/dashboard/inflight/prime.lua`, `widgets/dashboard/inflight/screen.lua`, `widgets/dashboard/inflight/drive.lua`, `docs/dashboard/inflight-tuning.md`)**:
+  - **Arming during a value read no longer leaves the overlay idle for the rest of the link.** The MSP runtime clears its whole queue on every armed tick, so a read the pilot arms into is given up -- which is right -- but everything after it asked that run's phase rather than asking whether the board had been read: no further read was started, the automatic undo refused as if nothing had ever been read, and the ground line said the values had never been read above an intact backup line. The read is taken again by itself on the ground, and the ground line reports the values it has with the time they were read at and a note that the attempt to refresh them was interrupted. A failed read is retried twice and then left with its error on the screen, because a board that answers an error answers it again.
+  - **The automatic undo follows the PID profile.** It is one slot scoped to the profile it was copied from, and the request for it used to be raised only when the interlock went on -- so a pilot who changed profile on the ground kept the previous profile's copy as an undo for a profile he was no longer flying. A settled profile change on the ground now asks for a fresh copy, which replaces the old one, and the line under the buttons names the profile it came from.
+  - **The undo names the profile that is being flown, even while the telemetry sensor is not answering.** A sensor the radio is not delivering reads 0 rather than nothing, so the reading fell past the last profile the widget had seen and onto the status reply of an earlier read -- which is the one thing that can be older than the profile change itself. Measured against a flight controller, that made one profile change on the ground produce two copies, the second of them naming the profile the pilot had just left. The value refresh no longer carries the previous read's status reply either, so the answer is the one that came back with the change or none at all, and none is refused by name.
+  - **Releasing the interlock on the ground ends the tuning session.** The cached values, the backup line and the comparison against it belong to the session that has just been closed, so they go with it, and the next closing of the interlock reads the board again and takes a fresh backup of whichever profile is active then -- the nine value reads only, since a layout does not change because a switch moved. Releasing it in the air ends nothing: nothing can be sent to a flying machine, and the comparison the landing is about to show is measured against a snapshot that has to survive the switch.
+  - **The comparison after the flight refuses to cross profiles, as the restore already did.** A backup of profile 1 held against the values of profile 2 listed everything the two profiles disagree about as something the flight had changed. The after surface now names the two profiles and makes no comparison, and the ground line says when the backup is not for the profile being flown.
+  - **A restore with no record of which profile the backup holds is refused.** That record is kept in memory, so after a restart the spare profile holds a copy of something and nothing on the radio knows of what -- which was the one state in which a restore across profiles was allowed.
+  - **The rate and PID profile rows are counted from 1**, like the header above them and the backup line under them, instead of showing the wire's own 0-based index.
+  - **Backgrounding the widget ends whichever surface was up.** The postflight read-out used to survive it, so the next closing of the interlock was not an opening and asked for no undo; the pilot's log has two such cycles in a row. The overlay also writes one line when it is taken down, so a backgrounded widget is visible in the card log.
+  - A value refresh now gets its own run rather than reusing the previous one, so a late reply of a read the queue had given up on cannot be counted into it and written to the cache as a value from before the profile changed. A backup asked for while a read is on the wire is refused by name instead of snapshotting half of one profile and half of another.
+  - The gate that keeps a read off an expensive widget pass counts the whole wait rather than an unbroken streak: measured on the desktop probe, a widget alternating between a cheap pass and an expensive one used to count one skip in 400 passes and never reach the escape that takes a slice anyway.
+- **In-Flight Tuning (preview): the board's answer to a step no longer rebuilds the surface (`widgets/dashboard/inflight/drive.lua`, `widgets/dashboard/inflight/screen.lua`, `widgets/dashboard/inflight/prime.lua`, `widgets/dashboard/runtime.lua`, `docs/dashboard/inflight-tuning.md`)**:
+  - A step is a magnitude written to the value global variable and cleared a set number of milliseconds later, from a widget pass. The flight controller answers that step over its adjustment telemetry a few hundred milliseconds afterwards -- while the magnitude is still standing -- and that answer moved a counter the widget's render key was built from, so the live surface was torn down and built again inside the pulse window. EdgeTX calls a widget from its menus task in fixed slots and never catches up, so the slots a rebuild costs are slots the pass that clears the pulse does not get: on a radio where those slots are already tight the magnitude stayed on the wire past the flight controller's repeat window and the board counted a second step.
+  - The values the board reports are now read from the surface's own snapshot by the same kind of per-frame closure the large value already used -- the six row values among them -- and the report moves a counter of its own that no render key follows. The rebuilds that change the LAYOUT are unchanged: a bank chip, a row selection, the trim walk finishing, a profile change and a phase change all still rebuild.
+  - The widget also reports a hole in its own refresh cadence: at *DEBUG* it writes `pass gap 300 ms, 40 ms of it inside refresh, previous pass tuning_fs` whenever more than 150 ms has passed since the previous pass, which is the one thing no figure inside a pass can show. A pass that never reached the end of its refresh -- killed by the instruction limit -- reports -1 for the second figure rather than a guess. It costs 26 instructions on every pass against a per-pass budget of 12200, 9 of them the detection and 17 the second clock read that separates the two figures.
+- **Flight statistics declared once (`widgets/dashboard/runtime.lua`, `widgets/dashboard/objects/common.lua`, `widgets/dashboard/objects/text/stats.lua`, `widgets/dashboard/objects/gauge.lua`) (fixes #248)**:
+  - The per-flight extremes are one table with a row per statistic -- the state field it samples, which extremes it records, and the condition under which it records them -- and one loop over that table at each of the five places that used to spell the whole set out by hand. Adding a statistic is a row, not five edits.
+  - Both objects that show the record resolve a box `source` through one shared mapping in `objects/common.lua`, so a source means the same statistic in a stats text box as in a gauge's maximum label. The `temp_esc` and `temp_mcu` spellings the gauge has always accepted are part of that mapping and now work on a stats box too.
+  - Every recorded field keeps the name it had, including the older `lastMinVoltage`, `lastMinBecVoltage` and `lastMinLq` spellings, so a user theme reading the widget state directly is unaffected.
+  - A stats text box with a threshold color no longer calls a resolver that does not exist.
+- **Dashboard text box colors & threshold evaluation (`widgets/dashboard/objects/`, `docs/dashboard/user-themes.md`) (fixes #213)**:
+  - Enabled dynamic threshold color evaluation (`thresholds`) on dashboard text boxes (`telemetry`, `stats`, `blackbox`, `governor`, `time`, and generic text), matching the reactive threshold behavior of gauge objects.
+  - Added named color string resolution (`"orange"`, `"red"`, `"blue"`, etc.) for text box `textcolor` properties via `normalizeColor`.
+  - Refactored `resolveThresholdColor` and temperature threshold conversions into `objects/common.lua` shared across gauge and text objects, with threshold compilation cached in a weak-keyed lookup.
+  - Added support for governor state threshold matching against both translated and untranslated state names.
+  - Documented dashboard box styling, named colors, and threshold formats in `docs/dashboard/user-themes.md`.
+- **Initial fuel announcement: gated until valid telemetry arrives and sensor promotion added (`lib/audio.lua`, `lib/sensors.lua`, `widgets/dashboard/runtime.lua`, `ui/home.lua`, `docs/audio/events.md`) (fixes #187)**:
+  - Gated `initial_fuel` in `lib/audio.lua` with `self.state.fuelTelemetrySeen == true`. Previously, this check was missing while continuous `fuel_alerts` had it, causing startup audio to announce the pre-initialized seed value of `0` ("Battery 0%") before telemetry packets arrived.
+  - Implemented dynamic deferral window based on `stabilize_delay` and detected carried-over readings from previous sessions (`previousSessionFuel`). If fresh, positive telemetry arrives within the window, the percentage is announced immediately; if the pack is genuinely empty (0%), the announcement proceeds once the ceiling expires.
+  - Added inactive-sensor shielding (`telemetryValueIsLive()`) to `lib/sensors.lua` for both search path adoption and primary sensor promotion: an existing sensor on the model that reports `0` through `getValue()` before sending live telemetry is treated as a miss, preventing dead sensors like `SmFt` from locking out valid fallbacks.
+  - Added periodic (3.0 s) promotion of the primary telemetry sensor (`SmFt`) when a fallback sensor (`Bat%`) is initially cached, and added `Sensors.reset()` to flush caches and field info on disconnect/reconnect edges.
+- **The tool reports a pack that is gone as gone (`ui/home.lua`)**:
+  - The tool's telemetry state kept the last positive pack voltage instead of storing the reading, so a pack disconnected while the flight controller stayed alive on its BEC still read as present. The widget stores the reading; the two now describe the same machine, which is what that shared state exists for. Every alert reading the field already requires a voltage above zero, so nothing else changes.
+- **Preference watcher: a file that cannot be read is no longer reported as a file that changed (`widgets/dashboard/runtime.lua`)**:
+  - `preferencesStamp` dropped the per-model half of its stamp, or returned an empty string for the global half, whenever `fstat` raised or answered something unreadable. The shorter string then differed from the kept one, so a failed read arrived at the watcher as a change and cost a full reload -- preferences re-read, theme dropped, scene rebuilt -- and a second one when the file read again.
+  - A failure to measure is now `nil`, which both callers already treat as "no comparison this pass". A session with no per-model file is unchanged and still stamps the global half alone.
+- **SmartFuel Consumption Export (`tasks/events/telemetry_bg/smart.lua`)**:
+  - Removed the Ethos-only `system.getSource` mirror fallback and its two query tables; the EdgeTX script environment registers no global `system`, so that step could never run.
+  - `SmCp` is now published only in voltage mode, where the suite computes the virtual consumption itself. Where the flight controller reports consumption, the sensor was a duplicate of it and cost a telemetry slot plus a model write per push.
+- **Stale Sensors No Longer Shadow Live Ones (`lib/sensors.lua`)**:
+  - A sensor a model still carries but the radio no longer receives reads as `0` through `getValue()` and used to win its search path ahead of the live sensor behind it; that reading is now treated as a miss.
+
+### Performance, Memory & Build System
+- **A box's thresholds are compiled where the box is rendered (`widgets/dashboard/objects/`, `bin/accounting/budgets.lua`, `docs/dashboard/user-themes.md`)**:
+  - A theme may give a threshold's limit or colour as a function, so that a warning level can come out of the theme's own configuration. Such a list could not be cached, because nothing knew when the function's answer had moved, so it was rebuilt and every colour in it normalised again on **every change of the value being watched** -- in the reactive sweep, on whatever instruction budget `refresh()` left over. It is now compiled once, where the box is rendered, and the sweep only walks the list it already holds. On the shipped BEC arc whose warning level is a theme setting the colour reference falls from **301 instructions and 528 bytes per change to 141 and no allocation at all**; the same shape on the BEC reading of another shipped theme falls from 271 and 256 bytes to 149 and none. What such a function may read is now stated in the theme documentation: only something whose change rebuilds the screen, which is what the theme configuration already does.
+  - The **first** sweep after a scene is swapped in gets the same treatment, and that is the pass with the least budget left of any. A threshold given as a translated string, and a colour given as a name such as `"orange"`, used to be resolved on the first call of each getter, which is always that sweep. Resolved at render instead, the first sweep of one shipped preflight screen falls from **4338 instructions to 2152**, and of its inflight screen from 1328 to 947.
+  - The `default` theme's preflight screen resolves its own font once per build rather than handing the firmware a reference per box: **17 reactive references become 13**, a sweep in which nothing moved falls from 721 instructions to 451, and one in which everything moved from 1118 to 825.
+  - Six budget rows are re-apportioned, each carrying its previous target so that every run says so: work moved out of the sweep, which runs on every foreground pass, and into the render, which runs once per scene. No sweep target was lowered. Every `theme.*` row -- the ones that decide whether a widget survives its pass -- falls or holds; the largest, on the theme that had the most to gain, falls from 11905 to 9910.
+- **A telemetry source the radio has no sensor for stops searching every two seconds (`lib/sensors.lua`)**:
+  - `Sensors.getValue` remembered a source that had answered nowhere for a flat 2 s and then ran its whole name search again -- a `getFieldInfo` for every candidate name in `Sensors.search_paths` -- for as long as the model was connected. A radio without an altimeter, without a BEC voltage sensor, without ESC or MCU temperature, or before the suite has published its own `SmFt` and `SmCp`, paid that for every one of those sources for the whole flight. The wait now doubles with each further miss, from the same 2 s up to 30 s, so the first retry is exactly where it was and the steady state is fifteen times rarer: measured on the offline accounting's own stubs, the interval between two searches of an absent source goes from 2.0 s to 30.0 s.
+  - **And no more than one repeated search happens in a pass.** `readTelemetry` asks for every source in one pass, and each absent one recorded its miss with the same timestamp, so their searches expired on the same boundary and landed together in the same pass -- the pass that is held against the firmware's per-call instruction limit. The simulator half of this file has always throttled its own searches to one per pass for that reason; the telemetry half does it now as well. A source that has not missed yet is never held back, so the pass that first asks still resolves everything the radio actually carries.
+  - Measured with the offline accounting's stubs on a sensor set missing nine of the sources the dashboard asks for: the worst recurring background pass falls from 11682 to 9898 instructions, against a `pass.state` target of 12200 and the firmware's hard limit of 20000. One search of a three-name source is 345 instructions against the 62 the same call costs while the miss is remembered. On the accounting's shipped sensor set, where only one source is absent, `pass.state` and `pass.state.armed` are unchanged and the theme rows move by under 70.
+  - A sensor that appears later is still found, and the delay is bounded by those 30 s. The two events that make one appear both clear the back-off first: `Sensors.reset()` runs on each edge of the flight controller link, and the suite's own `SmFt` and `SmCp` are published within the first seconds after a connect, where the wait is still 2 to 8 s.
+- **Configuration is stored as Lua data, and the widget never parses it (`lib/config_store.lua`, `lib/preferences.lua`, `lib/model_preferences.lua`, `lib/model_name_store.lua`, `lib/system_locale.lua`, `docs/reference/configuration-files.md`)**:
+  - `preferences.ini` and `<mcu id>.ini` become `preferences.lua` and `<mcu id>.lua`: a chunk that returns a table, read whole and compiled with `load(src, name, "t", {})` into an empty environment. The compile happens in C, which the count hook the firmware bills a call with does not see, so a load is a table constructor at one to two instructions per key instead of the hundred a line-oriented parse pays. **On the 88-key settings file of a real radio a load falls from 10155 VM instructions to 1282** -- from half of everything one widget call is allowed to a sixteenth of it -- and it no longer grows meaningfully with each setting a release adds.
+  - **The card is brought across once, by a Lua state that is yielded rather than cut off**: the configuration tool at its entry point, or the background decoder at its first pass. The former file is parsed by the one parser that is left, the new file is written, and the `.ini` is kept beside it as `.ini.bak` for one release. Nothing is asked of the pilot. A stray `preferences.luac` from an earlier loader is removed at the same time, since the firmware would prefer it whenever the two timestamps tie at the two-second resolution of a FAT timestamp.
+  - **A widget never migrates, and never writes a store while reading one.** A widget call is cut off at a fixed instruction count and the parse of a real settings file is larger than what is left of one, so a pass cut off inside it writes nothing and starts the same parse again next pass. Until the tool or the background decoder has run, a widget reads the former file into memory on every load and writes nothing -- which is what the suite did before, at the same cost. The connect tasks run in the widgets as well, so the per-board store follows the same rule and is settled at the next tool session instead. The dashboard's preference watcher stamps whichever of the two files is on the card, so the migration itself is the change that makes the widget read the new format.
+  - **What a store may hold is declared once, as a schema, and the saver serialises the schema** rather than the table it is handed, so a key the suite no longer declares is not written back and the file stops growing for ever. Sections whose key names are built at runtime -- a theme's configuration, the announcement pages' per-state enables, the radio half of the in-flight tuning overlay, the setup assistant's skip flags -- are declared open and keep everything they are handed; `[dashboard] theme_config_target` and `connection_guard`, which nothing has ever read, are named as retired so that an open section can lose them too.
+  - **Writes are atomic**: the new content goes to a temporary name and then takes the real one, so a reader can never catch a half-written store and a card that fills up loses the temporary rather than the settings. A save interrupted between the two steps is finished by the next load. A trailing generation counter moves the file's byte count on every save, so two saves inside one FAT timestamp slot can still be told apart. `reload.req` is unchanged.
+  - **A file that cannot be read is reported, not swallowed**: a chunk that does not compile, does not run or does not return a table gives the declared defaults and a logged error carrying the compiler's line number.
+  - **And the first load of a Lua state can report at all now.** The log reads its level from the settings, and while they are absent it answers `off` and refuses the console at every level -- which on a first load is always, since that load is what fetches them. The store hands its messages back instead of writing them, the settings module publishes the table it has just read and then writes them out, so what happened to a pilot's settings file is said at the level that pilot chose. A file that cannot be read at all still reaches the log ring and the card log only: the file carrying the level is the file that could not be read.
+  - **The four separate INI readers in the tree become one**, and it is reached in two places only: by the migration, and by the in-memory read a state that may not migrate answers with. `model_name_restore.ini`, where the suite keeps a model name it has renamed until it can put it back, becomes `model_name_restore.lua` through the same store: one open section whose keys are the radio's model files, brought across on the first read with the same `.ini.bak`. It stays a file of its own rather than a section of the settings, because it is written about twice per flight and every write to the settings makes the dashboard re-read them. `lib/system_locale.lua` reads the store for the language rather than scanning the card itself, and reaches the former file through that same one reader, once per Lua state, so the language does not flip for the one boot before the migration runs.
+  - `lib/system_locale.lua` is reached from a theme's `t()`, which resolves the locale on EVERY call and therefore runs in the firmware's reactive sweep, once per frame. It holds on to the store it built, and **the resolved language is now memoised for two seconds**, so that path stops being a file read per call and becomes a table lookup: 31 VM instructions inside the window, against the 867 the former per-call scan spent every single time, with one read of 289 at most every two seconds. Two seconds is also what a language changed in the configuration tool waits before the dashboard says it, which is well inside the reload that settings change triggers anyway.
+- **Offline accounting: the clock advances per pass, not per call (`bin/accounting/stubs/edgetx.lua`, `bin/accounting/measure.lua`, `bin/accounting/README.md`)**:
+  - The stub's `getTime` advanced a fixed step on every call, which made a second worth however many times the code under test happened to ask the time. Anything the suite does on a cadence -- the dashboard's 0.5 s telemetry read, the audio cooldowns, the smart-sensor refresh, the service widget's UI interval -- therefore ran in almost every measured pass or in almost none, and could not be priced at all. The clock is now advanced once per measured pass through `Stubs.tick()`, ten ticks of 100 ms, about the cadence a widget really runs at.
+  - Determinism is unchanged: nothing reads a wall clock and three runs are byte-identical. The pass budgets of the time-bounded loops are ten times what they were, because the same elapsed time is now reached in about ten times the passes; nothing waits longer in seconds.
+  - No measured source changed, so the 22 rows that move are the instrument seeing the suite differently rather than the suite doing anything different. The budget targets are left untouched, so the two rows that land in the report's own "margin to widen" band stay visible as warnings rather than being quietly widened.
+- **Documentation rule checked in CI (`.github/workflows/pr.yml`, `bin/docs/verify_documentation_rule.py`)**:
+  - Added a fourth PR job that fails when a pull request changes `src/` and no file under `docs/`, unless its body states on a line of its own why no documentation was needed. Tooling, CI and documentation-only changes are not asked.
+  - The job proves the check can go red before it trusts a green one, like the instruction-budget and i18n jobs beside it.
+- **Translation coverage reported in CI (`.github/workflows/pr.yml`, `bin/i18n/check_translations.py`)**:
+  - Added a fifth PR job that lists the strings a locale build cannot translate: a literal in a `label`, `title` or `message` field, or in the label argument of a `Controls.append*` helper, that never reaches the translator; and a translation key assembled at runtime, which the precompiler cannot resolve and which therefore ships the English fallback in every locale.
+  - The report groups by literal and sorts by frequency, because the work is concentrated: 25 literals account for 46 % of the total.
+  - Both counts are held at a baseline rather than required to be zero, so the job is green on the tree it was written for and goes red only when a number grows. Names that stay English in every locale live in `bin/i18n/allowed_untranslated.txt`.
+- **Dashboard preference reload reads only the file that changed (`widgets/dashboard/runtime.lua`)**:
+  - The watcher compares a stamp built from the global preferences file and the per-model one, and knows which of the two has moved -- but the reload then re-read both. A save made from a settings screen touches the per-model file alone, so the global file was parsed again on every such save even though its bytes had not changed, and that parse is the expensive half by a wide margin.
+  - The reload now reads only the half the stamp says has moved. Where the signal does not name a file -- a forced reload, the rotating sequence file, a stamp that changed shape, or a changed half whose timestamp did not move (which is the case the sequence file exists for, and where an unchanged half proves nothing) -- both are read exactly as before.
+- **The announcement pack is generated from a word list again (`bin/sound-generator/`)**:
+  - Every WAV under `src/rfsuite/audio/` is synthesised, but this repository carried no way to make one: adding an announcement meant adding a binary nobody else could produce or review. The generator from the Ethos suite is now here, adapted to write this tree's layout and the 16-bit PCM the firmware plays, with the word lists in `bin/sound-generator/json/en.json` and `de.json`.
+  - `--check` needs no credentials and is the mode for reviewing a change: it reports files declared with nothing on disk, files on disk declared nowhere, and entries with no translation. It reports one of each today -- `stat/alerts/notfull.wav` is asked for by the pack-not-full alert and is in no pack, and `en/stat/alerts/batteryempty.wav` is a file with no entry.
+  - `update-missing-translations.py` propagates a new line from `en.json` to every other language, keeping existing translations.
+  - Documented in `bin/sound-generator/README.md` and in `docs/developer/audio-announcements.md`, which also covers the settings schema, the i18n keys and the packager's folders.
+- **The SmartFuel discharge curve is a constant instead of a table built in a widget pass (`tasks/events/telemetry_bg/smart.lua`)**:
+  - The 121-entry curve the voltage-based fuel estimate reads is a sigmoid over a fixed grid of cell voltages with no input other than its own two constants, so every build of it produced the same table. It was built on the first estimate a model made from voltage, which put **3395 instructions into whichever widget pass that was**, on top of what the pass already carried and against the 20000 a widget call is billed at. It is now written out in the source, with the formula and the grid above it so that it can be regenerated: the first call of `fuelPercentageFromVoltage` costs **76 instructions instead of 3476**, and every later call 76 instead of 81, since there is no longer a memo to test.
+  - In the offline accounting that pass was the one that set `pass.state`, so the row falls from **11579 to 11150** against its target of 12200, and `theme.default` falls with it from 13144 to 12715. No other row moves, and no budget target is changed.
+  - What it costs instead: the module body is 184 instructions rather than 61, and about 1.1 kB of the Lua state's heap is held from the moment the module loads rather than from the first estimate -- including on a model whose flight controller computes the fuel percentage itself.
+  - The entries are the formula's own numbers: the table was checked entry for entry against the loop it replaces, and the estimate returns the same percentage at every cell voltage from 2.50 V to 4.40 V for one to fourteen cells.
+- **Release Version (`lib/version.lua`)**:
+  - Bumped the Rotorflight Lua EdgeTX Suite version to `0.1.7`.
+# 0.1.6
+
+### Features & Enhancements
+- **Documentation Structure & Maintenance Rule (`docs/`)**:
+  - Added a `docs/` folder as the page-by-page reference for the tool, mirroring the menu layout: a page template, an index of every reachable page with its menu path and visibility conditions, section indexes for the dashboard, audio, reference, troubleshooting and developer guides, and two pages written as examples (`setup/model`, `setup/power/smartfuel`). The folder is not part of the installation archive.
+  - Added the documentation maintenance rule (`GEMINI.md`, `.agents/rules/documentation.md`): every change a pilot can observe updates its documentation in the same PR, in the same shape as the `Releases.md` rule.
+- **Dynamic ESC Model Identification & Interface Unification (`setup/esc_motors/esc_tools`)**:
+  - Added dynamic ESC model name detection and header display queried directly from hardware via telemetry / MSP.
+  - Unified device information and capability reporting across all supported ESC manufacturers (AM32, BLHeli_S, Bluejay, Flyrotor, Hobbywing V5, OMP, Scorpion, XDFly, YGE, ZTW).
+  - Isolated Hobbywing V5 parameter tables to prevent cross-talk and corrected YGE firmware version mapping.
+- **ESC Firmware Version & Serial Number / Revision Subheader Display (`setup/esc_motors/esc_tools`)**:
+  - Implemented a compact subheader info line directly beneath the section header across all 10 ESC manufacturer configuration pages (AM32, BLHeli_S, Bluejay, Flyrotor, Hobbywing V5, OMP, Scorpion, XDFly, YGE, ZTW).
+  - Provides persistent, at-a-glance visibility into firmware versions (`FW`), device serial numbers (`S/N`), and layout revisions (`Rev`) across all parameter tabs with minimal screen footprint (~18px).
+  - Corrected YGE serial number extraction (`getEscVersion`) to parse the 32-bit uint serial number from protocol buffers.
+- **Active Profile & Rate Profile Live Resolution (`flight_tuning`)**:
+  - Centralized live profile resolution (`getLiveProfile()`) to read active PID and rate profiles directly from telemetry sensors and session state.
+  - Profile adjustments made via transmitter switches or telemetry are instantly reflected across all flight tuning pages without desync.
+- **Motor Override & ESC Motor Test Tool (`setup/esc_motors/motor_override`)**:
+  - Added dedicated Motor Override tool allowing direct spool-up and functional testing of main and tail motors from the radio.
+  - Multi-tier safety architecture: requires explicit disarm confirmation, hardware arming switch check, deadman timeout watchdog, manual throttle override sliders, and automatic shutoff upon page navigation or telemetry link loss.
+- **SD Card Session Logging & Trace Layer (`rfsuite.log`)**:
+  - Implemented structured multi-level logging (`trace`, `debug`, `info`, `warn`, `error`) with ring buffer sink writing session logs directly to SD card.
+  - Added single-writer arbitration between configuration tool and background widgets to avoid file contention.
+  - Emits timestamps, MSP transport traces, UI lifecycle events, and save refusal explanations.
+- **MSP Live Telemetry & Accessors (`tasks/msp/api`)**:
+  - Added modular MSP API endpoints for live analog sensor readings (`MSP_ANALOG`) and receiver channel inputs (`MSP_RC`).
+  - Added self-identification tags for simulator responses in debug traces.
+- **Startup Progress & Visual Preparation (`ui/home.lua`)**:
+  - Added smooth animated preparation progress bar on the home start screen.
+- **Flight Controller Reboot Policy Documentation (`tasks/msp/save_pipeline.lua`)**:
+  - Embedded explicit Rotorflight 2 flight controller reboot policy guidelines directly into save pipeline headers and architecture documentation.
+  - Formulated clear boundaries for mandatory reboots (hardware drivers, DMA, UART ports, radio config, ESC protocols, sensor alignment), conditional reboots (swash/tail geometry changes), and non-reboot live tuning (PIDs, rates, governor, filters).
+- **Reactive LVGL Telemetry Bindings & Zero-Rebuild Dashboard Engine (`widgets/dashboard`)**:
+  - Migrated telemetry labels, gauges, arcs, duration timers, governor indicators, and stats to reactive getter closures evaluated directly by EdgeTX's native `callRefs` loop in C++.
+  - Pruned dynamic sensor data (`voltage`, `rpm`, `flightSeconds`, `fuel`, `lq`, etc.) from `Engine.renderKey`, eliminating continuous 2-Hz full-scene teardown and rebuild churn (`lvgl.clear()` + `lvgl.build()`).
+  - Scene rebuilds are now strictly confined to layout mutations (flight mode changes `preflight` $\rightarrow$ `inflight` $\rightarrow$ `postflight`, theme switches, and zone resizing), resulting in zero memory allocations and minimal CPU overhead during steady-state flights.
+- **MSP API Return Format Normalization (`tasks/msp/api`)**:
+  - Standardized all 102 MSP API modules (`Api.parse`) to return a clean, flat table (`return { ... }`) rather than mixed wrapped tables (`{ parsed = ... }`), eliminating duplicate unnesting logic across servo, esc, and setup pages and improving API tester introspection.
+
+### Bug Fixes & Improvements
+- **Dashboard Model Preferences Cache Invalidation & Reload Decoupling (`widgets/dashboard`, `lib/model_preferences.lua`, `tasks/msp/runtime.lua`)** (fixes #186):
+  - Fixed an issue where changing theme selection or model preference overrides in the suite did not update the active dashboard widget until a transmitter power cycle due to stale in-memory preferences and RAM cache lookups.
+  - Decoupled disk I/O from theme module loading during preference reloads (`reloadPreferencesIfNeeded`) so reading INI files and building the theme occur on separate passes, eliminating EdgeTX CPU limit instruction budget faults.
+  - Hardened reload lifecycle against mid-load faults: pre-cleared theme and memo state before disk reads, deferred baseline stamp/sequence adoption and pending flag clearance until after successful I/O, and protected active session preferences against stale MSP runtime republishes.
+- **Initial Fuel Announcement Preference Authority & Redundant Flag Cleanup (`lib/audio.lua`, `app/pages/setup/model/page.lua`) — ref #191, ref #187**:
+  - Established the radio preference (`Audio / Events -> Battery -> Initial Fuel Announcement`, default: enabled) as the single source of truth for the initial fuel announcement upon connection.
+  - Fixed `initialFuelWanted()` in `lib/audio.lua`, which previously consulted `FLAG_TELL_CAPACITY` from `model_flags` and silenced announcements for all pilots on default flight controller configurations (`model_flags = 0`).
+  - Removed the redundant and conflicting `FLAG_TELL_CAPACITY` switch from `app/pages/setup/model/page.lua`, preventing dual-switch ambiguity where neither control could reliably silence the callout independently.
+- **Dashboard Postflight Stats: Missing Handlers and Live-Value Fallthrough (`widgets/dashboard`) — fixes [#133](https://github.com/rotorflight/rotorflight-lua-edgetx-suite/issues/133)**:
+  - Added per-flight tracking for `currentFlightMaxVoltage`/`lastFlightMaxVoltage`, `currentFlightMaxLq`/`lastFlightMaxLq`, `currentFlightMinBecVoltage`/`lastFlightMinBecVoltage`, and `lastFlightEndingVoltage` in `runtime.lua` (`updateDerivedFlightState`).
+  - Added stat handlers in `objects/text/stats.lua` for `max`+`voltage` (MAX VOLTAGE tile in `rfstatus` theme), `max`+`link` (LINK MAX in `@rt-rc-n`), `min`+`link` (LINK MIN in `@srb-rc`), and `last`+`voltage` (ENDING VOLTAGE in `@srb-rc`).
+  - Fixed `min`+`bec_voltage` handler to use the dedicated BEC minimum accumulator (`lastFlightMinBecVoltage`) instead of incorrectly returning the main pack minimum voltage.
+  - Removed the `/2` transform workaround from `@aerc-n/postflight.lua`'s MIN BEC VOLTAGE tile; the accumulator now tracks the actual BEC minimum directly.
+  - Fixed stats handlers to prioritize current in-flight values over previous flights (`currentFlight… or last…`), and removed live sensor fallbacks so tiles render `--` before the first flight instead of leaking live readings.
+  - Made any unresolvable `(stattype, source)` pair render `--` instead of silently falling through to the live telemetry value, turning future theme typos into immediately visible blank values.
+- **Dashboard Fullscreen Menu EEPROM Commit Write Flag (`widgets/dashboard/fullscreen_menu.lua`)** (fixes #135):
+  - Added explicit `isWrite = true` flag to the queued EEPROM commit after a battery profile change, ensuring the message with an empty payload is recognized as a write rather than defaulting to a read request. Dispatches as an MSP write frame (`CRSF_FRAMETYPE_MSP_WRITE`) on CRSF and properly triggers MSP response cache invalidation.
+- **Dashboard ESC Temperature Gauge Arc Coloring (`widgets/dashboard/objects/gauge.lua`)** (fixes #132):
+  - Fixed `getArcValueColor` falling through to the LiPo cell-voltage branch for temperature sources (`esc_temp`, `mcu_temp`), which divided the temperature value by the estimated battery cell count and applied ascending (low = bad) threshold logic — causing cold ESC temperatures to display as critical (red) and hot temperatures as OK (green).
+  - Added explicit temperature source detection (`isTempSource`) or temperature unit fallback (`°C`/`°F`) with inverted threshold coloring: low/cool = green, high/hot = orange/red.
+  - Temperature thresholds resolve from box properties (`warntemp`/`alerttemp`), theme configuration (`esctemp_warn`/`esctemp_alert`), or sensible defaults (90 °C warn, `max(warn + 15, 105)` °C alert; when alert threshold defaults, it is clamped to gauge maximum to remain reachable on custom scales).
+  - Preserved valid cold / freezing temperatures (<= 0 °C) in OK green and properly distinguish missing telemetry (`curHasValue == false`) for arc background coloring.
+  - Passed temperature, unit, and scale flags directly from `renderArc` to avoid redundant lookups and eliminated unit/source mismatches under Fahrenheit mode.
+  - Eliminated dependency on battery cell count for temperature arc coloring.
+- **Dashboard Stats Precedence, BEC Voltage Correction & Governor Optimization (`widgets/dashboard`)**:
+  - **Stats Box Flight Precedence & BEC Voltage Correction**: Corrected stat value precedence in `widgets/dashboard/objects/text/stats.lua` so current flight extremes (`currentFlight...`) take precedence over previous flight aggregates (`lastFlight...`) while in flight, cleanly falling back to previous flight values once disarmed. Resolved a copy-paste error in the `bec_voltage` branch where main battery pack voltage (`lastMinVoltage`) was displayed instead of BEC voltage, and implemented in-flight minimum BEC voltage tracking (`currentFlightMinBecVoltage` / `lastMinBecVoltage`) in `runtime.lua`. Note: On setups without a dedicated BEC voltage sensor, this box now correctly reports `0` instead of falling back to the main flight battery pack voltage.
+  - **Governor Disable-Flag Translation Deferral**: Deferred `translate()` resolution in `widgets/dashboard/objects/text/governor.lua` until after verifying the respective bit is actually set in `armDisableFlags`, eliminating up to 26 string lookups per rebuild.
+- **Dashboard Memory & Loader Cleanup (`widgets/dashboard`, `lib/sensors`, `setup/esc_motors/esc_tools/escmfg/am32`)**:
+  - Removed uncalled legacy builder and card functions (~330 lines) from `widgets/dashboard/themes/default/common.lua`, significantly reducing RAM footprint on radios.
+  - Implemented missing negative caches (`missingRenders`) in `objects/dial.lua`, `objects/time.lua`, and `objects/image.lua` to eliminate redundant disk I/O / `loadScript` lookups on every scene rebuild for absent subrenderers.
+  - Removed duplicate and shadowed `SIM_SENSOR_PATHS` definition in `lib/sensors.lua`.
+  - Removed obsolete and unreachable `am32/pages.lua` file containing non-functional require statements.
+- **Dashboard Widget i18n Status Line & Fullscreen Menu Fallback (`widgets/dashboard`)**:
+  - Localized the soft timeout connection splash status line (`"Connected with partial telemetry"`) via `widgets.dashboard.connected_partial_telemetry`.
+  - Corrected the degenerate fallback translator function signature in `fullscreen_menu.lua` from `function(_, k, f)` to `function(k, f)` so fallback label strings are properly returned instead of `nil` when i18n context is unavailable.
+- **Telemetry Sensor Status Initialization (`tasks/events/onconnect`, `app/pages/tools/diagnostics`)**:
+  - Load telemetry configuration during the connection chain and distinguish an unloaded configuration from a validation failure, preventing a false `ERROR` before the first sensor read.
+- **Housekeeping Queue Starvation & Dependency Loading Order (`tasks/msp/runtime.lua`, `queue.lua`)**:
+  - Eliminated the staggered module-loading race condition where `UID` dependencies finished loading before `API_VERSION` dependencies, inadvertently seizing the transmit slot and starving the connect chain.
+  - Held `UID` read back until `API_VERSION` is successfully received and verified, ensuring primary flight controller compatibility is established before secondary model preference lookups.
+  - Bounded housekeeping reads with tighter timeouts (1.5s) and retry budgets (max 2–3 retries) with backoff re-arming upon failures.
+  - Enhanced `Queue:clear()` to supply distinct `"cleared"` error reason to callbacks, allowing callers to differentiate queue drops from transport timeouts.
+- **Adjustments & Modes AUX Channel Bounds (`setup/controls/adjustments`, `setup/controls/modes`)**:
+  - Capped AUX channel selection pickers and auto-detection loops at the firmware limit `AUX 1` .. `AUX 13` (`MAX_AUX_CHANNEL_COUNT = 13` = `MAX_SUPPORTED_RC_CHANNEL_COUNT - CONTROL_CHANNEL_COUNT`), removing unreachable `AUX 14` .. `AUX 20` entries.
+  - Added strict write payload and sanitization clamping against `AUX_CHANNEL_COUNT - 1` (indices 0..12) to prevent out-of-bounds array indexing in flight controller receiver inputs.
+- **Onconnect API Version Task Disconnect Sentinel Handling (`tasks/events/onconnect/tasks/apiversion.lua`)**:
+  - Fixed an issue where the `apiversion` onconnect task immediately completed on reconnect due to the disconnect sentinel `"0"` being truthy and non-empty.
+  - Added explicit check rejecting `"0"` alongside `nil` and `""` so the connect chain properly waits for a verified MSP API version read.
+  - Implemented `M.reset()` on the `apiversion` task to ensure clean state resets across connect/disconnect cycles.
+- **Unified Visual Language & Save/Notice Modal Consolidation (`ui/home.lua`, `controls/modes`, `controls/adjustments`, `dashboard/theme`, `splash.lua`)**:
+  - Eliminated conflicting visual vocabularies during save operations where native EdgeTX blue message dialogs (`lvgl.message`) were raised over the suite's flat in-progress save overlay, which previously blocked the Lua `run()` loop and required keyboard dismissal.
+  - Standardized all save outcome reporting (success and failure) to route through `ctx.reportSave()` and `reportSaveOutcome()`, displaying unified non-blocking notice overlays with touch- and key-navigable dismissal.
+  - Replaced native modal alerts in `modes`, `adjustments`, and `theme` settings with in-suite notices (`ui.notice` / `LoadingOverlay.appendNotice`), ensuring the run loop advances smoothly and UI rebuilds take place immediately.
+  - Harmonized the dashboard widget connection splash (`widgets/dashboard/splash.lua`) color palette with the core tool start screen using semantic theme tokens (`COLOR_THEME_PRIMARY3`, `COLOR_THEME_PRIMARY2`), creating a unified visual identity across standalone tools and telemetry widgets.
+- **Decoupled FBL Connection State & Menu Tile Gating (`ui/home.lua`, `tasks/msp/runtime.lua`, `tasks/events/runtime.lua`, `app/pages/tools/diagnostics/rfstatus`)**:
+  - Decoupled `fblConnected` (true Flight Controller MSP handshake) from `rfConnected` / `session.isConnected` (pure RF telemetry link presence).
+  - Resolved an issue where main menu tiles (`enabledWhen = "fblConnected"`) unlocked 0.6s after RF link connection based on RSSI alone before any MSP reply arrived from the flight controller.
+  - Required verified API version handshake (`versionReadCompleted == true` and valid `apiVersion`) before unlocking FC-dependent configuration tiles, keeping tiles safely locked when an FC is unpowered, booting, or silent.
+- **Unresponsive Flight Controller Diagnosis & Connect Timeout (`ui/home.lua`, `tasks/msp`, `widgets/service`)**:
+  - Unblocked the initial startup screen when a flight controller is silent (e.g. freshly flashed board with `FEATURE_TELEMETRY` disabled, or misconfigured MSP port), dismissing the loading spinner after ~6.0s instead of hanging indefinitely.
+  - Automatically displays an actionable diagnostic notice explaining the root cause (*"No MSP reply from flight controller. Check that FEATURE_TELEMETRY is enabled and the MSP serial port is configured."*) and providing ELRS packet rate/ratio hints.
+  - Reduced initial `API_VERSION` query timeout from 5.0s to 1.5s with 3 retries for rapid failure detection (~6s total) and exposed `session.mspLastError` and `session.mspErrorKind` across session and diagnostics state.
+  - Updated the service widget to clearly report `"No MSP reply"` rather than `"Loading data... (0/5)"` when telemetry link is active but the flight controller remains silent.
+- **Start Screen Bounded Wait & Startup Race Elimination (`ui/home.lua`)**:
+  - Enforced an upper bound (max 2.0s offline, max 3.5s online) on the initial startup screen, preventing indefinite hangs when connecting to powered receivers with unresponsive flight controllers or wedged MSP links.
+  - Eliminated the 0.6s timer race (0.45s vs 8.75s) by resolving the start screen as soon as core MSP identity (API version + MCU UID) is established, allowing onconnect tasks to run asynchronously in the background.
+  - Replaced input-sensitive `state.lastInputTick` with dedicated `state.initialLoadStartTick` so key presses or touch gestures during boot do not restart the timeout timer.
+  - Kept FBL-dependent menu tiles locked if startup times out without flight controller response, allowing pilots to access diagnostic tools instead of a frozen screen.
+- **Diagnostics & Info Stalled Read Handling (`app/pages/tools/diagnostics/info`, `fblstatus`)**:
+  - Added proactive timeout monitoring in `M.wakeup()` using `AsyncLoadUi.isTimedOut()` to abort stalled reads after 12s with clear modal feedback.
+  - Added automatic link-loss detection and offline reload feedback notices.
+  - Standardized per-request timeouts (3.5s) across diagnostic endpoints and fixed require path in `fblstatus/page.lua`.
+- **ESC Configuration Save Timeout & Give-Up Notice (`app/pages/setup/esc_motors/esc_tools`)**:
+  - Reduced ESC write timeout from 5.0s to 2.5s and added user-facing failure notice overlay on give-up so pilots are immediately informed when an ESC fails to acknowledge parameter writes.
+- **Flight Log Selector Row Overlap & Sort Order (`app/pages/logs/page.lua`)**:
+  - Fixed row layout height calculations in the flight log chooser, eliminating vertical text overlapping and clipping on compact displays.
+  - Sorted flight logs in descending chronological order (newest files listed first).
+- **Settings & Preferences Surface Consolidation (`lib/preferences.lua`, `settings/general`)**:
+  - Consolidated `CONFIG_SCHEMA` in `settings/general` as single source of truth for save confirmations and disarm warnings.
+  - Pruned orphaned preference keys (`txbatt_type`, `theme_loader`, `hs_loader`, `toolbar_timeout`, `iconsize`, `syncname`, `audio_switches`, `audio_timer`) and removed unreferenced audio stubs.
+  - Fixed temperature unit conversion (`useFahrenheit()`) in dashboard telemetry text and flight log summaries.
+  - Applied `sag_gain` in SmartFuel load calculation.
+- **UI Layout & Display Profile Metrics (`ui/controls.lua`, `ui/display_profile.lua`)**:
+  - Harmonized row metrics, reduced excessive vertical spacing, and widened multi-column numeric input fields across standard and high-resolution color radios (such as TX15 and TX16S).
+  - Stripped UTF-8 BOM encoding from Lua files to avoid syntax errors on EdgeTX Lua interpreters.
+- **Navigation Exit Debounce (`ui/home.lua`)**:
+  - Debounced back-button navigation (`onBack`) to prevent rapid or repeated key events from causing accidental double-exit jumps from menus.
+  - Stamped `lastBackTick` strictly on actual navigation transitions.
+- **Battery Reserve Overwrite Protection (`setup/power/battery/page.lua`)**:
+  - Fixed an issue where saving battery configuration without modifications could overwrite `cbat_alert_percent` (battery capacity reserve).
+  - Removed unsafe preference seeding and ensured `batteryConfig` is safely populated and preserved on save.
+- **Theme Color Token Normalization (`ui/controls.lua`, widgets)**:
+  - Replaced hardcoded `GREY_DEFAULT` / nil color tokens with semantic theme color tokens across UI controls and widgets, fixing invisible text and rendering artifacts under custom color themes.
+- **Help View Paragraph Spacing & Height Estimation (`ui/help_view.lua`)**:
+  - Removed duplicate paragraph spacing in `estimateWrappedTextHeight`, aligning text container height estimation with native EdgeTX LVGL label rendering (48 px for 2 paragraphs instead of 80 px) and eliminating unnecessary scrollable whitespace.
+- **FC Version Simulator Fixture Sync (`tasks/msp/api/fc_version.lua`)**:
+  - Updated `fc_version` mock fixture from `{ 4, 5, 1 }` (RF 2.2.1) to `{ 4, 6, 0 }` (Rotorflight 2.3.0 / FC 4.6.0), synchronizing mock telemetry with `build_info.lua`.
+- **UI Controls, Heights & Display Spacing (`ui/controls.lua`)**:
+  - Unified native LVGL widget heights (standard 36 px), font rounding, and vertical alignments across all pages (PIDs, Rates, Mixer, Modes, Failsafe, Governor, Trims).
+  - Resolved wide-display layout spacing and boundary clipping on large color touchscreens (e.g. 800x480).
+- **Settings Lifecycle & Unsaved Changes Tracking (`settings/common.lua`)**:
+  - Integrated all six settings form pages (`audio/events`, `audio/switches`, `audio/timer`, `dashboard/theme`, `general`, `localization`) into the suite's `ui.dirty` unsaved changes lifecycle.
+  - Introduced non-rebuilding `runtime.markValueChanged()` for inline numeric controls to prevent focus loss during scrollwheel edits, alongside `runtime.markDirty()` for structure-altering toggles.
+  - Added reusable `getValueSetter(key)` helper in form runtime.
+- **Combo Selector Unknown Value Fallback (`ui/controls.lua`)**:
+  - Replaced misleading fallback to the first option when an unknown value is returned from hardware with a dynamic "Unknown (%s)" / "Unbekannt (%s)" placeholder.
+  - Added defensive guard in `set()` to ensure selecting or confirming the placeholder is a safe no-op.
+- **Notice Dialog Bounded Dimensions (`ui/loading_overlay.lua`)**:
+  - Fixed word-wrap line calculation (`countMessageLines`) against `innerW` matching LVGL layout behavior.
+  - Added hard geometric bounds (`roomForLines`) and UTF-8 safe bisection truncation with ellipsis (`...`), guaranteeing dialog action buttons (OK/Dismiss) never run off the screen.
+- **ESC Configuration (YGE, Hardware Protection)**:
+  - Consolidated YGE model names and capabilities into a single source of truth (`escModels`) and added support for **YGE Saphir 125 V2** (ID `4691`) with 12V BEC capability.
+  - Fixed silent UI display and save clamping on 10.0V BEC settings for 12V-capable YGE ESCs.
+  - Restored `Keep mAh` (flags bit 2) and `Startup Response` (`acceleration` U16) controls on the YGE ESC configuration page.
+  - Prevented full-page scene teardown and preserved active inline editors when adjusting ESC parameters.
+- **SmartFuel Reserve Consolidation (`lib/smartfuel_reserve.lua`)**:
+  - Consolidated SmartFuel capacity reserve arithmetic into a single centralized module, eliminating divergent calculations between telemetry widgets and diagnostics.
+- **Model Name & Preference Persistence Across Updates**:
+  - Prevented installer packages and deploy tasks from overwriting user `preferences.ini`.
+  - Moved Model Sync settings directly onto the Model page (`setup/model`).
+  - Fixed cold-start restore to prevent temporary model names from restoring after cold boots or telemetry dropouts.
+  - Restricted model writes strictly to widget runtimes.
+- **Save Callback Error Handling (`tasks/msp/save_pipeline.lua`)**:
+  - Wrapped page save callbacks in `pcall` guards to capture errors and report them cleanly in the notice box.
+- **Dialog Fallback Handling (`ui/controls.lua`)**:
+  - Properly recognized asynchronous `lvgl.confirm` dialogs as active modals, preventing premature fallback invocation.
+- **Session Logs Text Overlap & Contrast Fix (`app/pages/tools/diagnostics/session_logs/page.lua`)** (fixes #91):
+  - Fixed text overlap / overdrawing: log entries are now truncated with an ellipsis (`…`) via binary-search `fitToWidth` to guarantee each line occupies exactly one `rowH` row, regardless of message length.
+  - Fixed invisible / low-contrast text on light EdgeTX themes: added a solid `COLOR_THEME_PRIMARY3` background panel for the log view and replaced `GREY_DEFAULT` (white/near-white on light themes) with `COLOR_THEME_DISABLED` for `debug` and `trace` log levels, guaranteeing readable contrast on all EdgeTX themes (including light blue and unstyled page backgrounds).
+  - Dynamically derived `rowH` and `maxVisible` from font metrics via `textSize("Ag", SMLSIZE)` instead of assuming a fixed height, correctly adapting across 320x240, standard, and 800x480 radio display classes without overdrawing or boundary clipping.
+- **Runtime Locale Resolution & Language Selector (`lib/system_locale.lua`, `settings/localization/page.lua`, `lib/preferences.lua`) – fixes #103**:
+  - `system_locale.lua:resolveSystemLanguage()` previously returned the build-time template placeholder `@i18n_language@` verbatim at runtime in uncompiled / simulator mode. `I18n.new("@i18n_language@")` failed to load any bundle and silently fell back to English, causing all Settings › General labels and confirmation dialogs to appear in English regardless of the selected language.
+  - Introduced a three-step runtime fallback: ① read `language` from `[localizations]` in `preferences.ini` (set via Settings › Localization); ② read the EdgeTX `LANGUAGE` global (where exposed by the firmware); ③ caller-supplied default (`"en"`). The `@i18n_language@` marker is retained as a precompile token only – packaged release builds still get the locale baked in at build time, while source/simulator runs now correctly pick up the user's chosen language.
+  - Added a **Language** dropdown (English / German) to Settings › Localization so users can set their preferred UI language; the choice is persisted in `preferences.ini` under `[localizations] language` and takes effect on the next tool open.
+  - Added `language = "en"` to `lib/preferences.lua` defaults so the key is always present in newly created `preferences.ini` files.
+- **Save & Reload Interlock, Non-Blocking Feedback & Local Settings While Armed (`ui/home.lua`, `i18n`, fixes #136)**:
+  - Header Save and Reload actions remain interactive on pages that declare them instead of forcing them disabled in the header layout, ensuring user input reliably routes to `onSave` / `onReload`.
+  - When the modal warning preference is disabled (`save_armed_warning = false`), tapping Save or Reload provides immediate non-blocking feedback by temporarily updating the top armed banner to `"Save blocked: Model is ARMED!"` / `"Reload blocked: Model is ARMED!"` for 2.5 seconds before auto-reverting, keeping the page visible and navigable.
+  - Relabeled the safety switch in Settings › General to "Show Disarm Warning on Save/Reload" to reflect that it governs armed notices for both operations.
+  - Unblocked saving on local tool settings pages (`settings_*` such as Preferences, Audio, Localization) while armed, as these pages do not communicate with the FC via MSP.
+  - Saving FC parameters while armed remains strictly blocked in all cases.
+
+### Performance, Memory & Build System
+- **Tile & Theme Icon Pre-Scaling to 40x40 (`app/pages`, `widgets/dashboard/themes`)**:
+  - Pre-scaled all 148 page/tile icons and 7 theme icons to exact 40x40 px using Lanczos resampling.
+  - Reduced C-heap decode buffer allocation from 19.6 kB to 6.4 kB per PNG decode (3.1x reduction), reducing LVGL image cache footprint from ~78 kB to ~26 kB and eliminating LVGL heap exhaustion (`ta` error tiles) on image-heavy menus.
+  - Cut total asset disk footprint by 51.3% and eliminated software zoom/scaling overhead on 800x480 displays.
+- **Codebase GC & Memory Cleanup (`allowMemAutoRefresh`)**:
+  - Removed 60 obsolete `allowMemAutoRefresh()` function stubs across all page modules and dashboard themes to reduce garbage collection churn and memory overhead.
+- **Incremental Bytecode Compilation & Build Identity (`lib/precompile.lua`, `bin/package/build_package.py`)**:
+  - Implemented incremental startup bytecode compilation checking file modification timestamps (`fstat`) with 2-second FAT tolerance against bytecode timestamps, only recompiling modified or stale Lua sources.
+  - Integrated deterministic SHA-256 build identity hashing (`build.txt`), ensuring complete cache invalidation between releases.
+- **Early Link-Ready Dashboard Rendering (`widgets/dashboard`)**:
+  - Render telemetry dashboard immediately upon establishing the RF/MSP telemetry link without waiting for the full multi-step initialization chain.
+- **Startup Pacing & Queue Optimization**:
+  - MSP queue runner takes a second pass immediately after callers populate it, reducing round-trip latency.
+  - Background task ticks twice as fast during initial connection startup.
+  - Eliminated redundant readiness holds on initial connect and validated battery readiness using explicit status flags.
+- **Bytecode & Loader Caching**:
+  - Precompiled Lua bytecode cache at start and eliminated obsolete unread bytecode writes.
+- **Build & Deployment Tooling**:
+  - Fixed Python runtime detection across Windows and POSIX environments.
+  - Added robust language discovery supporting VS Code JSONC user settings, profiles, and workspace settings.
+
+# 0.1.5
+
+### Features & Enhancements
+- **Save Pipeline & Reboot Synchronization (`tasks/msp/save_pipeline.lua`)**:
+  - Implemented a unified asynchronous save pipeline with automatic post-save reboot synchronization (`MSP_SET_REBOOT`) and response verification.
+  - Replaced uncoordinated native dialog popups with integrated status reporting directly inside the `LoadingOverlay` notice box.
+  - Added direct error and save refusal reporting, notifying the user when and why a write was rejected.
+- **Dedicated Background Service Widget (`widgets/rfsuitesvc`) & Settings**:
+  - Added standalone `rfsuitesvc` background service widget running MSP communication and telemetry tasks independently of the main configuration tool.
+  - Added dedicated Service settings page (`settings/service`) for background link configuration.
+- **Model Configuration & On-Connect Synchronization (`setup/model`, `tasks/events/onconnect`)**:
+  - Added Model Configuration page (`setup/model`) to inspect and edit flight controller model name and pilot configuration parameters.
+  - Implemented background synchronization tasks (`model_name_sync`, `model_params_sync`) to mirror FC model parameters onto the radio.
+  - Added support for signed pilot config parameters (`MSP_PILOT_CONFIG`).
+- **In-Flight Live Adjustment Announcements (`telemetry_bg/adjustments`)**:
+  - Added real-time voice feedback when adjustments (e.g. gains, rates, governor trims) are changed via transmitter switches or rotary knobs during flight.
+- **Interactive Telemetry Log Plotting (`diagnostics/flight_logs`)**:
+  - Added graphical plotting of telemetry log channels against flight time.
+  - Sized the plot view accurately against the active page body rather than the full display height.
+- **Armed-State Safety & Visual Feedback (`ui/home.lua`, `ui/tiles.lua`)**:
+  - Replaced blocking full-screen armed warning with an intuitive status strip across the home menu and locked tile badges.
+  - Prevented MSP write and save actions while the craft is armed while maintaining passive telemetry draining.
+
+### Bug Fixes & Improvements
+- **Servos Configuration (`setup/servos/bus`, `setup/servos/pwm`)**:
+  - Corrected bus servo addressing across three distinct index spaces (hardware ID, logical servo index, protocol slot).
+  - Switched from full-table queries to individual servo queries (`get_servo_config`) to prevent telemetry RX buffer overflow.
+  - Extracted `servo_count` directly from status reply payloads.
+- **Adjustment Ranges Paging (`setup/controls/adjustments`)**:
+  - Implemented paged reading of adjustment tables (`MSP_ADJUSTMENT_RANGE`) on compatible firmware versions to prevent unread configurations from displaying as empty tables.
+- **ESC Configuration Hardening (YGE, Hobbywing V5, Scorpion, FlyRotor)**:
+  - Fixed 8-byte parameter payload alignment for YGE ESCs.
+  - Preserved byte-exact Hobbywing V5 device info blocks during save operations.
+  - Respected FlyRotor byte-order endianness flag and prevented unintentional serial number overwrites.
+  - Validated Scorpion response headers and payload lengths to reject short or malformed packets.
+  - Added post-save parameter re-reads across all ESC tools to wait out device save lockouts.
+- **Preferences & Settings Resilience**:
+  - Removed 2048-byte limit when reading `preferences.ini`, ensuring large preference stores load completely.
+  - Preserved section expansion states across page closes and reloads.
+  - Properly persisted the "Confirm on Save" setting.
+- **UI & Loading Overlay**:
+  - Added the Rotorflight logo and connection progress status on the start screen.
+  - Improved loading notice box geometry to support wrapping long titles and scaled line spacing from font metrics.
+  - Standardized all modal dialog calls to `lvgl.message` (removing invalid `lvgl.alert` calls).
+- **Localization (i18n)**:
+  - Enhanced packaging resolution for pages constructed via `buildSimplePage` and dynamic UI elements in German and English.
+
+### Performance & Memory Optimizations
+- **Dashboard Refresh & Theme Resolution**:
+  - Memoized dashboard theme script paths to avoid repeated path resolutions per cycle.
+  - Reused grid coordinate arithmetic during telemetry value-only repaints.
+  - Eliminated forced full garbage collection runs on every frame to avoid UI stuttering.
+- **Log Browser Pacing**:
+  - Switched telemetry log parsing to bounded, incremental read steps.
+  - Optimized string measurement with bisection line-breaking for log summary lists.
+
+# 0.1.4
+
+### Bug Fixes & Improvements
+- **Blackbox Status Page**:
+  - Fixed a nil index error (`attempt to index a nil value (upvalue 'SdcardSummaryApi')`) occurring when navigating away or closing the Blackbox status page while MSP summary queries are in flight.
+  - Safeguarded asynchronous MSP response callbacks against page unloads and nil module references.
+- **Controls & Modes Setup (`setup/controls/modes`)**:
+  - Standardized control heights for range inputs and action buttons (`+ Add`, `Set`, `X`, AUX/Logic choices, Min/Max numbers) to match the standard widget height used in the Rates and PIDs tables.
+  - Fixed focus loss when editing numbers or dropdowns by removing premature full-page rebuild calls from value setters.
+  - Expanded row heights and inter-row spacing to prevent separator lines from intersecting input controls.
+- **Controls & Failsafe Setup (`setup/controls/failsafe`)**:
+  - Standardized mode choice and failsafe pulse value inputs to native framework widget dimensions.
+  - Adjusted row height to `56 px` with centered vertical offsets to ensure clean visual separation and avoid divider line clipping.
+- **Hobbywing Platinum V5 ESC Configuration (`setup/esc_motors/esc_tools/hw5`)**:
+  - Fixed MSP parameter parsing and write serialization by implementing dynamic `itemBytes` profile layouts (`DEFAULT_LAYOUT`, `HW1132_LAYOUT`, `HW1128_LAYOUT`, `OPTO_LAYOUT`) matching Rotorflight firmware specifications.
+  - Fixed shifted and corrupted field values on OPTO ESCs (130A HV, 200A HV, 260A HV) caused by omitted BEC voltage field in OPTO telemetry payloads.
+  - Corrected raw offset translation for `startup_time` (`value = raw + 4`) on reading and writing.
+  - Fixed inverted `Active Freewheel` option mapping (`0 = Enabled`, `1 = Disabled`).
+  - Added support for `response_time` setting (1–10) on compatible ESC models (e.g. HW1132).
+  - Improved ESC model string decoding in `init.lua` to read full 31-byte model identification.
+  - Corrected profile detection and layout field filtering in `profile.lua`.
+
+# 0.1.3
+
+### Bug Fixes & Improvements
+- **Dashboard & Themes**:
+  - Fixed model-specific dashboard theme switching (`model_override`) to immediately take effect without requiring a radio restart.
+  - Corrected theme resolution fallback when model override is active and inflight/postflight themes are unassigned, ensuring the model's preflight theme remains active.
+  - Ensured theme configuration adjustments (e.g. BEC voltage bounds, RPM limits, ESC temperature thresholds) are saved synchronously to both global (`preferences.ini`) and model-specific (`<mcu_id>.ini`) configuration files.
+  - Added inter-process reload signaling between the configuration tool and standalone dashboard widgets using EdgeTX Global Variables (GV9 for FM0/FM8) and memory reload flags.
+  - Fixed runtime crash after FBL initialization caused by single-argument `lcd.RGB` call in `@srb-rc` theme and safeguarded color conversion helpers in `common.lua` and `gauge.lua`.
+  - Removed obsolete full-screen placeholder boxes in `@srb-rc` (`preflight.lua`, `inflight.lua`, `postflight.lua`) that caused unintended `"--"` text labels across the display.
+  - Adjusted Postflight grid layout from 7 rows to 3 rows to eliminate the bottom background gap and utilize 100% of the screen height.
+  - Corrected theme fallback loader in `runtime.lua` to properly fall back to the active flight mode's default theme script instead of non-existent `widget.lua`.
+- **Save Progress & Localization**:
+  - Fixed translation inlining for the save progress dialog (`app.saving` -> "Speichere...", `app.saving_settings` -> "Einstellungen werden angewendet").
+  - Fixed English language package deployment by standardizing internal code fallbacks to English across settings pages (`settings_general`, `settings_audio_events`, `settings_audio_switches`, `settings_audio_timer`, `settings_localization`).
+  - Enhanced the `precompile_i18n.py` build script to capture and inline dynamic `tr()` helper functions, `ctx.i18n` lookups, and section/item table definitions (`titleKey`/`titleFallback`, `labelKey`/`labelFallback`) during deployment and packaging.
+- **Scorpion ESC Parameter Writing**:
+  - Completed MSP 218 payload structure for Scorpion ESC (added missing `stick_max` and `stick_zero` fields to form full 84-byte payload) and named `serial_number`/`firmware_version` fields correctly to fix parameter save failures.
+- **ELRS Link & Telemetry**:
+  - Fixed ELRS packet rate parsing, RF link synchronization, and telemetry reload handling.
+- **Audio & Telemetry**:
+  - Restored model name and battery/initial fuel announcements upon model reconnect (e.g. plugging in a new battery) by resetting audio tracking states on connect and disconnect edges.
+  - Enabled `name`, `battery_config`, and `smartfuel_config` background OnConnect tasks in both tool and widget contexts so battery capacity and model names are immediately available.
+  - Added fallback to EdgeTX radio model name in `announceModelName()` if the FBL model name has not yet been received via MSP.
+  - Aligned fuel audio callout behavior in the RFSuite tool with the dashboard widget by prioritizing Smart Fuel (`SmFt` / `smartfuel`) telemetry over standard fuel (`Bat%` / `fuel`) and adding `smartfuel = "SmFt"` to sensor aliases.
+  - Renamed fuel callout option "Default (Only at 10%)" to "Only at 10%" ("Nur bei 10%") in audio event settings for clearer option distinction.
+- **Deployment & Tooling**:
+  - Supported configurable deployment language via VS Code settings (`rfsuite.deploy.language`) and build tasks.
+
+# 0.1.2
+
+### Performance & Memory Optimizations
+- **Module & Singleton Memoization (`require.lua`)**:
+  - Implemented centralized `rfsuite.require` module loader with bytecode and instance memoization to eliminate redundant disk reads and Lua compilations.
+  - Integrated memoization into Tools entrypoint, telemetry widgets, background tasks, and dashboard runtime.
+- **Dashboard Startup Pacing & Instruction Budget**:
+  - Preloaded and memoized all dashboard object wrappers and subrenderers (`text`, `image`, `time`, `gauge`).
+  - Removed artificial 14-box cap in simulator, allowing full layouts to render smoothly.
+- **Garbage Collection & GC-Churn Reduction**:
+  - Streamlined `Engine.renderKey` dirty-checking to eliminate intermediate table arrays and string allocations during refresh cycles.
+  - Guarded debug log string concatenations in hot telemetry polling paths.
+  - Eliminated anonymous closure allocations in repetitive MSP polling loops (`msp/queue.lua`) and background event runners.
+- **SD Card I/O Reduction & Asset Cleanup**:
+  - Removed redundant `io.open`/`close` probes in `help_registry.lua`.
+  - Added in-memory path caches for audio WAV events and model images to avoid repeated file system checks.
+  - Cleaned up obsolete legacy root icons from `src/rfsuite/assets/icons/`.
+
+# 0.1.1
+
+### Bug Fixes & Improvements
+- **ESC Forward Programming & MSP Communication**:
+  - Removed 4-Way Interface (`4wif_esc_fwd_prog`, MSP 244 target=100) from non-4WIF ESC manufacturers (XD-Fly, OMP, ZTW, Hobbywing Platinum V5, YGE, Scorpion, Flyrotor), eliminating motor beeping and communication timeouts.
+  - Corrected header byte layout (`esc_version` before `esc_model`) in `esc_parameters_xdfly.lua`, `esc_parameters_omp.lua`, and `esc_parameters_ztw.lua`.
+  - Fixed Governor P & I Gain active field mask indices for XD-Fly, OMP, and ZTW.
+- **Dynamic On-Connect ESC Telemetry Detection**:
+  - Added background OnConnect task `esc_sensor_config.lua` (with tool-only execution context) to query and dynamically enable active ESC tiles in the tools menu.
+- **Audio & Telemetry Reliability**:
+  - Restored `Audio.process` execution in configuration tool for announcements.
+  - Fast-tracked simulator sensor reloads (0.5s interval).
+
+# 0.1.0
+
+### Features
+- **Telemetry Flight Logs & Dashboard (`diagnostics/flight_logs`)**:
+  - Implemented flight log browser and analytical dashboard to inspect EdgeTX CSV log files directly on the radio.
+  - Added statistics calculations including min/max/average cell voltages, battery capacity consumption, RPM, temperatures, and flight durations.
+  - Added interactive `LoadingOverlay` with non-blocking incremental parsing and proactive memory cleanup to keep the UI responsive on large CSV files.
+- **RFSuite EdgeTX Updater Tool & CI**:
+  - Added standalone and integrated EdgeTX Updater tool for automatic online and local updating of RFSuite packages.
+  - Automated detection of available languages from repository branches and release tags.
+  - Added multi-language CI build workflows and packaging scripts.
+- **Governor Setup Pages**:
+  - Ported Governor General setup page (`governor/general`).
+  - Ported Governor Ramp Time configuration (`governor/ramps`).
+  - Ported Governor Filters setup page (`governor/filters`).
+  - Ported Governor Bypass Curve configuration (`governor/bypass`).
+- **Dynamic ESC Sensor Detection**:
+  - Added background `esc_sensor_config` task triggered on connection to query and identify active ESC telemetry protocol.
+- **Manufacturer ESC Tools Integration**:
+  - Ported and integrated full ESC configuration suites for Bluejay, BLHeli_S, Flyrotor, Hobbywing V5, OMP, Scorpion, XD-Fly, YGE, and ZTW.
+
+### Localization (i18n)
+- Localized flight tuning pages (PIDs, Rates, Governor, Rates Advanced) in German and English with fallback cleanup.
+
+### Bug Fixes & Performance
+- **Telemetry CSV Parsing Accuracy**: Improved header validation, outlier filtering (e.g. 0 RPM spikes), and memory efficiency during log analysis.
+- **Reconnect Performance**: Resolved telemetry reconnect slowdowns and memory buildup using proactive garbage collection and cached LQ checks.
+
+# 0.0.2
+
+### Features
+- **Compile-time Translation Inlining**: Introduced static translation inlining at compile time, simplified settings, and bumped version to 0.0.2.
+- **Fuel Announcements**: Added initial fuel announcement and implemented differentiation between electric and gas/glow models in fuel callouts.
+- **Developer Logging**: Made exit shutdown logging conditional on the developer `debug_level`.
+- **Dynamic ESC Tools Lockout**: Automatically enable/disable manufacturer-specific ESC Tool menu tiles based on the active telemetry protocol queried via `esc_sensor_config`.
+- **YGE ESC 12V BEC Support**: Dynamically adjust BEC voltage range up to 12.0V for supported models (205 HVT, 205 HVT BEC, 165 HVT, Aureus 105v2, Aureus 135v2, Saphir 155v2), capping older/standard models at 8.4V and synchronizing the `flags_bec12v` bit automatically.
+
+### Security & Armed State (Model Armed)
+- **Model Armed Blocking**:
+  - Implemented `isModelArmed()` check in `home.lua` using the passive ARM telemetry sensor.
+  - Blocked `MspRuntime.tick()` and active page wakeup from executing when model is armed to avoid serial connection hangs.
+  - Added a full-screen armed warning screen at boot and during runtime if the model is armed.
+  - Blocked subpage navigation, reloading, and saving actions with a warning dialog when armed.
+  - Added German & English localizations for the armed title and warning messages.
+- **Armed Warning Screen & Telemetry Check Optimization**:
+  - Kept `MspRuntime.tick()` running when armed to drain the serial RX buffer and prevent telemetry loss.
+  - Wrapped the armed warning screen in a standard page with a Close button and back-navigation support.
+  - Checked `getRSSI()` to detect telemetry loss, skipping the check in the simulator to allow simulation of the armed state.
+
+### Performance
+- **Lag Reduction**: Cached compiled Lua chunks and optimized the exit cleanup sequence to resolve lags.
+
+### Bug Fixes
+- **Audio Callouts & Alarms**:
+  - Corrected empty battery warning path for electric models to `"stat/alerts/lowbat.wav"` ("Flugakku leer") instead of the radio's native low battery warning.
+  - Optimized fuel threshold countdown logic to jump directly to the lowest crossed threshold without stepped intermediate announcements.
+- **Focus Preservation & Page Rebuilds**:
+  - Redesigned `buildSessionSignature()` across all ESC pages (AM32, BLHeli_S, Bluejay, Flycolor, Hobbywing V5, OMP, Scorpion, XD-Fly, YGE, ZTW) to prevent background wakeup loops from stealing focus while editing fields.
+  - Added value-change guards in `controls.lua` for number fields and combo selectors to ignore layout-time init events and prevent unintended dirty states.
+- **Telemetry Freezes & Hangs**:
+  - Unconditionally run `Events.wakeup()` in `home.lua` to keep the background `telemetry_bg` task running.
+  - Skip onconnect tasks when armed in `tasks/events/runtime.lua` to prevent FBL configuration requests.
+  - Run the `telemetry_bg` task even when armed to parse custom CRSF frames and update radio sensors.
+  - Skip startup version and UID reads when armed in `tasks/msp/runtime.lua`.
+- **Audio Processing**: Enabled `Audio.process` in the configuration tool for live voice feedback (profiles, rates, telemetry).
+- **ESC Configuration (AM32)**:
+  - Restored ESC target to 100 on `am32/page.lua` close and performed a post-save reset cycle to apply and save settings.
+  - Fixed MotorConfigApi command reference in `am32/page.lua` (using `.command` instead of `.readCommand`).
+  - Implemented retry logic for motor config reads when the FBL returns empty buffers.
+  - Added German & English localizations for ESC config loading and saving messages.
+- **Alignment Page**:
+  - Added guards for `ui.runtime` checks in `alignment/page.lua` async callbacks to prevent nil errors after page close.
+
+### UI & Miscellaneous
+- **Layout Redesign**: Redesigned alignment layout to two rows, widened Roll/Nick/Yaw fields and Magnetometer combobox to 160px.
+- **Git Config**: Updated `.gitignore`.

@@ -10,6 +10,7 @@ local function loadModule(path)
 end
 
 local Controls = nil
+local SavePipeline = nil
 local Common = nil
 local MspRuntime = nil
 local MixerConfigApi = nil
@@ -17,7 +18,6 @@ local MixerInputYawApi = nil
 local LoadingOverlay = nil
 local t = nil
 
-local needsReboot = false
 
 local function u16_to_s16(u)
   if u >= 0x8000 then
@@ -246,14 +246,9 @@ local function queueTailRead(isAutoReload)
 end
 
 local function queueTailWrite()
-  if not MspRuntime or not MixerConfigApi or not MixerInputYawApi or type(MspRuntime.getState) ~= "function" then
+  if not SavePipeline then SavePipeline = loadModule("tasks/msp/save_pipeline.lua") end
+  if not SavePipeline or not MixerConfigApi or not MixerInputYawApi then
     return false, "msp_runtime_unavailable"
-  end
-
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue or type(queue.add) ~= "function" then
-    return false, "msp_queue_unavailable"
   end
 
   local pConfig = ui.apiData.MIXER_CONFIG
@@ -262,6 +257,14 @@ local function queueTailWrite()
   if not pConfig or not pYaw then
     return false, "loaded_data_missing"
   end
+
+  -- Whether this save has to restart the flight controller is decided here, from the difference
+  -- between what was read and what is about to be written -- and it has to be read before the
+  -- copy-back below overwrites it. A module-level flag set when the control changed stood here
+  -- instead, and it was only ever cleared on the success path: a chain that died earlier left it
+  -- set, so the next save on this page restarted the board although the tail mode had not been
+  -- touched.
+  local tailModeChanged = pConfig.tail_rotor_mode ~= ui.config.tail_rotor_mode
 
   -- Copy values back
   pConfig.tail_rotor_mode = ui.config.tail_rotor_mode
@@ -293,51 +296,34 @@ local function queueTailWrite()
   pYaw.min_stabilized_yaw = s16_to_u16(-math.abs(cw_raw))
   pYaw.max_stabilized_yaw = s16_to_u16(math.abs(ccw_raw))
 
-  local mixerCfgPayload = MixerConfigApi.buildWritePayload(pConfig)
-  local yawPayload = MixerInputYawApi.buildWritePayload(pYaw)
-
-  queue:add({
-    command = MixerConfigApi.writeCommand,
-    payload = mixerCfgPayload,
-    isWrite = true,
-    processReply = function()
-      queue:add({
+  return SavePipeline.start({
+    pageId = "setup_mixer_tail",
+    steps = {
+      {
+        label = "MSP_SET_MIXER_CONFIG",
+        command = MixerConfigApi.writeCommand,
+        payload = MixerConfigApi.buildWritePayload(pConfig)
+      },
+      {
+        label = "MSP_SET_MIXER_INPUT_YAW",
         command = MixerInputYawApi.writeCommand,
-        payload = yawPayload,
-        isWrite = true,
-        processReply = function()
-          local eepromApi = loadModule("tasks/msp/api/eeprom_write.lua")
-          if eepromApi then
-            queue:add({
-              command = eepromApi.writeCommand,
-              payload = {},
-              isWrite = true,
-              processReply = function()
-                if needsReboot then
-                  local rebootApi = loadModule("tasks/msp/api/reboot.lua")
-                  if rebootApi then
-                    queue:add({
-                      command = rebootApi.writeCommand,
-                      payload = rebootApi.buildWritePayload({ rebootMode = 0 }),
-                      isWrite = true,
-                      processReply = function() end,
-                      errorHandler = function() end
-                    })
-                  end
-                  needsReboot = false
-                end
-              end,
-              errorHandler = function() end
-            })
-          end
-        end,
-        errorHandler = function() end
-      })
+        payload = MixerInputYawApi.buildWritePayload(pYaw)
+      }
+    },
+    reboot = tailModeChanged,
+    invalidateSessionKeys = { "setup_mixer_tail" },
+    onSaved = function()
+      ui.dirty = false
     end,
-    errorHandler = function() end
+    onDone = function(result)
+      if result.status ~= "done" then
+        ui.dirty = true
+      end
+      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
+        ui.runtime.requestRebuild()
+      end
+    end
   })
-
-  return true, nil
 end
 
 local function buildSessionSignature()
@@ -366,6 +352,11 @@ end
 function M.onActivate()
   ensureDeps()
   ensureLoaded()
+  -- A save whose overlay was dismissed finished without a screen. Its outcome was held
+  -- back rather than raised over whatever page the user went to; claim it now.
+  if SavePipeline and type(SavePipeline.takeResult) == "function" then
+    SavePipeline.takeResult("setup_mixer_tail")
+  end
 end
 
 function M.wakeup(ctx)
@@ -441,7 +432,6 @@ function M.build(ctx)
       if ui.config.tail_rotor_mode ~= newVal then
         ui.config.tail_rotor_mode = newVal
         ui.dirty = true
-        needsReboot = true
         if type(ui.runtime.requestRebuild) == "function" then
           ui.runtime.requestRebuild()
         end
@@ -576,8 +566,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueTailWrite()
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -585,13 +575,12 @@ function M.onSave(ctx)
     return false
   end
 
-  ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
-      title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
-      message = pageText(ctx and ctx.i18n, "saved_message", "Tail settings saved")
-    })
-  end
+  -- Nothing is announced here. This function has only QUEUED the save: the writes, the commit
+  -- and -- on this page -- the restart are all still ahead of it, and a dialog saying the
+  -- settings are saved would be a claim it cannot make. It was also drawn on TOP of the
+  -- overlay that reports the save, from a place where that overlay could not be repainted away
+  -- first, and while a native dialog stands the tool's run() does not run at all. The pipeline
+  -- reports the outcome in the overlay, once, when it knows it.
   return true
 end
 
@@ -605,9 +594,6 @@ function M.onReload(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

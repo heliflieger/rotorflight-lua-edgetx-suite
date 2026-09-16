@@ -66,6 +66,7 @@ local ui = {
   },
   servoBusEnabled = false,
   servoCount = 0,
+  servoLoaded = {},
   apiData = {},
   runtime = {
     readPending = false,
@@ -113,6 +114,27 @@ local function getRcConfig(session)
   return session.setup_servos_pwm
 end
 
+--- Snapshot one servo's values, once, so a cancel can put them back. Per servo rather than
+--- per table, because the paged read brings them one at a time.
+local function backupOriginalServo(i)
+  local s = ui.config.servos and ui.config.servos[i]
+  if not s then return end
+  ui.originalServos = ui.originalServos or {}
+  if ui.originalServos[i] ~= nil then return end
+  ui.originalServos[i] = {
+    mid = s.mid,
+    min = s.min,
+    max = s.max,
+    scaleNeg = s.scaleNeg,
+    scalePos = s.scalePos,
+    rate = s.rate,
+    speed = s.speed,
+    flags = s.flags,
+    reverse = s.reverse,
+    geometry = s.geometry
+  }
+end
+
 local function backupOriginalServos()
   if ui.originalServos then return end
   ui.originalServos = {}
@@ -138,6 +160,7 @@ local function loadFromSession()
   if not rcConfig then return end
 
   ui.servoCount = rcConfig.servoCount or 0
+  ui.servoLoaded = ui.servoLoaded or {}
   ui.servoBusEnabled = rcConfig.servoBusEnabled or false
   ui.mixerConfig.swash_type = rcConfig.swash_type or 0
   ui.mixerConfig.tail_rotor_mode = rcConfig.tail_rotor_mode or 0
@@ -326,6 +349,113 @@ local function rollbackChanges()
   end
 end
 
+--- Whether this firmware has the per-servo read.
+---
+--- MSP_GET_SERVO_CONFIG (125) and MSP_GET_BUS_SERVO_CONFIG (157) arrived in API 12.09. Below it
+--- the whole-table MSP_SERVO_CONFIGURATIONS is the only read there is.
+local PAGED_READ_API = {12, 0, 9}
+
+local function hasPagedServoReads()
+  local session = getSession()
+  local apiVersion = session and session.apiVersion
+  if not apiVersion or apiVersion == "" or tostring(apiVersion) == "0" then
+    return false
+  end
+  return ApiVersion and ApiVersion.isAtLeast and ApiVersion.isAtLeast(apiVersion, PAGED_READ_API)
+end
+
+--- Reads one servo's record with MSP_GET_SERVO_CONFIG (125), by RAW servoParams index.
+---
+--- The whole-table MSP_SERVO_CONFIGURATIONS is not used from API 12.09. With bus servos
+--- configured its reply is 1 + (getServoCount() + BUS_SERVO_CHANNELS) * 16 bytes -- 353 with four
+--- PWM servos, 417 with eight -- while the shared telemetry response buffer the CRSF path
+--- serialises into is MSP_TLM_OUTBUF_SIZE = 320 bytes and sbufWriteU8 has no bound check, so the
+--- reply is written past the end of a static buffer. Over USB that buffer is much larger and the
+--- command is safe there, which is why this is not visible from the configurator.
+local function queueServoRead(servoIdx, onDone)
+  local function done(ok)
+    if type(onDone) == "function" then onDone(ok) end
+  end
+
+  if not hasPagedServoReads() then
+    done(false)
+    return false
+  end
+
+  servoIdx = tonumber(servoIdx)
+  if not servoIdx or servoIdx < 0 then
+    done(false)
+    return false
+  end
+
+  if not MspRuntime or type(MspRuntime.getState) ~= "function" then
+    done(false)
+    return false
+  end
+  local mspState = MspRuntime.getState()
+  local queue = mspState and mspState.queue
+  if not queue or type(queue.add) ~= "function" then
+    done(false)
+    return false
+  end
+
+  local GetServoConfigApi = loadModule("tasks/msp/api/get_servo_config.lua")
+  if not GetServoConfigApi then
+    done(false)
+    return false
+  end
+
+  local raw = servoIdx
+
+  queue:add({
+    command = GetServoConfigApi.command,
+    payload = { raw },
+    isWrite = false,
+    simulatorResponse = GetServoConfigApi.simulatorResponse,
+    processReply = function(self, buf)
+      local parsed = GetServoConfigApi.parse(buf)
+      local rec = parsed and parsed.servo_config
+      if rec then
+        local s = {
+          mid = rec.mid,
+          min = rec.min,
+          max = rec.max,
+          scaleNeg = rec.rneg,
+          scalePos = rec.rpos,
+          rate = rec.rate,
+          speed = rec.speed,
+          flags = rec.flags
+        }
+        s.reverse = (s.flags == 1 or s.flags == 3) and 1 or 0
+        s.geometry = (s.flags == 2 or s.flags == 3) and 1 or 0
+        ui.config.servos = ui.config.servos or {}
+        ui.config.servos[raw] = s
+        ui.servoLoaded[raw] = true
+        backupOriginalServo(raw)
+      end
+      done(rec ~= nil)
+    end,
+    errorHandler = function()
+      done(false)
+    end
+  })
+
+  return true
+end
+
+--- What the whole-table read used to do at the end of a load, for one servo instead of all.
+local function finishServoLoad(ok)
+  ui.runtime.readPending = false
+  ui.loading = false
+  ui.dirty = false
+  ui.progress = 100
+  ui.loaded = true
+  saveToSession()
+  if type(ui.runtime.requestRebuild) == "function" then
+    ui.runtime.requestRebuild()
+  end
+end
+
 local function queueServosRead(isAutoReload)
   if ui.runtime.readPending then return false, "read_pending" end
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then
@@ -389,12 +519,12 @@ local function queueServosRead(isAutoReload)
             simulatorResponse = SerialConfigApi.simulatorResponse,
             processReply = function(self, buf)
               local parsed = SerialConfigApi.parse(buf)
-              if parsed and parsed.parsed then
+              if parsed then
                 local fbus_mask = 524288
                 local sbus_mask = 262144
                 local found = false
                 for i = 1, 12 do
-                  local mask = parsed.parsed["port_" .. i .. "_function_mask"]
+                  local mask = parsed["port_" .. i .. "_function_mask"]
                   if mask == fbus_mask or mask == sbus_mask then
                     found = true
                     break
@@ -408,13 +538,21 @@ local function queueServosRead(isAutoReload)
                 ui.runtime.requestRebuild()
               end
 
+              -- Step 4: the selected servo's own record, where the firmware has that read
+              if hasPagedServoReads() then
+                ui.servoLoaded = {}
+                if not queueServoRead(ui.selectedServoIndex, finishServoLoad) then
+                  finishServoLoad(false)
+                end
+                return
+              end
+
               -- Step 4: Read SERVO_CONFIGURATIONS
               queue:add({
                 command = ServoConfigsApi.command,
                 simulatorResponse = ServoConfigsApi.simulatorResponse,
                 processReply = function(self, buf)
-                  local res = ServoConfigsApi.parse(buf)
-                  local parsed = res and res.parsed
+                  local parsed = ServoConfigsApi.parse(buf)
                   if parsed then
                     ui.config.servos = {}
                     local count = parsed.servo_count or 0
@@ -442,6 +580,7 @@ local function queueServosRead(isAutoReload)
                       end
 
                       ui.config.servos[i] = s
+                      ui.servoLoaded[i] = true
                     end
                     backupOriginalServos()
                   end
@@ -660,7 +799,7 @@ function M.build(ctx)
   if ui.loading then
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
-      title = pageText(i18n, "loading", "Loading"),
+      title = "@i18n(app.loading)@",
       message = pageText(i18n, "loading", "Reading servos configuration..."),
       progress = ui.progress / 100
     })
@@ -717,6 +856,16 @@ function M.build(ctx)
     function(val)
       if ui.selectedServoIndex ~= val then
         ui.selectedServoIndex = val
+        -- Only the paged route leaves a servo unread; the whole-table route brought them all.
+        if hasPagedServoReads() and not ui.servoLoaded[val] then
+          ui.loading = true
+          queueServoRead(val, function()
+            ui.loading = false
+            if type(ui.runtime.requestRebuild) == "function" then
+              ui.runtime.requestRebuild()
+            end
+          end)
+        end
         if type(ui.runtime.requestRebuild) == "function" then
           ui.runtime.requestRebuild()
         end
@@ -726,6 +875,10 @@ function M.build(ctx)
       active = function() return not ui.inOverride end
     }
   )
+
+  -- Everything below is the selected servo's own record, so it is drawn only once that
+  -- record has been read. Editing what an unfinished read left behind would write it back.
+  if not ui.servoLoaded[ui.selectedServoIndex] then return end
 
   local idx = ui.selectedServoIndex
   local s = ui.config.servos[idx]
@@ -919,8 +1072,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueServoWrite(ui.selectedServoIndex)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -929,8 +1082,8 @@ function M.onSave(ctx)
   end
 
   ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
+  if ctx and type(ctx.reportSave) == "function" then
+    ctx.reportSave({
       title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
       message = pageText(ctx and ctx.i18n, "saved_message", "Servo settings saved")
     })
@@ -986,9 +1139,6 @@ function M.onStar(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if ui.inOverride then

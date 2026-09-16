@@ -14,7 +14,7 @@ local DEBUG_PREFIX = "[dashboard.builder] "
 
 local function debugLog(message)
   if Log and type(Log.emit) == "function" then
-    Log.emit("dashboard.builder", DEBUG_PREFIX .. tostring(message), "debug", true)
+    Log.emit("dashboard.builder", DEBUG_PREFIX .. tostring(message), "debug")
   end
 end
 

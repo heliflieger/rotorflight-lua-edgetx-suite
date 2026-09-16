@@ -32,11 +32,20 @@ function M.createFormRuntime(ui)
     requestRebuild = nil,
     sectionToggleHandlers = {},
     boolGetters = {},
-    boolSetters = {}
+    boolSetters = {},
+    valueSetters = {}
   }
 
+  -- A page may draw different controls depending on the value that has just
+  -- changed, so every change has to be able to ask for a repaint. ui.dirty
+  -- records that the page has been edited; it must not also act as a one-shot
+  -- guard in front of the rebuild request. That is what left the three
+  -- per-model combos of settings/dashboard/theme/page.lua on screen after the
+  -- Model Override switch that gates them had been turned back off: the first
+  -- change of a visit rebuilt, no later one did, and the page has no wakeup
+  -- hook to catch it afterwards. Asking is cheap - ui/home.lua only raises a
+  -- pending flag and coalesces it into at most one build per frame.
   local function markDirty()
-    if ui.dirty then return end
     ui.dirty = true
     local rebuild = runtime.requestRebuild
     if rebuild then rebuild() end
@@ -48,6 +57,16 @@ function M.createFormRuntime(ui)
 
   function runtime.markDirty()
     markDirty()
+  end
+
+  -- The same flag WITHOUT the rebuild, and it exists because of the difference between a
+  -- numberEdit and everything else. A numberEdit calls its `set` on every click while its
+  -- editor is open, and a rebuild destroys that editor: the remaining clicks then move the
+  -- focus instead of the value. So a control that is edited in place marks the page dirty
+  -- through this, and a control that can change WHICH controls are drawn -- a switch that
+  -- gates a section, a combo that commits and closes -- goes through markDirty above.
+  function runtime.markValueChanged()
+    ui.dirty = true
   end
 
   function runtime.getSectionToggleHandler(name)
@@ -75,6 +94,20 @@ function M.createFormRuntime(ui)
     return getter
   end
 
+  -- The value analogue of getBoolSetter, for a plain `ui.config[key] = value` control.
+  function runtime.getValueSetter(key)
+    local setter = runtime.valueSetters[key]
+    if setter then return setter end
+
+    setter = function(nextVal)
+      if ui.config[key] == nextVal then return end
+      ui.config[key] = nextVal
+      ui.dirty = true
+    end
+    runtime.valueSetters[key] = setter
+    return setter
+  end
+
   function runtime.getBoolSetter(key)
     local setter = runtime.boolSetters[key]
     if setter then return setter end
@@ -90,12 +123,44 @@ function M.createFormRuntime(ui)
   return runtime
 end
 
+local Profile = nil
+
+local function loadProfile()
+  if Profile == nil then
+    if _G.rfsuite and _G.rfsuite.require then
+      Profile = _G.rfsuite.require("lib/profile.lua") or false
+    else
+      local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/profile.lua", "t")
+      if type(chunk) == "function" then
+        local ok, mod = pcall(chunk)
+        Profile = (ok and mod) or false
+      else
+        Profile = false
+      end
+    end
+  end
+  return (Profile ~= false and Profile) or nil
+end
+
 function M.createProfileAwareRuntime(options)
   options = options or {}
 
+  local profileGetter = options.profileGetter
+  if not profileGetter then
+    local profileType = options.profileType or "pid"
+    local profileHelper = loadProfile()
+    if profileHelper then
+      if profileType == "rate" or profileType == "rate_profile" then
+        profileGetter = function() return profileHelper.getActiveRateProfile() end
+      else
+        profileGetter = function() return profileHelper.getActivePidProfile() end
+      end
+    end
+  end
+
   local runtime = {
     requestRebuild = nil,
-    profileGetter = options.profileGetter,
+    profileGetter = profileGetter,
     lastProfile = nil
   }
 
@@ -124,6 +189,18 @@ function M.createProfileAwareRuntime(options)
   end
 
   return runtime
+end
+
+-- A received reply can still be rejected by its parser. Leave the page reloadable, but
+-- never let the defaults left on screen become a write to the flight controller.
+function M.failPageRead(ui)
+  if type(ui.runtime) ~= "table" then return end
+  ui.runtime.readComplete = false
+  ui.runtime.readPending = false
+  ui.loading = false
+  if type(ui.runtime.requestRebuild) == "function" then
+    ui.runtime.requestRebuild()
+  end
 end
 
 -- Shared teardown helper for page modules.
@@ -159,6 +236,9 @@ function M.resetPageState(ui, opts)
   end
   ui.runtime = nil
 
+  -- Only list tables that build() re-creates. registry.release() runs this hook
+  -- and then keeps the module in its cache, so a table that is emptied here and
+  -- filled in at load time stays empty for the rest of the session.
   local tablesToWipe = opts.tablesToWipe
   if type(tablesToWipe) == "table" then
     for i = 1, #tablesToWipe do
@@ -197,19 +277,24 @@ function M.appendSectionHeader(children, x, y, w, title)
     y = y + 34,
     w = w,
     h = 1,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true
   }
 end
 
-function M.appendSettingsRow(children, x, y, w, labelText, valueText, withArrow)
+function M.appendSettingsRow(children, x, y, w, labelText, valueText, withArrow, rowH)
+  local ctrlH = (lvgl and lvgl.UI_ELEMENT_HEIGHT) or 32
+  rowH = rowH or math.max(44, ctrlH + 12)
+  local fontH = (lvgl and lvgl.LCD_SCALE and math.floor(21 * lvgl.LCD_SCALE + 0.5)) or 21
+  local labelY = y + math.floor((rowH - fontH) / 2)
+  local ctrlY = y + math.floor((rowH - ctrlH) / 2)
   local valueW = math.floor(w * 0.50)
   local valueX = x + w - valueW
 
   children[#children + 1] = {
     type = "label",
     x = x,
-    y = y + 10,
+    y = labelY,
     w = valueX - x - 8,
     text = labelText,
     color = WHITE,
@@ -219,10 +304,10 @@ function M.appendSettingsRow(children, x, y, w, labelText, valueText, withArrow)
   children[#children + 1] = {
     type = "rectangle",
     x = valueX,
-    y = y,
+    y = ctrlY,
     w = valueW,
-    h = 40,
-    color = GREY_DEFAULT,
+    h = ctrlH,
+    color = COLOR_THEME_SECONDARY2,
     filled = true
   }
 
@@ -230,7 +315,7 @@ function M.appendSettingsRow(children, x, y, w, labelText, valueText, withArrow)
   children[#children + 1] = {
     type = "label",
     x = valueX + 6,
-    y = y + 10,
+    y = labelY,
     w = valueLabelW,
     text = valueText,
     color = WHITE,
@@ -242,7 +327,7 @@ function M.appendSettingsRow(children, x, y, w, labelText, valueText, withArrow)
     children[#children + 1] = {
       type = "label",
       x = valueX + valueW - 20,
-      y = y + 10,
+      y = labelY,
       w = 14,
       text = "v",
       color = WHITE,
@@ -254,10 +339,10 @@ function M.appendSettingsRow(children, x, y, w, labelText, valueText, withArrow)
   children[#children + 1] = {
     type = "rectangle",
     x = x,
-    y = y + 40,
+    y = y + rowH - 1,
     w = w,
     h = 1,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = true
   }
 end
@@ -272,12 +357,14 @@ function M.buildSimplePage(ctx, pageKey, sectionKey, sectionFallback, rows)
   M.appendSectionHeader(children, x, y, w, M.t(i18n, pageKey, sectionKey, sectionFallback))
 
   local rowY = y + 46
+  local ctrlH = (lvgl and lvgl.UI_ELEMENT_HEIGHT) or 32
+  local rowH = math.max(44, ctrlH + 12)
   for i = 1, #rows do
     local row = rows[i]
-    local yOffset = (i - 1) * 44
+    local yOffset = (i - 1) * rowH
     local label = M.t(i18n, pageKey, row.labelKey, row.labelFallback)
     local value = M.t(i18n, pageKey, row.valueKey, row.valueFallback)
-    M.appendSettingsRow(children, x, rowY + yOffset, w, label, value, row.withArrow ~= false)
+    M.appendSettingsRow(children, x, rowY + yOffset, w, label, value, row.withArrow ~= false, rowH)
   end
 end
 

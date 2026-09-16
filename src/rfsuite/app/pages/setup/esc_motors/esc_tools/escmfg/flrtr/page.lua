@@ -15,6 +15,7 @@ local MspRuntime = nil
 local EscParametersFlyrotorApi = nil
 local LoadingOverlay = nil
 local ConfirmDialog = nil
+local FlrtrInit = nil
 local t = nil
 
 local ui = {
@@ -46,6 +47,9 @@ local ui = {
   },
   currentSection = 1,
   parsedCache = nil,
+  escModel = nil,
+  escVersion = nil,
+  escFirmware = nil,
   runtime = {
     readPending = false,
     requestRebuild = nil,
@@ -68,6 +72,7 @@ local function ensureDeps()
   if not EscParametersFlyrotorApi then EscParametersFlyrotorApi = loadModule("tasks/msp/api/esc_parameters_flyrotor.lua") end
   if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
   if not ConfirmDialog then ConfirmDialog = loadModule("ui/confirm_dialog.lua") end
+  if not FlrtrInit then FlrtrInit = loadModule("app/pages/setup/esc_motors/esc_tools/escmfg/flrtr/init.lua") end
   if not t then t = Common and Common.pageT("setup_esc_motors") or nil end
 
   if type(ui.runtime) ~= "table" then
@@ -102,7 +107,7 @@ end
 local function logMsg(msg, level)
   local Log = loadModule("lib/log.lua")
   if Log and type(Log.emit) == "function" then
-    Log.emit("rfsuite.flrtr", msg, level or "debug", true)
+    Log.emit("rfsuite.flrtr", msg, level or "debug")
   end
 end
 
@@ -122,11 +127,22 @@ local function queueFlyrotorReadActual(queue)
 
         ui.parsedCache = parsed
 
+        local escModel = FlrtrInit and type(FlrtrInit.getEscModel) == "function" and FlrtrInit.getEscModel(buf) or nil
+        local escVersion = FlrtrInit and type(FlrtrInit.getEscVersion) == "function" and FlrtrInit.getEscVersion(buf) or nil
+        local escFirmware = FlrtrInit and type(FlrtrInit.getEscFirmware) == "function" and FlrtrInit.getEscFirmware(buf) or nil
+
+        ui.escModel = escModel
+        ui.escVersion = escVersion
+        ui.escFirmware = escFirmware
+
         local session = getSession()
         if session then
           session.setup_esc_motors_esc_tools_flrtr = {
             config = {},
-            parsedCache = ui.parsedCache
+            parsedCache = ui.parsedCache,
+            escModel = escModel,
+            escVersion = escVersion,
+            escFirmware = escFirmware
           }
           for k, v in pairs(ui.config) do
             session.setup_esc_motors_esc_tools_flrtr.config[k] = v
@@ -174,100 +190,8 @@ local function queueFlyrotorRead(isAutoReload)
     end
   end
 
-  local FwdProgApi = loadModule("tasks/msp/api/4wif_esc_fwd_prog.lua")
-  if FwdProgApi then
-    if not ui.connState or ui.connState == 0 then
-      ui.connState = 1
-      queue:add({
-        command = FwdProgApi.writeCommand,
-        payload = FwdProgApi.buildWritePayload({ target = 100 }),
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function()
-          if not ui.runtime then return end
-          ui.connState = 2
-          ui.connTimer = nowSeconds()
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end,
-        errorHandler = function()
-          if not ui.runtime then return end
-          ui.connState = 0
-          ui.loading = false
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end
-      })
-    elseif ui.connState == 3 then
-      queue:add({
-        command = FwdProgApi.writeCommand,
-        payload = FwdProgApi.buildWritePayload({ target = ui.escTarget or 0 }),
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function()
-          if not ui.runtime then return end
-          ui.connState = 4
-          ui.connTimer = nowSeconds()
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end,
-        errorHandler = function()
-          if not ui.runtime then return end
-          ui.connState = 0
-          ui.loading = false
-          ui.runtime.readPending = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end
-      })
-    elseif ui.connState == 5 then
-      queueFlyrotorReadActual(queue)
-    else
-      ui.runtime.readPending = false
-    end
-  else
-    queueFlyrotorReadActual(queue)
-  end
-
+  queueFlyrotorReadActual(queue)
   return true, nil
-end
-
-local function queuePostSaveReset(target, nextState)
-  local FwdProgApi = loadModule("tasks/msp/api/4wif_esc_fwd_prog.lua")
-  if not FwdProgApi or not MspRuntime or type(MspRuntime.getState) ~= "function" then
-    return
-  end
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue then return end
-
-  queue:add({
-    command = FwdProgApi.writeCommand,
-    payload = FwdProgApi.buildWritePayload({ target = target }),
-    isWrite = true,
-    simulatorResponse = {},
-    processReply = function()
-      ui.connState = nextState
-      ui.connTimer = nowSeconds()
-      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
-    end,
-    errorHandler = function()
-      ui.connState = 5
-      ui.saving = false
-      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
-    end
-  })
 end
 
 local function queueFlyrotorWrite(requestRebuild)
@@ -299,19 +223,24 @@ local function queueFlyrotorWrite(requestRebuild)
 
   queue:add({
     command = EscParametersFlyrotorApi.writeCommand,
-    timeout = 15,
+    timeout = 5,
+    maxRetries = 1,
     payload = EscParametersFlyrotorApi.buildWritePayload(writeData),
     isWrite = true,
     processReply = function(self, buf)
       ui.dirty = false
-      ui.connState = 6
-      ui.connTimer = nowSeconds()
+      ui.saving = false
+      ui.progress = 100
       if requestRebuild and type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
     end,
     errorHandler = function()
       ui.saving = false
+      ui.notice = {
+        title = pageText(ui.i18n, "save_failed_title", "Save Failed"),
+        message = pageText(ui.i18n, "save_failed_message", "ESC did not respond / write timed out.")
+      }
       if requestRebuild and type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
@@ -335,6 +264,9 @@ local function loadFromSession()
       end
     end
     ui.parsedCache = cached.parsedCache
+    ui.escModel = cached.escModel
+    ui.escVersion = cached.escVersion
+    ui.escFirmware = cached.escFirmware
     return true
   end
   return false
@@ -419,22 +351,16 @@ local function ensureLoaded()
   ui.dirty = false
   ui.runtime.lastSessionSignature = buildSessionSignature()
   
-  local warningTitle = pageText(nil, "safety_warning_title", "Safety Warning")
-  local warningMsg = pageText(nil, "remove_blades_warning", "Please remove main and tail blades before configuring the ESC!")
-
-  if lvgl then
-    if type(lvgl.message) == "function" then
-      pcall(lvgl.message, {
-        title = warningTitle,
-        message = warningMsg
-      })
-    elseif type(lvgl.alert) == "function" then
-      pcall(lvgl.alert, {
-        title = warningTitle,
-        message = warningMsg
-      })
-    end
-  end
+  -- The safety warning is raised from HERE, which is inside the page build. A native
+  -- lvgl.message raised there cannot be closed by a hardware key: Layer::push gives the
+  -- dialog an empty LVGL group, but the same build goes on creating this page's objects
+  -- afterwards and they land in it, so EXIT is delivered to a widget behind the modal. It
+  -- is now the tool's own notice box, drawn into the page's own child list and dismissed
+  -- by its own button -- which also keeps the tool's run loop reachable while it stands.
+  ui.notice = {
+    title = pageText(nil, "safety_warning_title", "Safety Warning"),
+    message = pageText(nil, "remove_blades_warning", "Please remove main and tail blades before configuring the ESC!")
+  }
   queueFlyrotorRead(false)
 end
 
@@ -463,35 +389,6 @@ function M.wakeup(ctx)
     end
   end
 
-  -- 4way target switch delay timing and post-save cycle
-  if ui.connState == 2 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 2.5 then
-      ui.connState = 3
-      queueFlyrotorRead(false)
-    end
-  elseif ui.connState == 4 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 5.0 then
-      ui.connState = 5
-      queueFlyrotorRead(false)
-    end
-  elseif ui.connState == 6 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 1.0 then
-      ui.connState = 7
-      queuePostSaveReset(100, 8)
-    end
-  elseif ui.connState == 8 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 1.0 then
-      ui.connState = 9
-      queuePostSaveReset(ui.escTarget or 0, 10)
-    end
-  elseif ui.connState == 10 and ui.connTimer then
-    if nowSeconds() - ui.connTimer >= 0.5 then
-      ui.connState = 5
-      ui.saving = false
-      queueFlyrotorRead(true)
-    end
-  end
-
   if ui.motorConfigRetryPending and ui.motorConfigRetryTimer then
     if nowSeconds() - ui.motorConfigRetryTimer >= 0.5 then
       ui.motorConfigRetryPending = false
@@ -512,8 +409,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueFlyrotorWrite(ctx and ctx.requestRebuild)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -525,8 +422,6 @@ end
 
 function M.onReload(ctx)
   ui.dirty = false
-  ui.connState = 0
-  ui.connTimer = nil
   queueFlyrotorRead(false)
   return true
 end
@@ -537,6 +432,7 @@ function M.build(ctx)
 
   ui.runtime.requestRebuild = ctx and ctx.requestRebuild or nil
   ui.runtime.syncHeaderTitle = ctx and ctx.syncHeaderTitle or nil
+  ui.i18n = ctx and ctx.i18n or nil
 
   local children = ctx.children
   local x = ctx.x
@@ -548,6 +444,21 @@ function M.build(ctx)
   local title = "Flyrotor Configurator"
   if type(ui.runtime.syncHeaderTitle) == "function" then
     ui.runtime.syncHeaderTitle(title, M.getHeaderActions())
+  end
+
+  if ui.notice and LoadingOverlay and type(LoadingOverlay.appendNotice) == "function" then
+    LoadingOverlay.appendNotice(children, {
+      x = x, y = y, w = w, h = h,
+      title = ui.notice.title,
+      message = ui.notice.message,
+      press = function()
+        ui.notice = nil
+        if type(ui.runtime.requestRebuild) == "function" then
+          ui.runtime.requestRebuild()
+        end
+      end
+    })
+    return
   end
 
   if ui.loading or ui.saving then
@@ -566,8 +477,20 @@ function M.build(ctx)
 
   local cursorY = y
   if Controls and type(Controls.appendStaticSectionHeader) == "function" then
-    Controls.appendStaticSectionHeader(children, x, cursorY, w, title)
+    local headerTitle = title
+    if ui.escModel and ui.escModel ~= "" and ui.escModel ~= title then
+      if string.find(string.lower(ui.escModel), string.lower(title), 1, true) then
+        headerTitle = ui.escModel
+      else
+        headerTitle = title .. " - " .. ui.escModel
+      end
+    end
+    Controls.appendStaticSectionHeader(children, x, cursorY, w, headerTitle)
     cursorY = cursorY + (Controls.STATIC_SECTION_H or 50)
+  end
+
+  if Controls and type(Controls.appendEscSubheader) == "function" then
+    cursorY = cursorY + Controls.appendEscSubheader(children, x, cursorY, w, ui.escFirmware, ui.escVersion)
   end
 
   local rowH
@@ -578,7 +501,8 @@ function M.build(ctx)
       { value = 1, label = "ESC 2" }
     }
     local escTargetVal = ui.escTarget or 0
-    rowH = Controls.appendComboSelect(children, x, cursorY, w, "ESC Target", escOptions, escTargetVal, function(val)
+    local targetLabel = pageText(i18n, "esc_target", "ESC Target")
+    rowH = Controls.appendComboSelect(children, x, cursorY, w, targetLabel, escOptions, escTargetVal, function(val)
       local targetVal = tonumber(val) or 0
       if ui.escTarget ~= targetVal then
         ui.escTarget = targetVal
@@ -597,8 +521,13 @@ function M.build(ctx)
     { value = 2, label = "Advanced" },
     { value = 3, label = "Governor" }
   }
-  rowH = Controls.appendComboSelect(children, x, cursorY, w, "Section", sectionOptions, ui.currentSection, function(val)
+  local sectionLabel = pageText(i18n, "esc_section", "Section")
+  rowH = Controls.appendComboSelect(children, x, cursorY, w, sectionLabel, sectionOptions, ui.currentSection, function(val)
     ui.currentSection = val
+    -- The section is the whole of the session signature, and `M.wakeup` compares that signature
+    -- on the next tick. Recording it here means the rebuild requested below is the only one:
+    -- without it the wakeup sees a change nobody else made and asks for a second, identical build.
+    ui.runtime.lastSessionSignature = tostring(ui.currentSection)
     if type(ui.runtime.requestRebuild) == "function" then
       ui.runtime.requestRebuild()
     end
@@ -607,14 +536,11 @@ function M.build(ctx)
 
   local function markDirty()
     ui.dirty = true
-    if type(ui.runtime.requestRebuild) == "function" then
-      ui.runtime.requestRebuild()
-    end
   end
 
   if ui.currentSection == 1 then
     -- Basic Settings
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Cell Count", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_cell_count", "Cell Count"), {
       min = 4, max = 14, step = 1,
       get = function() return ui.config.cell_count end,
       set = function(val)
@@ -624,7 +550,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Low Voltage Protection", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_low_voltage_protection", "Low Voltage Protection"), {
       min = 28, max = 38, step = 1,
       display = function(val) return string.format("%.1fV", val / 10) end,
       get = function() return ui.config.low_voltage_protection end,
@@ -635,7 +561,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Temperature Protection", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_temperature_protection", "Temperature Protection"), {
       min = 50, max = 135, step = 5, suffix = "C",
       get = function() return ui.config.temperature_protection end,
       set = function(val)
@@ -652,7 +578,8 @@ function M.build(ctx)
       { value = 3, label = "8.5V" },
       { value = 4, label = "12.0V" }
     }
-    rowH = Controls.appendComboSelect(children, x, cursorY, w, "BEC Voltage", becOpts, ui.config.bec_voltage, function(val)
+    local becVoltageLabel = pageText(i18n, "esc_bec_voltage", "BEC Voltage")
+    rowH = Controls.appendComboSelect(children, x, cursorY, w, becVoltageLabel, becOpts, ui.config.bec_voltage, function(val)
       ui.config.bec_voltage = val
       markDirty()
     end)
@@ -671,7 +598,8 @@ function M.build(ctx)
       { value = 9, label = "9 deg" },
       { value = 10, label = "10 deg" }
     }
-    rowH = Controls.appendComboSelect(children, x, cursorY, w, "Electrical Angle", angleOpts, ui.config.electrical_angle, function(val)
+    local electricalAngleLabel = pageText(i18n, "esc_electrical_angle", "Electrical Angle")
+    rowH = Controls.appendComboSelect(children, x, cursorY, w, electricalAngleLabel, angleOpts, ui.config.electrical_angle, function(val)
       ui.config.electrical_angle = val
       markDirty()
     end)
@@ -681,13 +609,14 @@ function M.build(ctx)
       { value = 0, label = "CW" },
       { value = 1, label = "CCW" }
     }
-    rowH = Controls.appendComboSelect(children, x, cursorY, w, "Motor Direction", dirOpts, ui.config.motor_direction, function(val)
+    local motorDirectionLabel = pageText(i18n, "esc_motor_direction", "Motor Direction")
+    rowH = Controls.appendComboSelect(children, x, cursorY, w, motorDirectionLabel, dirOpts, ui.config.motor_direction, function(val)
       ui.config.motor_direction = val
       markDirty()
     end)
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Starting Torque", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_starting_torque", "Starting Torque"), {
       min = 1, max = 15, step = 1,
       get = function() return ui.config.starting_torque end,
       set = function(val)
@@ -697,7 +626,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Response Speed", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_response_speed", "Response Speed"), {
       min = 1, max = 15, step = 1,
       get = function() return ui.config.response_speed end,
       set = function(val)
@@ -707,7 +636,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Buzzer Volume", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_buzzer_volume", "Buzzer Volume"), {
       min = 1, max = 5, step = 1,
       get = function() return ui.config.buzzer_volume end,
       set = function(val)
@@ -717,7 +646,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Current Gain", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_current_gain", "Current Gain"), {
       min = 0, max = 40, step = 1,
       display = function(val) return tostring(val - 20) end,
       get = function() return ui.config.current_gain end,
@@ -733,7 +662,8 @@ function M.build(ctx)
       { value = 1, label = "Always On" },
       { value = 2, label = "Always Off" }
     }
-    rowH = Controls.appendComboSelect(children, x, cursorY, w, "Fan Control", fanOpts, ui.config.fan_control, function(val)
+    local fanControlLabel = pageText(i18n, "esc_fan_control", "Fan Control")
+    rowH = Controls.appendComboSelect(children, x, cursorY, w, fanControlLabel, fanOpts, ui.config.fan_control, function(val)
       ui.config.fan_control = val
       markDirty()
     end)
@@ -741,7 +671,7 @@ function M.build(ctx)
 
   elseif ui.currentSection == 2 then
     -- Advanced Settings
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Auto Restart Time", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_auto_restart_time", "Auto Restart Time"), {
       min = 0, max = 100, step = 1, suffix = "s",
       get = function() return ui.config.auto_restart_time end,
       set = function(val)
@@ -751,7 +681,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Restart Acc", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_restart_acc", "Restart Acc"), {
       min = 1, max = 10, step = 1,
       get = function() return ui.config.restart_acc end,
       set = function(val)
@@ -768,13 +698,14 @@ function M.build(ctx)
       { value = 1, label = "Linear Throttle" },
       { value = 2, label = "RF Gov" }
     }
-    rowH = Controls.appendComboSelect(children, x, cursorY, w, "ESC Mode", modeOpts, ui.config.esc_mode, function(val)
+    local modeLabel = pageText(i18n, "esc_mode", "ESC Mode")
+    rowH = Controls.appendComboSelect(children, x, cursorY, w, modeLabel, modeOpts, ui.config.esc_mode, function(val)
       ui.config.esc_mode = val
       markDirty()
     end)
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Soft Start", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_soft_start", "Soft Start"), {
       min = 5, max = 55, step = 1, suffix = "s",
       get = function() return ui.config.soft_start end,
       set = function(val)
@@ -784,7 +715,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Governor P", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_governor_p", "Governor P"), {
       min = 0, max = 100, step = 1,
       get = function() return ui.config.gov_p end,
       set = function(val)
@@ -794,7 +725,7 @@ function M.build(ctx)
     })
     cursorY = cursorY + rowH
 
-    rowH = Controls.appendNumberField(children, x, cursorY, w, "Governor I", {
+    rowH = Controls.appendNumberField(children, x, cursorY, w, pageText(i18n, "esc_governor_i", "Governor I"), {
       min = 0, max = 100, step = 1,
       get = function() return ui.config.gov_i end,
       set = function(val)
@@ -805,36 +736,20 @@ function M.build(ctx)
     cursorY = cursorY + rowH
   end
 
-  if ui.dirty then
-    children[#children + 1] = {
-      type = "label",
-      x = x + 16, y = cursorY + 10,
-      text = pageText(i18n, "unsaved_changes", "Unsaved changes"),
-      color = COLOR_THEME_SECONDARY1,
-      font = SMLSIZE
-    }
-  end
+  -- The label is built once and reads the flag itself, so a change that sets the flag
+  -- does not have to replace the scene to show it. The text is resolved here rather
+  -- than inside the closure: the closure runs on every refresh, the lookup need not.
+  local unsavedText = pageText(i18n, "unsaved_changes", "Unsaved changes")
+  children[#children + 1] = {
+    type = "label",
+    x = x + 16, y = cursorY + 10,
+    text = function() return ui.dirty and unsavedText or "" end,
+    color = COLOR_THEME_SECONDARY1,
+    font = SMLSIZE
+  }
 end
 
 function M.onClose()
-  local FwdProgApi = loadModule("tasks/msp/api/4wif_esc_fwd_prog.lua")
-  if FwdProgApi and MspRuntime and type(MspRuntime.getState) == "function" then
-    local mspState = MspRuntime.getState()
-    local queue = mspState and mspState.queue
-    if queue then
-      queue:add({
-        command = FwdProgApi.writeCommand,
-        payload = FwdProgApi.buildWritePayload({ target = 100 }),
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function() end,
-        errorHandler = function() end
-      })
-    end
-  end
-
-  ui.connState = nil
-  ui.connTimer = nil
   ui.escTarget = nil
   ui.motorCount = nil
   ui.motorConfigRetryPending = nil
@@ -851,6 +766,7 @@ function M.onClose()
   EscParametersFlyrotorApi = nil
   LoadingOverlay = nil
   ConfirmDialog = nil
+  FlrtrInit = nil
   t = nil
 end
 

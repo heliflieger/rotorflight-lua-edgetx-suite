@@ -1,6 +1,6 @@
 local Api = {
   command = 3,
-  simulatorResponse = { 4, 5, 1 }
+  simulatorResponse = { 4, 6, 0 }
 }
 
 function Api.parse(buf)

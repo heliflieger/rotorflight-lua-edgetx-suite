@@ -1,4 +1,5 @@
 {
+    "rfsuite.deploy.language": "de",
     "python-envs.pythonProjects": [
         {
             "path": ".",
@@ -38,7 +39,6 @@
         "BLUE",
         "MAGENTA",
         "CYAN",
-        "GREY_DEFAULT",
         "DBLSIZE",
         "MIDSIZE",
         "SMLSIZE",

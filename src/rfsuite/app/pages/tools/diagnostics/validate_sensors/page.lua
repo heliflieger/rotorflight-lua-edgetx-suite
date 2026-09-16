@@ -483,8 +483,9 @@ function M.getValidationSummary(opts)
   opts = opts or {}
 
   ensureDeps()
+  local session = getSession()
+  local loaded = type(session) == "table" and type(session.telemetry_config) == "table"
   if opts.passive == true then
-    local session = getSession()
     if type(session) == "table" and type(session.telemetry_config) == "table" then
       local rows, signature = buildRows()
       if state.rowSignature ~= signature then
@@ -505,6 +506,7 @@ function M.getValidationSummary(opts)
   end
 
   return {
+    loaded = loaded,
     total = #state.rows,
     ok = okCount,
     invalid = #state.rows - okCount,

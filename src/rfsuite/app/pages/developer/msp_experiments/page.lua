@@ -139,8 +139,11 @@ local function startLiveLoad()
     AsyncLoadUi.begin(state, nowSeconds(), 1, true)
 
     queue:add({
+        client = "exp-page",
         command = ExperimentalApi.command,
         simulatorResponse = ExperimentalApi.simulatorResponse,
+        retryDelay = 1.2,
+        timeout = 3.5,
         processReply = function(_, buf)
             local parsed = ExperimentalApi.parse(buf)
             if parsed then
@@ -153,7 +156,7 @@ local function startLiveLoad()
             end
             markStepDone()
         end,
-        errorHandler = function() abortLoading(nil, "MSP Fetch failed") end
+        errorHandler = function() abortLoading(state.i18n, "MSP Fetch failed") end
     })
 
     requestRebuild()
@@ -181,9 +184,6 @@ function M.getHeaderActions()
     }
 end
 
-function M.allowMemAutoRefresh()
-    return true
-end
 
 function M.onReload()
     ensureDeps()
@@ -243,8 +243,9 @@ function M.build(ctx)
     if not state.loaded then
         M.onReload()
     end
-    state.rebuild = ctx.requestRebuild
     local i18n = ctx.i18n
+    state.i18n = i18n
+    state.rebuild = ctx.requestRebuild
 
     if not isFblConnected() then
         state.pendingStart = false
@@ -335,8 +336,41 @@ function M.build(ctx)
             title = title, message = message, progress = state.progress
         })
     elseif state.errorMessage and state.errorMessage ~= "" then
-        AsyncLoadUi.showErrorDialog(state, i18n, t)
+        AsyncLoadUi.appendErrorNotice(children, {
+            x = x, y = y, w = ctx.w, h = ctx.h,
+            overlay = LoadingOverlay,
+            requestRebuild = ctx and ctx.requestRebuild
+        }, state, i18n, t)
     end
+end
+
+function M.wakeup()
+    local now = nowSeconds()
+    if state.loading and AsyncLoadUi and type(AsyncLoadUi.isTimedOut) == "function" and AsyncLoadUi.isTimedOut(state, now) then
+        abortLoading(state.i18n, t(state.i18n, "loading_timeout", "Timeout"))
+    end
+end
+
+function M.closePage()
+    if state.attached and MspRuntime and type(MspRuntime.detach) == "function" then
+        MspRuntime.detach("exp-page")
+    end
+    local runtimeState = MspRuntime and type(MspRuntime.getState) == "function" and MspRuntime.getState() or nil
+    local queue = runtimeState and runtimeState.queue
+    if queue and type(queue.clear) == "function" then
+        queue:clear("exp-page")
+    end
+    state.started = false
+    state.attached = false
+    state.pendingStart = false
+    state.deferStartBuild = false
+    state.forceReload = false
+    state.i18n = nil
+    if AsyncLoadUi and type(AsyncLoadUi.reset) == "function" then
+        AsyncLoadUi.reset(state)
+    end
+    state.rebuild = nil
+    state.loaded = false
 end
 
 return M

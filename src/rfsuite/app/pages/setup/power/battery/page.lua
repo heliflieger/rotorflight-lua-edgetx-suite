@@ -16,6 +16,7 @@ local MspRuntime = nil
 local BatteryConfigApi = nil
 local BatteryProfileApi = nil
 local Sensors = nil
+local SmartFuelReserve = nil
 local t = nil
 
 M.eepromWrite = true
@@ -50,6 +51,14 @@ end
 local ui = {
 	loaded = false,
 	dirty = false,
+	-- Tracks whether the pilot has actively changed the Consumption reserve field
+	-- in this session. Only when true will onSave write consumptionWarningPercentage
+	-- back to the flight controller, preventing silent overwrites of cbat_alert_percent.
+	reserveDirty = false,
+	-- Tracks whether the pilot has actively changed the Selected Battery combo in this
+	-- session. Only when true does onSave send MSP_SET_BATTERY_PROFILE, so a page that has
+	-- no source for the active profile never switches the profile the board is running.
+	profileDirty = false,
 	config = {
 		selectedBatteryProfile = 0,
 		capacities = { 0, 0, 0, 0, 0, 0 },
@@ -88,6 +97,7 @@ local function ensureDeps()
 	if not BatteryConfigApi then BatteryConfigApi = loadModule("tasks/msp/api/battery_config.lua") end
 	if not BatteryProfileApi then BatteryProfileApi = loadModule("tasks/msp/api/battery_profile.lua") end
 	if not Sensors then Sensors = loadModule("lib/sensors.lua") end
+	if not SmartFuelReserve then SmartFuelReserve = loadModule("lib/smartfuel_reserve.lua") end
 	if not t then t = Common and Common.pageT("setup_power_battery") or nil end
 end
 
@@ -156,25 +166,35 @@ end
 
 local function getActiveProfileFromSensor()
 	if Sensors and type(Sensors.getValue) == "function" then
+		-- The flight controller reports this sensor as index + 1, so a live reading is 1..6.
+		-- A sensor the radio has stopped receiving reads 0 rather than nothing, and 0 is not a
+		-- value the sensor can carry: it means the reading is gone, not that profile 1 is
+		-- active. Anything outside 1..6 is therefore no answer at all.
 		local raw = tonumber(Sensors.getValue("battery_profile"))
 		if raw and raw >= 1 and raw <= 6 then
 			return math.floor(raw) - 1
-		end
-		if raw and raw >= 0 and raw <= 5 then
-			return math.floor(raw)
 		end
 	end
 	return nil
 end
 
+-- Returns the active battery profile as a 0-based index, or nil where the page has no source
+-- for it. Nil is a real answer here rather than a failure: BATTERY_PROFILE is a custom CRSF
+-- sensor and does not exist on a native CRSF link, MSP_BATTERY_CONFIG carries no profile
+-- field, and nothing in the suite issues MSP_BATTERY_PROFILE -- so on such a setup the page
+-- genuinely cannot know which profile the board is running. clampInt cannot express that,
+-- because it floors a nil input onto its fallback, so each source is tested before it is
+-- clamped.
 local function resolveProfile(session, batteryConfig)
 	local sensorProfile = getActiveProfileFromSensor()
 	if sensorProfile ~= nil then return sensorProfile end
-	local active = clampInt(session and session.activeBatteryType, PROFILE_MIN, PROFILE_MAX, PROFILE_MIN)
-	if active ~= nil then return active end
-	local profileFromConfig = clampInt(batteryConfig and batteryConfig.batteryProfile, PROFILE_MIN, PROFILE_MAX, PROFILE_MIN)
-	if profileFromConfig ~= nil then return profileFromConfig end
-	return PROFILE_MIN
+	if session ~= nil and tonumber(session.activeBatteryType) ~= nil then
+		return clampInt(session.activeBatteryType, PROFILE_MIN, PROFILE_MAX, PROFILE_MIN)
+	end
+	if batteryConfig ~= nil and tonumber(batteryConfig.batteryProfile) ~= nil then
+		return clampInt(batteryConfig.batteryProfile, PROFILE_MIN, PROFILE_MAX, PROFILE_MIN)
+	end
+	return nil
 end
 
 local function buildSessionSignature()
@@ -202,7 +222,9 @@ local function loadFromSession()
 	local session = getSession()
 	local batteryPrefs = getBatteryPrefs(session)
 	local batteryConfig = getBatteryConfig(session)
-	ui.config.selectedBatteryProfile = resolveProfile(session, batteryConfig)
+	-- With no source the combo still shows the first profile, as it always has; what changed
+	-- is that nothing is written to the board on the strength of that display.
+	ui.config.selectedBatteryProfile = resolveProfile(session, batteryConfig) or PROFILE_MIN
 
 	for i = 0, 5 do
 		ui.config.capacities[i + 1] = clampInt(batteryConfig and batteryConfig["batteryCapacity_" .. tostring(i)], CAPACITY_MIN, CAPACITY_MAX, 0)
@@ -214,9 +236,15 @@ local function loadFromSession()
 	ui.config.vbatmincellvoltage = clampInt(batteryConfig and batteryConfig.vbatmincellvoltage, 250, 500, 330)
 	ui.config.batteryCellCount = clampInt(batteryConfig and batteryConfig.batteryCellCount, CELL_COUNT_MIN, CELL_COUNT_MAX, 0)
 
-	local reserve = batteryPrefs and batteryPrefs.consumption_warning_percentage
+	-- Resolve consumption reserve: SmartFuelReserve.pick prioritizes explicit per-model
+	-- preference when set by the pilot, then falls through to the FC's cbat_alert_percent.
+	-- Since defaultModelPreferences() no longer seeds 35, unedited models will pick the board value.
+	local reserve = SmartFuelReserve and SmartFuelReserve.pick(session, batteryConfig)
 	if reserve == nil then
 		reserve = batteryConfig and batteryConfig.consumptionWarningPercentage
+		if reserve == nil then
+			reserve = batteryPrefs and batteryPrefs.consumption_warning_percentage
+		end
 	end
 	ui.config.consumption_warning_percentage = clampInt(reserve, RESERVE_MIN, RESERVE_MAX, 35)
 end
@@ -226,6 +254,7 @@ local function queueBatteryRead()
 	if ui.runtime.readPending then
 		return false
 	end
+	ui.runtime.readComplete = false
 	if not MspRuntime or not BatteryConfigApi or type(MspRuntime.getState) ~= "function" then
 		return false
 	end
@@ -237,6 +266,7 @@ local function queueBatteryRead()
 		return false
 	end
 
+	local readValid = type(getSession()) == "table"
 	ui.runtime.readPending = true
 	ui.loading = true
 	ui.progress = 0
@@ -250,6 +280,7 @@ local function queueBatteryRead()
 			ui.progress = 1
 			if type(session) == "table" then
 				local parsed = BatteryConfigApi.parse and BatteryConfigApi.parse(buf) or nil
+				if type(parsed) ~= "table" then return Common.failPageRead(ui) end
 				if type(parsed) == "table" then
 					session.battery_config = parsed
 					session.batteryConfig = parsed
@@ -258,11 +289,13 @@ local function queueBatteryRead()
 			if not ui.dirty then
 				loadFromSession()
 			end
+			ui.runtime.readComplete = readValid
 			if type(ui.runtime.requestRebuild) == "function" then
 				ui.runtime.requestRebuild()
 			end
 		end,
 		errorHandler = function()
+			readValid = false
 			ui.runtime.readPending = false
 			ui.loading = false
 			ui.progress = 1
@@ -300,6 +333,7 @@ local function getProfileSetter()
 		local nextValue = clampInt(value, PROFILE_MIN, PROFILE_MAX, PROFILE_MIN)
 		if ui.config.selectedBatteryProfile == nextValue then return end
 		ui.config.selectedBatteryProfile = nextValue
+		ui.profileDirty = true
 		markDirty()
 	end
 	return ui.runtime.profileSet
@@ -366,6 +400,7 @@ local function getReserveSetter()
 		local nextValue = clampInt(value, RESERVE_MIN, RESERVE_MAX, 35)
 		if ui.config.consumption_warning_percentage == nextValue then return end
 		ui.config.consumption_warning_percentage = nextValue
+		ui.reserveDirty = true
 		markDirty()
 	end
 	return ui.runtime.reserveSet
@@ -408,18 +443,23 @@ function M.getHeaderActions()
 	}
 end
 
-function M.allowMemAutoRefresh()
-	return true
-end
 
 function M.onReload()
 	ensureDeps()
 	ui.loaded = false
+	ui.dirty = false
+	ui.reserveDirty = false
+	ui.profileDirty = false
 	ensureLoaded()
 	return false
 end
 
+function M.canSave()
+	return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+	if not M.canSave() then return false, "loaded_data_missing" end
 	ensureDeps()
 	ensureLoaded()
 
@@ -432,6 +472,10 @@ function M.onSave(ctx)
 
 	local reserve = clampInt(ui.config.consumption_warning_percentage, RESERVE_MIN, RESERVE_MAX, 35)
 	local activeProfile = clampInt(ui.config.selectedBatteryProfile, PROFILE_MIN, PROFILE_MAX, PROFILE_MIN)
+	-- True where the profile shown is one the page can stand behind: either the pilot picked it
+	-- on this page, or a source answered for it. Otherwise it is the combo's fallback and says
+	-- nothing about the board.
+	local profileKnown = ui.profileDirty or resolveProfile(session, batteryConfig) ~= nil
 	local activeCapacity = clampInt(ui.config.capacities[activeProfile + 1], CAPACITY_MIN, CAPACITY_MAX, 0)
 
 	batteryConfig.batteryCellCount = clampInt(ui.config.batteryCellCount, CELL_COUNT_MIN, CELL_COUNT_MAX, 0)
@@ -439,18 +483,36 @@ function M.onSave(ctx)
 	batteryConfig.vbatfullcellvoltage = clampInt(ui.config.vbatfullcellvoltage, 250, 500, 410)
 	batteryConfig.vbatwarningcellvoltage = clampInt(ui.config.vbatwarningcellvoltage, 250, 500, 350)
 	batteryConfig.vbatmincellvoltage = clampInt(ui.config.vbatmincellvoltage, 250, 500, 330)
-	batteryConfig.consumptionWarningPercentage = reserve
-	batteryConfig.batteryProfile = activeProfile
+	-- Fix for issue #52: only overwrite consumptionWarningPercentage in batteryConfig
+	-- when the pilot explicitly edited the Consumption reserve spinner.
+	-- If unedited, preserve the existing FC value; if batteryConfig has no value yet,
+	-- populate from ui.config so we never write 0 to the FC.
+	if ui.reserveDirty then
+		batteryConfig.consumptionWarningPercentage = reserve
+	elseif batteryConfig.consumptionWarningPercentage == nil then
+		batteryConfig.consumptionWarningPercentage = reserve
+	end
 	for i = 0, 5 do
 		batteryConfig["batteryCapacity_" .. tostring(i)] = clampInt(ui.config.capacities[i + 1], CAPACITY_MIN, CAPACITY_MAX, 0)
 	end
-	batteryConfig.batteryCapacity = activeCapacity
-
-	session.activeBatteryType = activeProfile
+	-- All three of these name the active profile, so none may be set from the combo's fallback.
+	-- batteryCapacity is the active profile's capacity: the read filled it from the board, and
+	-- replacing it with the capacity of a guessed profile makes the session copy describe a
+	-- profile the board is not running. It costs nothing on the wire either way, because
+	-- MSP_SET_BATTERY_CONFIG writes its first field into the board's own active slot and the
+	-- six capacities at the tail of the same payload then overwrite all of them.
+	if profileKnown then
+		batteryConfig.batteryProfile = activeProfile
+		batteryConfig.batteryCapacity = activeCapacity
+		session.activeBatteryType = activeProfile
+	end
 	session.battery_config = batteryConfig
 	session.batteryConfig = batteryConfig
 
-	batteryPrefs.consumption_warning_percentage = reserve
+	-- Only persist the reserve preference when the pilot explicitly changed it.
+	if ui.reserveDirty then
+		batteryPrefs.consumption_warning_percentage = reserve
+	end
 	local okPrefs, errPrefs = saveModelPreferences(session)
 
 	local okMsp = false
@@ -459,7 +521,11 @@ function M.onSave(ctx)
 		local queue = mspState and mspState.queue
 		if queue and type(queue.add) == "function" then
 			okMsp = true
-			if BatteryProfileApi and type(BatteryProfileApi.buildWritePayload) == "function" then
+			-- Only send the profile where the pilot selected one on this page. The page cannot
+			-- read the active profile back from the flight controller, so sending the combo's
+			-- fallback switches the board to profile 1 on every save made on a setup with no
+			-- BATTERY_PROFILE sensor, and M.eepromWrite makes that permanent.
+			if ui.profileDirty and BatteryProfileApi and type(BatteryProfileApi.buildWritePayload) == "function" then
 				queue:add({
 					command = BatteryProfileApi.writeCommand,
 					payload = BatteryProfileApi.buildWritePayload({ batteryProfile = activeProfile }),
@@ -489,24 +555,25 @@ function M.onSave(ctx)
 		end
 	end
 
-	if lvgl and lvgl.alert then
+	if ctx and type(ctx.reportSave) == "function" then
 		if okMsp and okPrefs then
-			lvgl.alert({
+			ctx.reportSave({
+				ok = true,
 				title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
 				message = pageText(ctx and ctx.i18n, "saved_message", "Battery settings saved")
 			})
 		elseif okMsp and not okPrefs then
-			lvgl.alert({
+			ctx.reportSave({
 				title = pageText(ctx and ctx.i18n, "warning_title", "Warning"),
 				message = "Battery values sent to FC. Model prefs save failed: " .. tostring(errPrefs or "io")
 			})
 		elseif (not okMsp) and okPrefs then
-			lvgl.alert({
+			ctx.reportSave({
 				title = pageText(ctx and ctx.i18n, "warning_title", "Warning"),
 				message = pageText(ctx and ctx.i18n, "saved_local_only_message", "Saved locally; FC write pending")
 			})
 		else
-			lvgl.alert({
+			ctx.reportSave({
 				title = pageText(ctx and ctx.i18n, "warning_title", "Warning"),
 				message = "FC write pending and model prefs save failed: " .. tostring(errPrefs or "io")
 			})
@@ -514,6 +581,8 @@ function M.onSave(ctx)
 	end
 
 	ui.dirty = false
+	ui.reserveDirty = false
+	ui.profileDirty = false
 	ui.runtime.lastSessionSignature = buildSessionSignature()
 	return true
 end
@@ -686,6 +755,8 @@ function M.onClose()
 		ui.loaded = false
 		ui.dirty = false
 	end
+	ui.reserveDirty = false
+	ui.profileDirty = false
 	ui.loading = false
 	ui.progress = 0
 	Controls = nil
@@ -695,6 +766,7 @@ function M.onClose()
 	BatteryConfigApi = nil
 	BatteryProfileApi = nil
 	Sensors = nil
+	SmartFuelReserve = nil
 	t = nil
 end
 

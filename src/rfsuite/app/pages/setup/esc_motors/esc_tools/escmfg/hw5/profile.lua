@@ -7,27 +7,65 @@ local rfsuite = _G.rfsuite
 
 local helper = {}
 
-local PAGE_FIELDS = {
-    basic = {
-        "flight_mode",
-        "rotation",
-        "bec_voltage",
-        "lipo_cell_count",
-        "volt_cutoff_type",
-        "cutoff_voltage"
-    },
-    advanced = {
-        "gov_p_gain",
-        "gov_i_gain",
-        "startup_time",
-        "restart_time",
-        "auto_restart",
-        "timing",
-        "startup_power",
-        "active_freewheel",
-        "brake_type",
-        "brake_force"
-    }
+local DEFAULT_LAYOUT = {
+    flight_mode = 1,
+    lipo_cell_count = 2,
+    cutoff_type = 3,
+    cutoff_voltage = 4,
+    bec_voltage = 5,
+    startup_time = 6,
+    gov_p_gain = 7,
+    gov_i_gain = 8,
+    auto_restart = 9,
+    restart_time = 10,
+    brake_type = 11,
+    brake_force = 12,
+    timing = 13,
+    rotation = 14,
+    active_freewheel = 15,
+    startup_power = 16,
+}
+
+local HW1132_LAYOUT = {
+    lipo_cell_count = 1,
+    cutoff_type = 2,
+    cutoff_voltage = 3,
+    bec_voltage = 4,
+    response_time = 5,
+    timing = 6,
+    rotation = 7,
+    active_freewheel = 8,
+    startup_power = 9,
+}
+
+local HW1128_LAYOUT = {
+    lipo_cell_count = 1,
+    cutoff_type = 2,
+    cutoff_voltage = 3,
+    brake_type = 5,
+    brake_force = 6,
+    timing = 7,
+    rotation = 8,
+    active_freewheel = 9,
+    startup_power = 10,
+}
+
+local OPTO_LAYOUT = {
+    flight_mode = 1,
+    lipo_cell_count = 2,
+    cutoff_type = 3,
+    cutoff_voltage = 4,
+    startup_time = 5,
+    gov_p_gain = 6,
+    gov_i_gain = 7,
+    auto_restart = 8,
+    restart_time = 9,
+    brake_type = 10,
+    brake_force = 11,
+    timing = 12,
+    rotation = 13,
+    active_freewheel = 14,
+    startup_power = 15,
 }
 
 local TABLES = {
@@ -51,6 +89,7 @@ local TABLES = {
 
 local PROFILES = {
     default = {
+        layout = DEFAULT_LAYOUT,
         tables = {
             rotation = TABLES.rotation,
             lipo_cell_count = TABLES.lipo_3_to_14,
@@ -59,235 +98,159 @@ local PROFILES = {
             brake_type = TABLES.brake_full
         }
     },
-    HW1104_V100456NB = {
+    ["HW1104_V100456NB"] = {
+        layout = DEFAULT_LAYOUT,
         tables = {
+            rotation = TABLES.rotation,
             lipo_cell_count = TABLES.lipo_even_6_to_14,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
             bec_voltage = TABLES.bec_50_to_120,
             brake_type = TABLES.brake_basic
         }
     },
-    HW1104_V100456NB_PL_OPTO = {
+    ["HW1106_V100456NB"] = {
+        layout = DEFAULT_LAYOUT,
         tables = {
-            lipo_cell_count = TABLES.lipo_even_6_to_14,
-            brake_type = TABLES.brake_basic
-        },
-        pages = {
-            basic = {
-                "flight_mode",
-                "rotation",
-                "lipo_cell_count",
-                "volt_cutoff_type",
-                "cutoff_voltage"
-            }
+            rotation = TABLES.rotation,
+            lipo_cell_count = TABLES.lipo_3_to_8,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
+            bec_voltage = TABLES.bec_54_to_84,
+            brake_type = TABLES.brake_full
         }
     },
-    HW1106_V100456NB = {
+    ["HW1106_V200456NB"] = {
+        layout = DEFAULT_LAYOUT,
         tables = {
-            lipo_cell_count = TABLES.lipo_3_to_8,
-            bec_voltage = TABLES.bec_54_to_84
-        }
-    },
-    HW1106_V200456NB = {
-        tables = {
-            lipo_cell_count = TABLES.lipo_3_to_8,
+            rotation = TABLES.rotation,
+            lipo_cell_count = TABLES.lipo_3_to_14,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
             bec_voltage = TABLES.bec_50_to_120,
             brake_type = TABLES.brake_no_prop
         }
     },
-    HW1106_V300456NB = {
+    ["HW1106_V300456NB"] = {
+        layout = DEFAULT_LAYOUT,
         tables = {
-            lipo_cell_count = TABLES.lipo_3_to_8,
+            rotation = TABLES.rotation,
+            lipo_cell_count = TABLES.lipo_3_to_14,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
             bec_voltage = TABLES.bec_50_to_120,
             brake_type = TABLES.brake_no_prop
         }
     },
-    HW1121_V100456NB = {
+    ["HW1121_V100456NB"] = {
+        layout = DEFAULT_LAYOUT,
         tables = {
-            lipo_cell_count = TABLES.lipo_3_to_8,
+            rotation = TABLES.rotation,
+            lipo_cell_count = TABLES.lipo_3_to_14,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
             bec_voltage = TABLES.bec_50_to_120,
             brake_type = TABLES.brake_no_prop
         }
     },
-    HW1121_V00456NB = {
+    ["HW1121_V00456NB"] = {
+        layout = DEFAULT_LAYOUT,
         tables = {
-            lipo_cell_count = TABLES.lipo_3_to_8,
+            rotation = TABLES.rotation,
+            lipo_cell_count = TABLES.lipo_3_to_14,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
             bec_voltage = TABLES.bec_50_to_120,
             brake_type = TABLES.brake_no_prop
         }
     },
-    HW1132_V100456NB = {
+    ["HW1132_V100456NB"] = {
+        layout = HW1132_LAYOUT,
         tables = {
+            rotation = TABLES.rotation,
             lipo_cell_count = TABLES.lipo_2_to_4,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
             bec_voltage = TABLES.bec_60_74_84,
-            response_time = TABLES.response_time
-        },
-        pages = {
-            basic = {
-                "lipo_cell_count",
-                "volt_cutoff_type",
-                "cutoff_voltage",
-                "bec_voltage"
-            },
-            advanced = {
-                "timing",
-                "startup_power",
-                "active_freewheel",
-                "response_time",
-                "rotation"
-            }
+            response_time = TABLES.response_time,
+            brake_type = TABLES.brake_no_prop
         }
     },
-    HW1128_V100456NB = {
+    ["HW198_V1.00456NB"] = {
+        layout = DEFAULT_LAYOUT,
+        tables = {
+            rotation = TABLES.rotation,
+            lipo_cell_count = TABLES.lipo_even_6_to_14,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
+            bec_voltage = TABLES.bec_50_to_120,
+            brake_type = TABLES.brake_basic
+        }
+    },
+    HW1128 = {
+        layout = HW1128_LAYOUT,
         tables = {
             rotation = TABLES.rotation_hw1128,
             lipo_cell_count = TABLES.lipo_2_to_4,
             cutoff_voltage = TABLES.cutoff_25_to_38,
             brake_type = TABLES.brake_no_prop
-        },
-        pages = {
-            basic = {
-                "rotation",
-                "lipo_cell_count",
-                "volt_cutoff_type",
-                "cutoff_voltage"
-            },
-            advanced = {
-                "timing",
-                "startup_power",
-                "active_freewheel",
-                "brake_type",
-                "brake_force"
-            }
         }
     },
-    ["HW198_V1.00456NB"] = {
+    OPTO = {
+        layout = OPTO_LAYOUT,
         tables = {
+            rotation = TABLES.rotation,
             lipo_cell_count = TABLES.lipo_even_6_to_14,
-            bec_voltage = TABLES.bec_50_to_120,
+            cutoff_voltage = TABLES.cutoff_28_to_38,
             brake_type = TABLES.brake_basic
         }
     }
 }
 
 local function trim(text)
-    if type(text) ~= "string" then return nil end
-    return (string.gsub(string.gsub(text, "^%s+", ""), "%s+$", ""))
+    if type(text) ~= "string" then return "" end
+    local s = string.gsub(text, "%z.*", "")
+    return string.match(s, "^%s*(.-)%s*$") or ""
 end
 
-local function buildLookup(list)
-    local lookup = {}
-    for i = 1, #list do
-        lookup[list[i]] = true
-    end
-    return lookup
+local function startsWith(value, prefix)
+    return string.sub(value or "", 1, #prefix) == prefix
 end
 
-local function getPageAllowed(profile, pageKey)
-    local pageFields = PAGE_FIELDS[pageKey]
-    if not pageFields then return nil end
+local function selectProfile(hardwareVersion, escType, firmwareVersion)
+    local hardware = trim(hardwareVersion)
+    local esc = string.upper(trim(escType))
+    local firmware = string.upper(trim(firmwareVersion))
 
-    local override = profile.pages and profile.pages[pageKey]
-    if override == nil then
-        return buildLookup(pageFields)
+    if string.find(esc, "OPTO", 1, true) or string.find(firmware, "OPTO", 1, true) then
+        return PROFILES.OPTO
     end
 
-    return buildLookup(override)
-end
-
-local function getProfileKey()
-    local escDetails = rfsuite.session and rfsuite.session.escDetails or {}
-    local version = trim(escDetails.version) or "default"
-    local model = string.upper(trim(escDetails.model) or "")
-    local firmware = string.upper(trim(escDetails.firmware) or "")
-    local versionUpper = string.upper(version)
-
-    if version ~= "default" and (string.find(model, "OPTO", 1, true) or string.find(firmware, "OPTO", 1, true)) then
-        return version .. "_PL_OPTO"
+    if PROFILES[hardware] then
+        return PROFILES[hardware]
     end
 
-    if not PROFILES[version] then
-        if string.find(versionUpper, "HW1132", 1, true) then
-            return "HW1132_V100456NB"
-        elseif string.find(versionUpper, "HW1128", 1, true) then
-            return "HW1128_V100456NB"
-        elseif string.find(versionUpper, "HW1121", 1, true) then
-            return "HW1121_V100456NB"
-        end
+    local hwUpper = string.upper(hardware)
+    if startsWith(hwUpper, "HW1132_") or startsWith(hwUpper, "HW1132") then
+        return PROFILES["HW1132_V100456NB"]
+    elseif startsWith(hwUpper, "HW1128_") or startsWith(hwUpper, "HW1128") then
+        return PROFILES.HW1128
+    elseif startsWith(hwUpper, "HW1121_") or startsWith(hwUpper, "HW1121") then
+        return PROFILES["HW1121_V100456NB"]
     end
 
-    return version
+    return PROFILES.default
 end
 
 function helper.getProfile()
-    local key = getProfileKey()
-    return PROFILES[key] or PROFILES.default, key
+    local escDetails = rfsuite and rfsuite.session and rfsuite.session.escDetails or {}
+    local hardware = escDetails.version or ""
+    local esc = escDetails.model or ""
+    local firmware = escDetails.firmware or ""
+
+    return selectProfile(hardware, esc, firmware)
 end
 
-function helper.configurePage(apidata, pageKey)
-    if type(apidata) ~= "table" or type(apidata.formdata) ~= "table" then return end
-    local fields = apidata.formdata.fields
-    if type(fields) ~= "table" then return end
-
+function helper.isFieldAllowed(apikey)
     local profile = helper.getProfile()
-    local allowed = getPageAllowed(profile, pageKey)
-    local tables = profile.tables or {}
-
-    for i = #fields, 1, -1 do
-        local field = fields[i]
-        local apikey = field and field.apikey
-        if apikey and allowed and not allowed[apikey] then
-            table.remove(fields, i)
-        elseif apikey and tables[apikey] then
-            field.table = tables[apikey]
-            field.tableIdxInc = -1
-        end
-    end
-
-    local usedLabels = {}
-    for i = 1, #fields do
-        local label = fields[i] and fields[i].label
-        if label then
-            usedLabels[label] = true
-        end
-    end
-
-    local labels = apidata.formdata.labels
-    if type(labels) == "table" then
-        for i = #labels, 1, -1 do
-            local label = labels[i] and labels[i].label
-            if label and not usedLabels[label] then
-                table.remove(labels, i)
-            end
-        end
-    end
+    if not profile or not profile.layout then return true end
+    if apikey == "volt_cutoff_type" then apikey = "cutoff_type" end
+    return profile.layout[apikey] ~= nil
 end
 
-function helper.postLoad(pageKey)
-    local profile = helper.getProfile()
-    local allowed = getPageAllowed(profile, pageKey)
-    local tables = profile.tables or {}
-    local page = rfsuite.app and rfsuite.app.Page
-    local fields = page and page.apidata and page.apidata.formdata and page.apidata.formdata.fields
-    local formFields = rfsuite.app and rfsuite.app.formFields
-    local convertPageValueTable = rfsuite.app and rfsuite.app.utils and rfsuite.app.utils.convertPageValueTable
-
-    if type(fields) ~= "table" or type(formFields) ~= "table" or type(convertPageValueTable) ~= "function" then
-        return
-    end
-
-    for i = 1, #fields do
-        local field = fields[i]
-        local formField = formFields[i]
-        if field and formField and field.apikey then
-            local values = tables[field.apikey]
-            if values and formField.values then
-                formField:values(convertPageValueTable(values, -1))
-            end
-            if allowed and formField.enable then
-                formField:enable(allowed[field.apikey] == true)
-            end
-        end
-    end
-end
+helper.TABLES = TABLES
+helper.PROFILES = PROFILES
 
 return helper

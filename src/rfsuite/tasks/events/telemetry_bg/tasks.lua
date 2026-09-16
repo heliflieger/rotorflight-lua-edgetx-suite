@@ -1,7 +1,8 @@
 local M = {}
 
-local RFSensors = nil
+local Drain = nil
 local Smart = nil
+local Adjustments = nil
 
 local function loadModule(path)
   local fullPath = "/SCRIPTS/TOOLS/rfsuite-core/" .. path
@@ -12,83 +13,74 @@ local function loadModule(path)
   return mod
 end
 
-local telemetryFrameId = 0
-local telemetryFrameSkip = 0
-local telemetryFrameCount = 0
-
-local function decU8(data, pos)
-    return data[pos], pos+1
-end
-
-local function decU16(data, pos)
-    return bit32.lshift(data[pos],8) + data[pos+1], pos+2
-end
-
-local CrsfManager = nil
-
-local function crossfirePop()
-    local CRSF_FRAME_CUSTOM_TELEM = 0x88
-    if not CrsfManager then
-      CrsfManager = loadModule("lib/crsf.lua")
+local function nowSeconds()
+    if type(getTime) == "function" then
+        local ok, v = pcall(getTime)
+        if ok and type(v) == "number" then return v / 100 end
     end
-    if not CrsfManager then return false end
-    
-    local data = CrsfManager.popFrame(CRSF_FRAME_CUSTOM_TELEM)
-    if data then
-        local fid, sid, val
-        local ptr = 3
-        fid,ptr = decU8(data, ptr)
-        local delta = bit32.band(fid - telemetryFrameId, 0xFF)
-        if delta > 1 then
-            telemetryFrameSkip = telemetryFrameSkip + 1
-        end
-        telemetryFrameId = fid
-        telemetryFrameCount = telemetryFrameCount + 1
-        while ptr < #data do
-            sid,ptr = decU16(data, ptr)
-            local sensor = RFSensors[sid]
-            if sensor and type(sensor.dec) == "function" then
-                val,ptr = sensor.dec(data, ptr)
-                if val then
-                    setTelemetryValue(sid, 0, 0, val, sensor.unit or 0, sensor.prec or 0, sensor.name or "")
-                end
-            else
-                break
-            end
-        end
-        setTelemetryValue(0xEE01, 0, 0, telemetryFrameCount, 0, 0, "*Cnt")
-        setTelemetryValue(0xEE02, 0, 0, telemetryFrameSkip, 0, 0, "*Skp")
-        return true
-    end
-    return false
+    if type(os) == "table" and type(os.clock) == "function" then return os.clock() end
+    return 0
 end
 
 function M.wakeup()
-    if not RFSensors then
-        RFSensors = loadModule("lib/rf2tlm_sensors.lua")
-        if not RFSensors then return end
+    -- One module per wakeup: each of these pulls in a subtree of its own -- smart.lua alone
+    -- reaches the sensor library, the reserve helper and the logger, and drain.lua reaches
+    -- the decoder table and the CRSF multiplexer -- and loading them together puts every one
+    -- of those top-level chunks into a single widget pass, which is the pass class that runs
+    -- closest to the firmware's per-call instruction limit.
+    --
+    -- `false` rather than a retry: with `not Smart` as the test a module that cannot be
+    -- loaded is asked for again on every wakeup, which is a failing card read ten times a
+    -- second for as long as the radio is on. Every use below is already guarded, so a
+    -- module that is genuinely absent stays absent cheaply.
+    if Drain == nil then
+        Drain = loadModule("tasks/events/telemetry_bg/drain.lua") or false
+        return
     end
-    if not Smart then
-        Smart = loadModule("tasks/events/telemetry_bg/smart.lua")
+    if Smart == nil then
+        Smart = loadModule("tasks/events/telemetry_bg/smart.lua") or false
+        return
     end
-    
-    local limit = 15
-    local processed = 0
-    while processed < limit and crossfirePop() do
-        processed = processed + 1
+    if Adjustments == nil then
+        Adjustments = loadModule("tasks/events/telemetry_bg/adjustments.lua") or false
+        return
+    end
+
+    local now = nowSeconds()
+
+    -- The background function script drains and tells for the whole radio while it is running,
+    -- so this pass does neither: the sensors it would publish are already on the radio, and the
+    -- teller would announce the same adjustment a second time. Both are dropped together, never
+    -- one without the other.
+    --
+    -- Smart is NOT part of the handover. Its inputs are MSP-derived and its state is per Lua
+    -- state, so the script has no way to compute it for this one.
+    local remote = Drain and Drain.remoteAlive(now)
+
+    if Drain and not remote then
+        Drain.wakeup(now)
     end
 
     if Smart and type(Smart.wakeup) == "function" then
         Smart.wakeup()
     end
+
+    -- After the decode, never before it: what the teller reads is what the drain has just
+    -- published, so the other order would announce one pass behind.
+    if not remote and Adjustments and type(Adjustments.wakeup) == "function" then
+        Adjustments.wakeup()
+    end
 end
 
 function M.reset()
-    telemetryFrameId = 0
-    telemetryFrameSkip = 0
-    telemetryFrameCount = 0
+    if Drain and type(Drain.reset) == "function" then
+        Drain.reset()
+    end
     if Smart and type(Smart.reset) == "function" then
         Smart.reset()
+    end
+    if Adjustments and type(Adjustments.reset) == "function" then
+        Adjustments.reset()
     end
 end
 

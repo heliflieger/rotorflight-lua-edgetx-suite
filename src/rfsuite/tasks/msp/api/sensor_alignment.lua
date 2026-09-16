@@ -22,7 +22,7 @@ function Api.parse(buf)
   parsed.gyro_1_alignment = tonumber(buf[1]) or 0
   parsed.gyro_2_alignment = tonumber(buf[2]) or 0
   parsed.mag_alignment = tonumber(buf[3]) or 0
-  return { parsed = parsed }
+  return parsed
 end
 
 function Api.buildWritePayload(data)

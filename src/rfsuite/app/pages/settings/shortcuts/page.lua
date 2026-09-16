@@ -1,7 +1,3 @@
-function M.getHeaderActions()
-  ensureDeps()
-  return { save = true, help = true }
-end
 local function loadModule(path)
   local fullPath = "/SCRIPTS/TOOLS/rfsuite-core/app/pages/settings/" .. path
   local chunk = assert(loadScript(fullPath, "t"))
@@ -16,6 +12,11 @@ local function ensureDeps()
   if not Common then
     Common = loadModule("common.lua")
   end
+end
+
+function M.getHeaderActions()
+  ensureDeps()
+  return { save = true, help = true }
 end
 
 function M.build(ctx)

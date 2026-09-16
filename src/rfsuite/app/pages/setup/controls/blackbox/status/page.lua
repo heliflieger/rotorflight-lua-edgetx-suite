@@ -138,7 +138,8 @@ local function formatSDCardStatus(i18n)
 end
 
 local function pollSummaries(isAuto)
-  if ui.runtime.readPending then return end
+  if not ui.runtime or ui.runtime.readPending then return end
+  ensureDeps()
   if not MspRuntime or not DataflashSummaryApi or not SdcardSummaryApi or type(MspRuntime.getState) ~= "function" then
     return
   end
@@ -158,34 +159,52 @@ local function pollSummaries(isAuto)
     end
   end
 
+  local dfApi = DataflashSummaryApi
+  local sdApi = SdcardSummaryApi
+
   -- Queue Dataflash Summary Read
   queue:add({
-    command = DataflashSummaryApi.command,
-    simulatorResponse = DataflashSummaryApi.simulatorResponse,
+    command = dfApi.command,
+    simulatorResponse = dfApi.simulatorResponse,
     processReply = function(self, buf)
-      local reply = DataflashSummaryApi.parse(buf)
-      if reply then
-        ui.dataflash.ready = (reply.flags & 1) ~= 0
-        ui.dataflash.supported = (reply.flags & 2) ~= 0
-        ui.dataflash.totalSize = reply.total
-        ui.dataflash.usedSize = reply.used
+      if not ui.loaded or not ui.runtime or not ui.runtime.readPending then return end
+      local api = DataflashSummaryApi or dfApi
+      if api and type(api.parse) == "function" then
+        local reply = api.parse(buf)
+        if reply then
+          ui.dataflash.ready = (reply.flags & 1) ~= 0
+          ui.dataflash.supported = (reply.flags & 2) ~= 0
+          ui.dataflash.totalSize = reply.total
+          ui.dataflash.usedSize = reply.used
+        end
+      end
+
+      local currentSdApi = SdcardSummaryApi or sdApi
+      if not currentSdApi then
+        if ui.runtime then ui.runtime.readPending = false end
+        ui.loading = false
+        return
       end
 
       -- Now queue SD Card Summary Read
       queue:add({
-        command = SdcardSummaryApi.command,
-        simulatorResponse = SdcardSummaryApi.simulatorResponse,
+        command = currentSdApi.command,
+        simulatorResponse = currentSdApi.simulatorResponse,
         processReply = function(self2, buf2)
-          local reply2 = SdcardSummaryApi.parse(buf2)
-          if reply2 then
-            ui.sdcard.supported = reply2.supported
-            ui.sdcard.state = reply2.state
-            ui.sdcard.filesystemLastError = reply2.filesystemLastError
-            ui.sdcard.freeSizeKB = reply2.freeSizeKB
-            ui.sdcard.totalSizeKB = reply2.totalSizeKB
+          if not ui.loaded or not ui.runtime or not ui.runtime.readPending then return end
+          local replyApi = SdcardSummaryApi or currentSdApi
+          if replyApi and type(replyApi.parse) == "function" then
+            local reply2 = replyApi.parse(buf2)
+            if reply2 then
+              ui.sdcard.supported = reply2.supported
+              ui.sdcard.state = reply2.state
+              ui.sdcard.filesystemLastError = reply2.filesystemLastError
+              ui.sdcard.freeSizeKB = reply2.freeSizeKB
+              ui.sdcard.totalSizeKB = reply2.totalSizeKB
+            end
           end
 
-          ui.runtime.readPending = false
+          if ui.runtime then ui.runtime.readPending = false end
           ui.loading = false
           ui.progress = 100
           if type(ui.runtime.requestRebuild) == "function" then
@@ -193,6 +212,7 @@ local function pollSummaries(isAuto)
           end
         end,
         errorHandler = function()
+          if not ui.loaded or not ui.runtime then return end
           ui.runtime.readPending = false
           ui.loading = false
           if type(ui.runtime.requestRebuild) == "function" then
@@ -202,6 +222,7 @@ local function pollSummaries(isAuto)
       })
     end,
     errorHandler = function()
+      if not ui.loaded or not ui.runtime then return end
       ui.runtime.readPending = false
       ui.loading = false
       if type(ui.runtime.requestRebuild) == "function" then
@@ -212,6 +233,7 @@ local function pollSummaries(isAuto)
 end
 
 local function queueEraseDataflash()
+  ensureDeps()
   if not MspRuntime or not DataflashEraseApi or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -230,12 +252,14 @@ local function queueEraseDataflash()
     ui.runtime.requestRebuild()
   end
 
+  local eraseApi = DataflashEraseApi
   queue:add({
-    command = DataflashEraseApi.writeCommand,
-    payload = DataflashEraseApi.buildWritePayload({}),
+    command = eraseApi.writeCommand,
+    payload = eraseApi.buildWritePayload({}),
     isWrite = true,
     simulatorResponse = {},
     processReply = function()
+      if not ui.loaded or not ui.runtime then return end
       -- Erase started successfully. We will monitor ui.dataflash.ready in wakeup.
       ui.progress = 50
       if type(ui.runtime.requestRebuild) == "function" then
@@ -243,6 +267,7 @@ local function queueEraseDataflash()
       end
     end,
     errorHandler = function()
+      if not ui.loaded or not ui.runtime then return end
       ui.eraseInProgress = false
       ui.saving = false
       if type(ui.runtime.requestRebuild) == "function" then
@@ -353,10 +378,10 @@ function M.getHeaderActions()
 end
 
 local function appendStatusRow(children, x, y, w, label, value)
-  local rowH = 62
+  local rowH = (Controls and Controls.ROW_H) or 64
   local leftMargin = 15
   local rightMargin = 15
-  local labelY = y + math.floor((rowH - 20) / 2)
+  local labelY = (Controls and Controls.labelY and Controls.labelY(y, rowH)) or (y + math.floor((rowH - 21) / 2))
 
   -- Left Label
   children[#children + 1] = {
@@ -381,12 +406,12 @@ local function appendStatusRow(children, x, y, w, label, value)
   -- Divider Line
   children[#children + 1] = {
     type   = "rectangle",
-    x = x, y = y + rowH - 1,
+    x = x, y = y + rowH,
     w = w, h = 1,
-    color  = GREY_DEFAULT, filled = true
+    color  = COLOR_THEME_SECONDARY2, filled = true
   }
 
-  return rowH
+  return rowH + 1
 end
 
 function M.build(ctx)
@@ -404,7 +429,7 @@ function M.build(ctx)
   local i18n = ctx.i18n
 
   if ui.loading or ui.saving then
-    local titleText = ui.loading and pageText(i18n, "loading_status", "Loading") or pageText(i18n, "erasing_dataflash", "Erasing")
+    local titleText = ui.loading and "@i18n(app.loading)@" or "@i18n(app.erasing)@"
     local msgText = ui.loading and pageText(i18n, "loading_status", "Loading blackbox status...") or pageText(i18n, "erasing_dataflash", "Erasing dataflash...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
@@ -470,9 +495,6 @@ function M.onStar(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

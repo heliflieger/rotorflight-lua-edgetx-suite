@@ -6,6 +6,10 @@ end
 local Controls = loadModule("ui/controls.lua")
 local DashboardLib = loadModule("app/pages/settings/dashboard/lib.lua")
 
+-- The settings page loads this file for the theme it is configuring and hands that theme
+-- to the factory below, so a copy of this theme under rfsuite.user/dashboard stores its
+-- values under its own key prefix instead of this one's. The literal is the fallback for
+-- a caller that passes no theme.
 local THEME_PATH = "system/rfstatus"
 local THEME_DEFAULTS = {
     v_min = 18.0,
@@ -29,10 +33,10 @@ end
 local function loadConfig(prefs)
     if ui.loaded then return end
 
-    local modelPrefs = nil
-    if type(_G) == "table" and _G.rfsuite and type(_G.rfsuite.session) == "table" then
-        modelPrefs = _G.rfsuite.session.modelPreferences
-    end
+    local session = type(_G) == "table" and _G.rfsuite and type(_G.rfsuite.session) == "table" and _G.rfsuite.session or nil
+    -- The per-model store is only addressable once the flight controller's id is known, so
+    -- the read is conditioned on it exactly as the save is.
+    local modelPrefs = session and session.mcu_id and session.modelPreferences or nil
 
     local cfg = DashboardLib.getThemeConfig(prefs, THEME_PATH, THEME_DEFAULTS, modelPrefs)
     local vMin = tonumber(cfg.v_min) or THEME_DEFAULTS.v_min
@@ -48,7 +52,9 @@ end
 
 local function saveConfig(prefs)
     local session = type(_G) == "table" and _G.rfsuite and type(_G.rfsuite.session) == "table" and _G.rfsuite.session or nil
-    local modelPrefs = session and session.modelPreferences
+    -- The per-model store can only be written once the flight controller's id is known, so
+    -- a theme configured without one is stored globally instead.
+    local modelPrefs = session and session.mcu_id and session.modelPreferences or nil
 
     DashboardLib.setThemeConfig(prefs, THEME_PATH, {
         v_min = (tonumber(ui.config.v_min_tenths) or 180) / 10,
@@ -100,9 +106,6 @@ function M.getHeaderActions()
     return { save = true, help = false }
 end
 
-function M.allowMemAutoRefresh()
-    return true
-end
 
 function M.onReload(ctx)
     ui.loaded = false
@@ -113,11 +116,21 @@ end
 function M.onSave(ctx)
     saveConfig(ctx.preferences)
     local ok, err = ctx.savePreferences()
-    if lvgl and lvgl.alert and not ok then
-        local i18n = ctx.i18n
-        local title = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_title") or "Error"
-        local message = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_message") or "Save failed"
-        lvgl.alert({ title = title, message = message .. ": " .. tostring(err or "io") })
+    if ok then
+        ui.dirty = false
+        if ctx and type(ctx.reportSave) == "function" then
+            local i18n = ctx.i18n
+            local title = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.saved_title") or "Saved"
+            local message = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.saved_message") or "Theme settings saved"
+            ctx.reportSave({ ok = true, title = title, message = message })
+        end
+    else
+        if ctx and type(ctx.reportSave) == "function" then
+            local i18n = ctx.i18n
+            local title = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_title") or "Error"
+            local message = i18n and i18n.t and i18n.t("app.pages.settings_dashboard_settings.save_error_message") or "Save failed"
+            ctx.reportSave({ title = title, message = message .. ": " .. tostring(err or "io") })
+        end
     end
     return true
 end
@@ -175,4 +188,10 @@ function M.build(ctx)
     })
 end
 
-return M
+return function(ctx)
+    local theme = ctx and ctx.theme
+    if type(theme) == "table" and type(theme.path) == "string" and theme.path ~= "" then
+        THEME_PATH = theme.path
+    end
+    return M
+end

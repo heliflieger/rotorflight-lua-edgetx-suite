@@ -8,15 +8,27 @@ end
 
 local Controls = nil
 local Common = nil
+local Log = nil
 
 local CONFIG_SCHEMA = {
   { key = "debug_level", type = "string", default = "off" },
   { key = "continuous_memory_log", type = "bool", default = false },
   { key = "show_header_memory", type = "bool", default = false },
-  { key = "enable_serial_debug", type = "bool", default = false }
+  { key = "enable_serial_debug", type = "bool", default = false },
+  { key = "log_to_card", type = "bool", default = false }
 }
 
-local DEBUG_LEVEL_VALUES = { "off", "info", "debug" }
+-- Mirrors the ladder in lib/log.lua and is replaced by it in ensureDeps(). It is kept as a
+-- literal only so this page still builds if the log module cannot be loaded; log.lua holds the
+-- definition, and the values below are the order the selector offers them in.
+local DEBUG_LEVEL_VALUES = { "off", "error", "warn", "info", "debug" }
+
+local function isKnownDebugLevel(value)
+  for _, name in ipairs(DEBUG_LEVEL_VALUES) do
+    if name == value then return true end
+  end
+  return false
+end
 
 local function buildDefaultConfig()
   local cfg = {}
@@ -44,6 +56,14 @@ local function ensureDeps()
   end
   if not Controls then
     Controls = loadModule("ui/controls.lua")
+  end
+  if Log == nil then
+    -- pcall because loadModule asserts, and a missing log module must not take the page down.
+    local ok, mod = pcall(loadModule, "lib/log.lua")
+    Log = (ok and mod) or false
+    if Log and type(Log.LEVELS) == "table" and #Log.LEVELS > 0 then
+      DEBUG_LEVEL_VALUES = Log.LEVELS
+    end
   end
   if not ui.runtime then
     ui.runtime = Common.createFormRuntime(ui)
@@ -75,8 +95,7 @@ local function copyFromPrefs(prefs)
     end
   end
 
-  local current = ui.config.debug_level
-  if current ~= "off" and current ~= "info" and current ~= "debug" then
+  if not isKnownDebugLevel(ui.config.debug_level) then
     ui.config.debug_level = "off"
   end
 end
@@ -111,11 +130,14 @@ local function getValueSetter(key)
 end
 
 local function buildDebugLevelOptions(i18n)
-  return {
-    { value = "off",   label = t(i18n, "debug_level_off", "OFF") },
-    { value = "info",  label = t(i18n, "debug_level_info", "INFO") },
-    { value = "debug", label = t(i18n, "debug_level_debug", "DEBUG") }
-  }
+  local options = {}
+  for _, name in ipairs(DEBUG_LEVEL_VALUES) do
+    options[#options + 1] = {
+      value = name,
+      label = t(i18n, "debug_level_" .. name, string.upper(name))
+    }
+  end
+  return options
 end
 
 local function buildLogging(cursorY, children, x, w, i18n)
@@ -143,6 +165,12 @@ local function buildLogging(cursorY, children, x, w, i18n)
     ui.runtime.getBoolGetter("enable_serial_debug"),
     ui.runtime.getBoolSetter("enable_serial_debug")
   )
+
+  cursorY = cursorY + Controls.appendRadioSwitch(children, x, cursorY, w,
+    t(i18n, "log_to_card", "Log Session To Card"),
+    ui.runtime.getBoolGetter("log_to_card"),
+    ui.runtime.getBoolSetter("log_to_card")
+  )
   return cursorY
 end
 
@@ -160,9 +188,6 @@ function M.getHeaderActions()
   return { save = true, help = true }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onReload(ctx)
   ensureDeps()
@@ -179,12 +204,12 @@ function M.onSave(ctx)
 
   local ok, err = ctx.savePreferences()
   if ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({ title = t(ctx.i18n, "saved_title", "Saved"), message = t(ctx.i18n, "saved_message", "Developer settings saved") })
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({ ok = true, title = t(ctx.i18n, "saved_title", "Saved"), message = t(ctx.i18n, "saved_message", "Developer settings saved") })
     end
   else
-    if lvgl and lvgl.alert then
-      lvgl.alert({ title = t(ctx.i18n, "save_error_title", "Error"), message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io") })
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({ title = t(ctx.i18n, "save_error_title", "Error"), message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io") })
     end
   end
 end

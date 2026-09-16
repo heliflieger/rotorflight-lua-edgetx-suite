@@ -28,7 +28,7 @@ function Header.tAction(i18n, key, fallback)
 end
 
 -- Resolve which header actions are visible/enabled.
--- ctx: { headerActions, menu, i18n, preferences, PageRegistry, HelpRegistry }
+-- ctx: { headerActions, menu, i18n, preferences, PageRegistry, HelpRegistry, reportHookCrash }
 function Header.resolveActions(ctx)
   local headerActions = ctx.headerActions
   local menu          = ctx.menu
@@ -60,11 +60,20 @@ function Header.resolveActions(ctx)
 
       local pageModule = PageRegistry and PageRegistry.byMenuId and PageRegistry.byMenuId[menuId] or nil
       if pageModule and pageModule.getHeaderActions then
-        local fromPage = pageModule.getHeaderActions({
+        -- This runs on every scene rebuild for whatever page is open, so a raise in it ends the
+        -- tool without anybody having touched a control. Guarded, the page simply keeps the
+        -- action set resolved above it.
+        local okPage, fromPage = pcall(pageModule.getHeaderActions, {
           i18n        = ctx.i18n,
           preferences = ctx.preferences,
           menu        = menu
         })
+        if not okPage then
+          if type(ctx.reportHookCrash) == "function" then
+            ctx.reportHookCrash("activePage.getHeaderActions", menuId, fromPage)
+          end
+          fromPage = nil
+        end
         if type(fromPage) == "table" then
           if fromPage.save   ~= nil then actions.save   = fromPage.save   == true end
           if fromPage.reload ~= nil then actions.reload = fromPage.reload == true end

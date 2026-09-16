@@ -258,15 +258,15 @@ local sensorsById = {
     -- GPS Coordinates
     [77] = { sid = 0x1125, name = "GPS", unit = UNIT_RAW, prec = 0, dec = decLatLong },
     -- GPS altitude
-    [78] = { sid = 0x1126, name = "GAlt", unit = UNIT_METERS, prec = 1, dec = decS16 },
+    [78] = { sid = 0x1126, name = "GAlt", unit = UNIT_METERS, prec = 2, dec = decS16 },
     -- GPS heading
     [79] = { sid = 0x1127, name = "GHdg", unit = UNIT_DEGREE, prec = 1, dec = decS16 },
     -- GPS ground speed
     [80] = { sid = 0x1128, name = "GSpd", unit = UNIT_METERS_PER_SECOND, prec = 2, dec = decU16 },
     -- GPS home distance
-    [81] = { sid = 0x1129, name = "GDis", unit = UNIT_METERS, prec = 1, dec = decU16 },
+    [81] = { sid = 0x1129, name = "GDis", unit = UNIT_METERS, prec = 0, dec = decU16 },
     -- GPS home direction
-    [82] = { sid = 0x112A, name = "GDir", unit = UNIT_METERS, prec = 1, dec = decU16 },
+    [82] = { sid = 0x112A, name = "GDir", unit = UNIT_DEGREE, prec = 0, dec = decU16 },
 
     -- CPU load
     [85] = { sid = 0x1141, name = "CPU%", unit = UNIT_PERCENT, prec = 0, dec = decU8 },

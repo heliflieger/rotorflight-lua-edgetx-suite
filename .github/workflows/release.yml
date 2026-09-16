@@ -1,59 +1,25 @@
-name: Release & Build Packages
+name: Release
 
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'release/*'
 
 permissions:
   contents: write
 
 jobs:
-  # 1. Build Multi-Language EdgeTX Suite Radio Installation ZIPs
-  build-suite-zips:
-    name: Build Radio Install ZIPs
+  build-zips:
+    name: Build per-locale ZIPs
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Build Radio ZIPs
-        run: |
-          python .github/scripts/build_zips.py
-
-      - name: Upload Suite ZIPs to Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: dist/*.zip
-          generate_release_notes: true
-
-  # 2. Build Updater Standalone Executables (Windows, Linux, macOS)
-  build-updater:
-    name: Build Updater (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            artifact_name: rfsuite-edgetx-updater-windows.exe
-            built_file: bin/updater/src/dist/rfsuite-updater.exe
-          - os: ubuntu-latest
-            artifact_name: rfsuite-edgetx-updater-linux
-            built_file: bin/updater/src/dist/rfsuite-updater
-          - os: macos-latest
-            artifact_name: rfsuite-edgetx-updater-macos
-            built_file: bin/updater/src/dist/rfsuite-updater
+        # keep in sync with pr.yml / push.yml / snapshot.yml
+        lang: [en, de]
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -61,25 +27,80 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller requests
-
-      - name: Build Standalone Executable
+      - name: Set build variables (from tag)
+        id: buildvars
         shell: bash
         run: |
-          cd bin/updater/src
-          pyinstaller --onefile --noconsole --name rfsuite-updater updater.py
+          GIT_TAG="${GITHUB_REF_NAME}"
+          GIT_VER="${GIT_TAG#release/}"
+          if [[ $GIT_VER =~ ^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9]+$ ]]; then
+            GH_TYPE='Release Candidate'
+          else
+            GH_TYPE='Release'
+          fi
+          echo "GIT_VER=$GIT_VER" >> $GITHUB_ENV
+          echo "GIT_TAG=$GIT_TAG" >> $GITHUB_ENV
+          echo "GH_TYPE=$GH_TYPE" >> $GITHUB_ENV
 
-      - name: Prepare Artifact
+      - name: Create release ZIP (locale=${{ matrix.lang }})
         shell: bash
         run: |
-          mkdir -p build_out
-          cp "${{ matrix.built_file }}" "build_out/${{ matrix.artifact_name }}"
+          ART="rfsuite-radio-install-v${{ env.GIT_VER }}_${{ matrix.lang }}.zip"
+          python bin/package/build_package.py \
+            --lang '${{ matrix.lang }}' \
+            --artifact-version '${{ env.GIT_VER }}' \
+            --artifact-name "$ART" \
+            --output-dir .
+          echo "ARTIFACT=$ART" >> $GITHUB_ENV
 
-      - name: Upload Binaries to Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload per-locale artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: build_out/*
+          name: rfsuite-radio-install-v${{ env.GIT_VER }}_${{ matrix.lang }}
+          path: ${{ env.ARTIFACT }}
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-zips]
+    steps:
+      - name: Checkout repo (for release notes script)
+        uses: actions/checkout@v4
+
+      - name: Set build variables (from tag)
+        id: buildvars
+        shell: bash
+        run: |
+          GIT_TAG="${GITHUB_REF_NAME}"
+          GIT_VER="${GIT_TAG#release/}"
+          if [[ $GIT_VER =~ ^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9]+$ ]]; then
+            GH_TYPE='Release Candidate'
+          else
+            GH_TYPE='Release'
+          fi
+          echo "GIT_VER=$GIT_VER" >> $GITHUB_ENV
+          echo "GIT_TAG=$GIT_TAG" >> $GITHUB_ENV
+          echo "GH_TYPE=$GH_TYPE" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la ./dist
+
+      - name: Create release notes
+        run: |
+          python .github/scripts/extract-release-notes.py "${{ env.GIT_VER }}" Releases.md > Notes.md
+          sed -n '1,200p' Notes.md
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          cd dist
+          gh release create "${{ env.GIT_TAG }}" --notes-file ../Notes.md -t "Rotorflight Lua EdgeTX Suite - ${{ env.GH_TYPE }} ${{ env.GIT_VER }}" *.zip

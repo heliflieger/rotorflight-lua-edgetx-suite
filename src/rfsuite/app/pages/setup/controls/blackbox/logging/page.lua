@@ -160,6 +160,7 @@ end
 
 local function queueBlackboxRead(isAutoReload)
   if ui.runtime.readPending then return false, "read_pending" end
+  ui.runtime.readComplete = false
   if not MspRuntime or not BlackboxConfigApi or not FeatureConfigApi or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -170,6 +171,7 @@ local function queueBlackboxRead(isAutoReload)
     return false, "msp_queue_unavailable"
   end
 
+  local readValid = true
   ui.runtime.readPending = true
   if not isAutoReload then
     ui.loading = true
@@ -185,6 +187,7 @@ local function queueBlackboxRead(isAutoReload)
     simulatorResponse = FeatureConfigApi.simulatorResponse,
     processReply = function(self, buf)
       local reply = FeatureConfigApi.parse(buf)
+      if type(reply) ~= "table" then return Common.failPageRead(ui) end
       ui.featureBitmap = (reply and reply.enabledFeatures) or 0
 
       -- Now queue BLACKBOX_CONFIG read
@@ -193,6 +196,7 @@ local function queueBlackboxRead(isAutoReload)
         simulatorResponse = BlackboxConfigApi.simulatorResponse,
         processReply = function(self2, buf2)
           local parsed = BlackboxConfigApi.parse(buf2)
+          if type(parsed) ~= "table" then return Common.failPageRead(ui) end
           if parsed then
             ui.cfg.blackbox_supported = parsed.blackbox_supported or 0
             ui.cfg.device = parsed.device or 0
@@ -227,11 +231,13 @@ local function queueBlackboxRead(isAutoReload)
           ui.loading = false
           ui.dirty = false
           ui.progress = 100
+          ui.runtime.readComplete = readValid
           if type(ui.runtime.requestRebuild) == "function" then
             ui.runtime.requestRebuild()
           end
         end,
         errorHandler = function()
+          readValid = false
           ui.runtime.readPending = false
           ui.loading = false
           if type(ui.runtime.requestRebuild) == "function" then
@@ -241,12 +247,14 @@ local function queueBlackboxRead(isAutoReload)
       })
     end,
     errorHandler = function()
+      readValid = false
       -- If feature config fails, still try to read blackbox config
       queue:add({
         command = BlackboxConfigApi.command,
         simulatorResponse = BlackboxConfigApi.simulatorResponse,
         processReply = function(self2, buf2)
           local parsed = BlackboxConfigApi.parse(buf2)
+          if type(parsed) ~= "table" then return Common.failPageRead(ui) end
           if parsed then
             ui.cfg.blackbox_supported = parsed.blackbox_supported or 0
             ui.cfg.device = parsed.device or 0
@@ -261,11 +269,13 @@ local function queueBlackboxRead(isAutoReload)
           ui.loading = false
           ui.dirty = false
           ui.progress = 100
+          ui.runtime.readComplete = readValid
           if type(ui.runtime.requestRebuild) == "function" then
             ui.runtime.requestRebuild()
           end
         end,
         errorHandler = function()
+          readValid = false
           ui.runtime.readPending = false
           ui.loading = false
           if type(ui.runtime.requestRebuild) == "function" then
@@ -450,7 +460,7 @@ function M.build(ctx)
   local i18n = ctx.i18n
 
   if ui.loading or ui.saving then
-    local titleText = ui.loading and pageText(i18n, "loading_logging", "Loading") or pageText(i18n, "saving_logging", "Saving")
+    local titleText = ui.loading and "@i18n(app.loading)@" or "@i18n(app.saving)@"
     local msgText = ui.loading and pageText(i18n, "loading_logging", "Loading blackbox logging...") or pageText(i18n, "saving_logging", "Saving blackbox logging...")
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
@@ -509,11 +519,16 @@ function M.build(ctx)
   end
 end
 
+function M.canSave()
+  return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+  if not M.canSave() then return false, "loaded_data_missing" end
   local ok, err = queueBlackboxWrite(ctx and ctx.requestRebuild)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -541,9 +556,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

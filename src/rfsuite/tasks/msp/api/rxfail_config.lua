@@ -59,7 +59,7 @@ function Api.parse(buf)
     parsed["channel_" .. i .. "_mode"] = mode
     parsed["channel_" .. i .. "_value"] = val
   end
-  return { parsed = parsed }
+  return parsed
 end
 
 function Api.buildWritePayload(payloadData)

@@ -88,6 +88,7 @@ end
 
 local function queueGovRead(isAutoReload)
   if ui.runtime.readPending then return false, "read_pending" end
+  ui.runtime.readComplete = false
   if not MspRuntime or not GovernorConfigApi or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -98,6 +99,7 @@ local function queueGovRead(isAutoReload)
     return false, "msp_queue_unavailable"
   end
 
+  local readValid = type(getSession()) == "table"
   ui.runtime.readPending = true
   if not isAutoReload then
     ui.loading = true
@@ -113,6 +115,7 @@ local function queueGovRead(isAutoReload)
     timeout = 5.0,
     processReply = function(self, buf)
       local parsed = GovernorConfigApi.parse(buf)
+      if type(parsed) ~= "table" then return Common.failPageRead(ui) end
       if parsed then
         ui.config.curve = {}
         for i = 1, FIELD_COUNT do
@@ -132,11 +135,13 @@ local function queueGovRead(isAutoReload)
       ui.loading = false
       ui.dirty = false
       ui.progress = 100
+      ui.runtime.readComplete = readValid
       if type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
     end,
     errorHandler = function()
+      readValid = false
       ui.runtime.readPending = false
       ui.loading = false
       if type(ui.runtime.requestRebuild) == "function" then
@@ -200,8 +205,9 @@ local function queueGovWrite(requestRebuild, ctx)
               session.governor_config = writeData
               session.governorMode = writeData.gov_mode
             end
-            if lvgl and lvgl.alert then
-              lvgl.alert({
+            if ctx and type(ctx.reportSave) == "function" then
+              ctx.reportSave({
+                ok = true,
                 title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
                 message = pageText(ctx and ctx.i18n, "saved_message", "Governor settings saved")
               })
@@ -226,8 +232,9 @@ local function queueGovWrite(requestRebuild, ctx)
           session.governor_config = writeData
           session.governorMode = writeData.gov_mode
         end
-        if lvgl and lvgl.alert then
-          lvgl.alert({
+        if ctx and type(ctx.reportSave) == "function" then
+          ctx.reportSave({
+            ok = true,
             title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
             message = pageText(ctx and ctx.i18n, "saved_message", "Governor settings saved")
           })
@@ -357,7 +364,7 @@ function M.build(ctx)
     type = "rectangle",
     x = gx, y = gy,
     w = gw, h = gh,
-    color = GREY_DEFAULT,
+    color = COLOR_THEME_SECONDARY2,
     filled = false
   }
 
@@ -368,7 +375,7 @@ function M.build(ctx)
       type = "line",
       x = 0, y = 0, w = 0, h = 0,
       pts = { { gx, gridY }, { gx + gw, gridY } },
-      color = GREY_DEFAULT,
+      color = COLOR_THEME_SECONDARY2,
       thickness = 1
     }
   end
@@ -380,7 +387,7 @@ function M.build(ctx)
       type = "line",
       x = 0, y = 0, w = 0, h = 0,
       pts = { { gridX, gy }, { gridX, gy + gh } },
-      color = GREY_DEFAULT,
+      color = COLOR_THEME_SECONDARY2,
       thickness = 1
     }
   end
@@ -418,14 +425,13 @@ function M.build(ctx)
 
   -- ── 2. Refresh Button ─────────────────────────────────────────────────────
   local btnW = math.min(260, w - 40)
-  local btnH = 36
+  local btnH = (lvgl and lvgl.UI_ELEMENT_HEIGHT) or (Controls and Controls.CTRL_H) or 32
   local btnX = x + math.floor((w - btnW) / 2)
   children[#children + 1] = {
     type = "button",
     x = btnX,
     y = cursorY,
     w = btnW,
-    h = btnH,
     text = pageText(i18n, "refresh_graph", "Refresh Graph"),
     press = function()
       if type(ui.runtime.requestRebuild) == "function" then
@@ -439,8 +445,8 @@ function M.build(ctx)
   -- ── 3. 9 Throttle Points Inputs ───────────────────────────────────────────
   local gap = 4
   local fieldW = math.floor((gw - (gap * (FIELD_COUNT - 1))) / FIELD_COUNT)
-  local labelH = 18
-  local editH = 38
+  local labelH = (Controls and Controls.LABEL_H) or (lvgl and lvgl.LCD_SCALE and math.floor(21 * lvgl.LCD_SCALE + 0.5)) or 21
+  local editH = (lvgl and lvgl.UI_ELEMENT_HEIGHT) or (Controls and Controls.CTRL_H) or 32
 
   for i = 1, FIELD_COUNT do
     local cellX = gx + (i - 1) * (fieldW + gap)
@@ -480,7 +486,7 @@ function M.build(ctx)
     }
   end
 
-  cursorY = cursorY + labelH + editH + 14
+  cursorY = cursorY + labelH + 6 + editH + 14
 
   if ui.dirty then
     children[#children + 1] = {
@@ -493,11 +499,16 @@ function M.build(ctx)
   end
 end
 
+function M.canSave()
+  return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+end
+
 function M.onSave(ctx)
+  if not M.canSave() then return false, "loaded_data_missing" end
   local ok, err = queueGovWrite(ctx and ctx.requestRebuild, ctx)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -525,9 +536,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then

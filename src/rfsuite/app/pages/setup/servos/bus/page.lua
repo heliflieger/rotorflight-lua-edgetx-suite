@@ -65,6 +65,7 @@ local ui = {
   },
   servoBusEnabled = false,
   servoCount = 0,
+  servoLoaded = {},
   apiData = {},
   runtime = {
     readPending = false,
@@ -118,6 +119,7 @@ local function loadFromSession()
   if not rcConfig then return end
 
   ui.servoCount = rcConfig.servoCount or 0
+  ui.servoLoaded = ui.servoLoaded or {}
   ui.servoBusEnabled = rcConfig.servoBusEnabled or false
   ui.mixerConfig.swash_type = rcConfig.swash_type or 0
   ui.mixerConfig.tail_rotor_mode = rcConfig.tail_rotor_mode or 0
@@ -200,6 +202,43 @@ local function setOverride(enabled)
   end
 end
 
+--- The firmware speaks about servos in TWO index spaces, and this page addresses both.
+---
+--- `servoParams()` is indexed 0 .. MAX_SUPPORTED_SERVOS-1, with the bus servos starting at
+--- BUS_SERVO_OFFSET. MSP_SET_SERVO_CENTER and MSP_GET_SERVO_CONFIG take that index.
+---
+--- MSP_SERVO_CONFIGURATIONS and MSP_SET_SERVO_CONFIGURATION take a PACKED index instead: the
+--- configured PWM servos first, then all BUS_SERVO_CHANNELS bus servos, with the unconfigured
+--- PWM slots between them skipped. So bus servo n is packed index (pwm count + n), not
+--- (BUS_SERVO_OFFSET + n) -- the two agree only on a board that configures all eight PWM
+--- outputs as servos.
+---
+--- Everything this page holds in `ui.config.servos` is keyed by the RAW index, and the packed
+--- index is derived at the one place that needs it.
+local BUS_SERVO_CHANNELS = 18
+local BUS_SERVO_OFFSET = 8
+
+--- How many PWM servos the flight controller has. MSP_STATUS reports the PACKED total, i.e.
+--- getServoCount() + BUS_SERVO_CHANNELS whenever bus servos are configured, so the PWM count is
+--- the difference.
+local function pwmServoCount()
+  local total = tonumber(ui.servoCount) or 0
+  if ui.servoBusEnabled == true and total > BUS_SERVO_CHANNELS then
+    return total - BUS_SERVO_CHANNELS
+  end
+  return total
+end
+
+--- The raw servoParams index of this page's servo n.
+local function rawServoIndex(busIdx)
+  return BUS_SERVO_OFFSET + busIdx
+end
+
+--- The packed index of this page's servo n, for the two commands that speak that space.
+local function packedServoIndex(busIdx)
+  return pwmServoCount() + busIdx
+end
+
 local function triggerLiveWrite()
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then return end
   local mspState = MspRuntime.getState()
@@ -209,7 +248,7 @@ local function triggerLiveWrite()
   local servoIdx = ui.selectedServoIndex
   if not servoIdx then return end
 
-  local config = ui.config.servos and ui.config.servos[servoIdx + 8]
+  local config = ui.config.servos and ui.config.servos[rawServoIndex(servoIdx)]
   if not config then return end
 
   local mid = math.floor(config.mid or 1500)
@@ -218,7 +257,8 @@ local function triggerLiveWrite()
   local apiVersion = session and session.apiVersion
   local isIndexed = ApiVersion and ApiVersion.isAtLeast and ApiVersion.isAtLeast(apiVersion, {12, 0, 9})
 
-  local writeIndex = servoIdx + 8
+  -- MSP_SET_SERVO_CENTER takes the RAW servoParams index, unlike the configuration write below.
+  local writeIndex = rawServoIndex(servoIdx)
 
   if isIndexed then
     local lo = mid % 256
@@ -260,6 +300,112 @@ local function triggerLiveWrite()
       isWrite = true,
       processReply = function() end
     })
+  end
+end
+
+--- Whether this firmware has the per-servo read.
+---
+--- MSP_GET_SERVO_CONFIG (125) arrived in API 12.09. Below it the whole-table
+--- MSP_SERVO_CONFIGURATIONS is the only read there is.
+local PAGED_READ_API = {12, 0, 9}
+
+local function hasPagedServoReads()
+  local session = getSession()
+  local apiVersion = session and session.apiVersion
+  if not apiVersion or apiVersion == "" or tostring(apiVersion) == "0" then
+    return false
+  end
+  return ApiVersion and ApiVersion.isAtLeast and ApiVersion.isAtLeast(apiVersion, PAGED_READ_API)
+end
+
+--- Reads one servo's record with MSP_GET_SERVO_CONFIG (125), which takes the RAW index.
+---
+--- The whole-table MSP_SERVO_CONFIGURATIONS is not used from API 12.09. With bus servos
+--- configured its reply is 1 + (getServoCount() + BUS_SERVO_CHANNELS) * 16 bytes -- 353 with four
+--- PWM servos, 417 with eight -- while the shared telemetry response buffer the CRSF path
+--- serialises into is MSP_TLM_OUTBUF_SIZE = 320 bytes and sbufWriteU8 has no bound check, so the
+--- reply is written past the end of a static buffer. Over USB that buffer is much larger and the
+--- command is safe there, which is why this is not visible from the configurator.
+local function queueServoRead(busIdx, onDone)
+  local function done(ok)
+    if type(onDone) == "function" then onDone(ok) end
+  end
+
+  if not hasPagedServoReads() then
+    done(false)
+    return false
+  end
+
+  busIdx = tonumber(busIdx)
+  if not busIdx or busIdx < 0 then
+    done(false)
+    return false
+  end
+
+  if not MspRuntime or type(MspRuntime.getState) ~= "function" then
+    done(false)
+    return false
+  end
+  local mspState = MspRuntime.getState()
+  local queue = mspState and mspState.queue
+  if not queue or type(queue.add) ~= "function" then
+    done(false)
+    return false
+  end
+
+  local GetServoConfigApi = loadModule("tasks/msp/api/get_servo_config.lua")
+  if not GetServoConfigApi then
+    done(false)
+    return false
+  end
+
+  local raw = rawServoIndex(busIdx)
+
+  queue:add({
+    command = GetServoConfigApi.command,
+    payload = { raw },
+    isWrite = false,
+    simulatorResponse = GetServoConfigApi.simulatorResponse,
+    processReply = function(self, buf)
+      local parsed = GetServoConfigApi.parse(buf)
+      local rec = parsed and parsed.servo_config
+      if rec then
+        local cfg = {
+          mid = rec.mid,
+          min = rec.min,
+          max = rec.max,
+          scaleNeg = rec.rneg,
+          scalePos = rec.rpos,
+          rate = rec.rate,
+          speed = rec.speed,
+          flags = rec.flags
+        }
+        cfg.reverse = (cfg.flags == 1 or cfg.flags == 3) and 1 or 0
+        cfg.geometry = (cfg.flags == 2 or cfg.flags == 3) and 1 or 0
+        ui.config.servos = ui.config.servos or {}
+        ui.config.servos[raw] = cfg
+        ui.servoLoaded[busIdx] = true
+      end
+      done(rec ~= nil)
+    end,
+    errorHandler = function()
+      done(false)
+    end
+  })
+
+  return true
+end
+
+--- What the whole-table read used to do at the end of a load, for one servo instead of all.
+local function finishServoLoad(ok)
+  ui.runtime.readPending = false
+  ui.loading = false
+  ui.dirty = false
+  ui.progress = 100
+  ui.loaded = true
+  saveToSession()
+  if type(ui.runtime.requestRebuild) == "function" then
+    ui.runtime.requestRebuild()
   end
 end
 
@@ -326,12 +472,12 @@ local function queueServosRead(isAutoReload)
             simulatorResponse = SerialConfigApi.simulatorResponse,
             processReply = function(self, buf)
               local parsed = SerialConfigApi.parse(buf)
-              if parsed and parsed.parsed then
+              if parsed then
                 local fbus_mask = 524288
                 local sbus_mask = 262144
                 local found = false
                 for i = 1, 12 do
-                  local mask = parsed.parsed["port_" .. i .. "_function_mask"]
+                  local mask = parsed["port_" .. i .. "_function_mask"]
                   if mask == fbus_mask or mask == sbus_mask then
                     found = true
                     break
@@ -345,13 +491,21 @@ local function queueServosRead(isAutoReload)
                 ui.runtime.requestRebuild()
               end
 
+              -- Step 4: the selected servo's own record, where the firmware has that read
+              if hasPagedServoReads() then
+                ui.servoLoaded = {}
+                if not queueServoRead(ui.selectedServoIndex, finishServoLoad) then
+                  finishServoLoad(false)
+                end
+                return
+              end
+
               -- Step 4: Read SERVO_CONFIGURATIONS
               queue:add({
                 command = ServoConfigsApi.command,
                 simulatorResponse = ServoConfigsApi.simulatorResponse,
                 processReply = function(self, buf)
-                  local res = ServoConfigsApi.parse(buf)
-                  local parsed = res and res.parsed
+                  local parsed = ServoConfigsApi.parse(buf)
                   if parsed then
                     ui.config.servos = {}
                     local count = parsed.servo_count or 0
@@ -378,7 +532,14 @@ local function queueServosRead(isAutoReload)
                         s.geometry = 0
                       end
 
-                      ui.config.servos[i] = s
+                      -- The reply is PACKED; this table is keyed by the raw index.
+                      local pwm = pwmServoCount()
+                      if i < pwm then
+                        ui.config.servos[i] = s
+                      else
+                        ui.config.servos[BUS_SERVO_OFFSET + (i - pwm)] = s
+                        ui.servoLoaded[i - pwm] = true
+                      end
                     end
                   end
 
@@ -442,7 +603,7 @@ local function queueServoWrite(servoIdx)
     return false, "msp_queue_unavailable"
   end
 
-  local config = ui.config.servos and ui.config.servos[servoIdx + 8]
+  local config = ui.config.servos and ui.config.servos[rawServoIndex(servoIdx)]
   if not config then return false, "config_unavailable" end
 
   local mid = math.floor(config.mid or 1500)
@@ -465,7 +626,8 @@ local function queueServoWrite(servoIdx)
     flags = 3
   end
 
-  local writeIndex = servoIdx + 8
+  -- MSP_SET_SERVO_CONFIGURATION takes the PACKED index, unlike the centre write above.
+  local writeIndex = packedServoIndex(servoIdx)
 
   local payload = {}
   writeU8(payload, writeIndex)
@@ -597,7 +759,7 @@ function M.build(ctx)
   if ui.loading then
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
-      title = pageText(i18n, "loading", "Loading"),
+      title = "@i18n(app.loading)@",
       message = pageText(i18n, "loading", "Reading servos configuration..."),
       progress = ui.progress / 100
     })
@@ -620,6 +782,9 @@ function M.build(ctx)
     cursorY = cursorY + (Controls.STATIC_SECTION_H or 50)
   end
 
+  -- Sixteen, not BUS_SERVO_CHANNELS: the firmware's 18 is an SBUS frame's 16 proportional
+  -- channels plus its 2 digital ones, and whether a servo belongs on those two is not a
+  -- question this change answers. Left as it was.
   local busServoCount = 16
   local servoOptions = {}
   for i = 1, busServoCount do
@@ -641,6 +806,16 @@ function M.build(ctx)
     function(val)
       if ui.selectedServoIndex ~= val then
         ui.selectedServoIndex = val
+        -- Only the paged route leaves a servo unread; the whole-table route brought them all.
+        if hasPagedServoReads() and not ui.servoLoaded[val] then
+          ui.loading = true
+          queueServoRead(val, function()
+            ui.loading = false
+            if type(ui.runtime.requestRebuild) == "function" then
+              ui.runtime.requestRebuild()
+            end
+          end)
+        end
         if type(ui.runtime.requestRebuild) == "function" then
           ui.runtime.requestRebuild()
         end
@@ -651,9 +826,13 @@ function M.build(ctx)
     }
   )
 
+  -- Everything below is the selected servo's own record, so it is drawn only once that
+  -- record has been read. Editing what an unfinished read left behind would write it back.
+  if not ui.servoLoaded[ui.selectedServoIndex] then return end
+
   local idx = ui.selectedServoIndex
   -- BUS configs are mapped to absolute indices 8 to 23
-  local s = ui.config.servos[idx + 8] or { mid = 1500, min = -500, max = 500, scaleNeg = 500, scalePos = 500, speed = 0, reverse = 0, geometry = 0 }
+  local s = ui.config.servos[rawServoIndex(idx)] or { mid = 1500, min = -500, max = 500, scaleNeg = 500, scalePos = 500, speed = 0, reverse = 0, geometry = 0 }
 
   -- 2) Center
   cursorY = cursorY + Controls.appendNumberField(children, x, cursorY, w,
@@ -824,8 +1003,8 @@ end
 function M.onSave(ctx)
   local ok, err = queueServoWrite(ui.selectedServoIndex)
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -834,8 +1013,8 @@ function M.onSave(ctx)
   end
 
   ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
+  if ctx and type(ctx.reportSave) == "function" then
+    ctx.reportSave({
       title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
       message = pageText(ctx and ctx.i18n, "saved_message", "Servo settings saved")
     })
@@ -888,9 +1067,6 @@ function M.onStar(ctx)
   return true
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if ui.inOverride then

@@ -14,8 +14,9 @@ local Common = nil
 --   type "number" → tonumber() coercion, default must be a number
 
 local CONFIG_SCHEMA = {
-  { key = "temperature_unit", type = "number", default = 0 },
-  { key = "altitude_unit",    type = "number", default = 0 },
+  { key = "language",         type = "string", default = "en"  },
+  { key = "temperature_unit", type = "number", default = 0     },
+  { key = "altitude_unit",    type = "number", default = 0     },
 }
 
 local function buildDefaultConfig()
@@ -28,6 +29,7 @@ end
 
 local ui = {
   loaded    = false,
+  dirty     = false,
   config    = buildDefaultConfig(),
 }
 
@@ -56,7 +58,12 @@ local function copyFromPrefs(prefs)
   local loc = (prefs and prefs.localizations) or {}
 
   for _, field in ipairs(CONFIG_SCHEMA) do
-    ui.config[field.key] = tonumber(loc[field.key]) or field.default
+    if field.type == "string" then
+      local v = tostring(loc[field.key] or "")
+      ui.config[field.key] = v ~= "" and v or field.default
+    else
+      ui.config[field.key] = tonumber(loc[field.key]) or field.default
+    end
   end
 end
 
@@ -80,6 +87,13 @@ local function getAltOptions(i18n)
   }
 end
 
+local function getLangOptions(i18n)
+  return {
+    { value = "en", label = t(i18n, "language_en", "English") },
+    { value = "de", label = t(i18n, "language_de", "German")  },
+  }
+end
+
 -- ─── Module API ──────────────────────────────────────────────────────────────
 
 function M.getHeaderActions()
@@ -87,13 +101,11 @@ function M.getHeaderActions()
   return { save = true, help = true }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onReload(ctx)
   ensureDeps()
   copyFromPrefs(ctx.preferences)
+  ui.dirty = false
 end
 
 function M.onSave(ctx)
@@ -105,12 +117,13 @@ function M.onSave(ctx)
   end
   local ok, err = ctx.savePreferences()
   if ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({ title = t(ctx.i18n, "saved_title", "Gespeichert"), message = t(ctx.i18n, "saved_message", "Einstellungen gespeichert") })
+    ui.dirty = false
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({ ok = true, title = t(ctx.i18n, "saved_title", "Saved"), message = t(ctx.i18n, "saved_message", "Settings saved") })
     end
   else
-    if lvgl and lvgl.alert then
-      lvgl.alert({ title = t(ctx.i18n, "save_error_title", "Fehler"), message = t(ctx.i18n, "save_error_message", "Speichern fehlgeschlagen") .. ": " .. tostring(err or "io") })
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({ title = t(ctx.i18n, "save_error_title", "Error"), message = t(ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(err or "io") })
     end
   end
 end
@@ -128,22 +141,26 @@ function M.build(ctx)
 
   cursorY = cursorY + Controls.appendComboSelect(
     children, x, cursorY, w,
-    t(i18n, "temperature_unit", "Temperatureinheit"),
-    getTempOptions(i18n),
-    ui.config.temperature_unit,
-    function(val)
-      ui.config.temperature_unit = val
-    end
+    t(i18n, "language", "Language"),
+    getLangOptions(i18n),
+    ui.config.language,
+    ui.runtime.getValueSetter("language")
   )
 
   cursorY = cursorY + Controls.appendComboSelect(
     children, x, cursorY, w,
-    t(i18n, "altitude_unit", "Hoeheneinheit"),
+    t(i18n, "temperature_unit", "Temperature Unit"),
+    getTempOptions(i18n),
+    ui.config.temperature_unit,
+    ui.runtime.getValueSetter("temperature_unit")
+  )
+
+  cursorY = cursorY + Controls.appendComboSelect(
+    children, x, cursorY, w,
+    t(i18n, "altitude_unit", "Altitude Unit"),
     getAltOptions(i18n),
     ui.config.altitude_unit,
-    function(val)
-      ui.config.altitude_unit = val
-    end
+    ui.runtime.getValueSetter("altitude_unit")
   )
 end
 

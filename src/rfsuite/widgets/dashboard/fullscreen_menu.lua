@@ -1,24 +1,11 @@
 local M = {}
 
-local function scriptExists(path)
-  if type(path) ~= "string" or path == "" then return false end
-  local f = io.open(path, "r")
-  if not f then return false end
-  io.close(f)
-  return true
-end
-
-local function loadModuleChunk(basePath)
-  if type(loadScript) ~= "function" then return nil end
-  local luaPath = basePath .. ".lua"
-  if scriptExists(luaPath) then
-    local chunk = loadScript(luaPath, "t")
-    if type(chunk) == "function" then return chunk end
-  end
-  local luacPath = basePath .. ".luac"
-  if scriptExists(luacPath) then
-    local chunk = loadScript(luacPath)
-    if type(chunk) == "function" then return chunk end
+local requireModule = (_G.rfsuite and _G.rfsuite.require) or function(path)
+  local fullPath = string.sub(path, 1, 1) == "/" and path or ("/SCRIPTS/TOOLS/rfsuite-core/" .. path)
+  local chunk = loadScript(fullPath, "t")
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok and type(mod) == "table" then return mod end
   end
   return nil
 end
@@ -29,7 +16,7 @@ function M.build(children, widget)
   local dX = 0
   local dY = 0
   
-  local t = (widget.i18n and type(widget.i18n.t) == "function") and widget.i18n.t or function(_, k, f) return f end
+  local t = (widget.i18n and type(widget.i18n.t) == "function") and widget.i18n.t or function(k, f) return f or k end
 
   local bg_color = COLOR_THEME_PRIMARY3 or BLACK
   if bg_color == BLACK and lcd and type(lcd.RGB) == "function" then
@@ -118,43 +105,33 @@ function M.build(children, widget)
   children[#children+1] = {
     type = "button", x=dX + paddingX, y=contentY, w=eraseBtnW, h=btnH, color=btn_color,
     press = function()
-         local mspModule = nil
-         local mspChunk = loadModuleChunk("/SCRIPTS/TOOLS/rfsuite-core/tasks/msp/runtime")
-         if mspChunk then
-            local ok, mod = pcall(mspChunk)
-            if ok and type(mod) == "table" then mspModule = mod end
-         end
-
+         local mspModule = requireModule("tasks/msp/runtime.lua")
          if mspModule and mspModule.getState then
             local mState = mspModule.getState()
-            if mState.queue then
-               local eraseApiChunk = loadModuleChunk("/SCRIPTS/TOOLS/rfsuite-core/tasks/msp/api/dataflash_erase")
-               local summaryApiChunk = loadModuleChunk("/SCRIPTS/TOOLS/rfsuite-core/tasks/msp/api/dataflash_summary")
+            if mState and mState.queue then
+               local eraseApi = requireModule("tasks/msp/api/dataflash_erase.lua")
+               local summaryApi = requireModule("tasks/msp/api/dataflash_summary.lua")
                
-               if eraseApiChunk and summaryApiChunk then
-                 local eraseApi = eraseApiChunk()
-                 local summaryApi = summaryApiChunk()
-                 if eraseApi and summaryApi then
-                   mState.queue:add({
-                      command = eraseApi.writeCommand,
-                      payload = eraseApi.buildWritePayload({}),
-                      simulatorResponse = {},
-                      isWrite = true,
-                      timeout = 10.0,
-                   })
-                   mState.queue:add({
-                      command = summaryApi.command,
-                      simulatorResponse = summaryApi.simulatorResponse,
-                      processReply = function(_, buf)
-                        local stats = summaryApi.parse(buf)
-                        if stats then
-                          if type(_G) == "table" and _G.rfsuite and _G.rfsuite.session then
-                            _G.rfsuite.session.dataflash = stats
-                          end
+               if eraseApi and summaryApi then
+                 mState.queue:add({
+                    command = eraseApi.writeCommand,
+                    payload = eraseApi.buildWritePayload({}),
+                    simulatorResponse = {},
+                    isWrite = true,
+                    timeout = 10.0,
+                 })
+                 mState.queue:add({
+                    command = summaryApi.command,
+                    simulatorResponse = summaryApi.simulatorResponse,
+                    processReply = function(_, buf)
+                      local stats = summaryApi.parse(buf)
+                      if stats then
+                        if type(_G) == "table" and _G.rfsuite and _G.rfsuite.session then
+                          _G.rfsuite.session.dataflash = stats
                         end
                       end
-                   })
-                 end
+                    end
+                 })
                end
             end
          end
@@ -172,8 +149,39 @@ function M.build(children, widget)
     text=t("widgets.dashboard.erase_blackbox", "ERASE BLACKBOX"), color=WHITE, align=CENTER, font=titleFont
   }
 
-  contentY = contentY + btnH + titleGap
-  
+  contentY = contentY + btnH + gapY
+
+  -- 4a2. In-flight tuning, only for a model that has it switched on and only while the
+  -- preview switch is on.
+  --
+  -- The snapshot alone would very nearly do -- the drive that publishes it is not built with
+  -- the preview off -- but the menu is built from the preferences of this pass and the
+  -- snapshot is what the last one left behind. Reading the switch here means the button
+  -- cannot offer a route into a feature the runtime has already stopped driving.
+  --
+  -- It is reachable here with the interlock OPEN on purpose: the setup check and the parameter
+  -- grid are what a pilot wants to see on the ground, and the interlock is what decides whether
+  -- anything is sent. The screen the button opens is inert until the switch is thrown.
+  local previewOn = widget.preferences and widget.preferences.general
+    and widget.preferences.general.preview_inflight_tuning == true
+  if previewOn and type(widget.state.inflight) == "table" then
+    children[#children+1] = {
+      type = "button", x=dX + paddingX, y=contentY, w=eraseBtnW, h=btnH, color=btn_color,
+      press = function()
+        widget.inflightFullscreen = true
+        widget.built = false
+        widget.renderKey = nil
+      end
+    }
+    children[#children+1] = {
+      type = "label", x=dX + paddingX, y=contentY + math.floor((btnH - fontH)/2) + btnTextOffY, w=eraseBtnW,
+      text=t("widgets.dashboard.inflight_open", "IN-FLIGHT TUNING"), color=WHITE, align=CENTER, font=titleFont
+    }
+    contentY = contentY + btnH + gapY
+  end
+
+  contentY = contentY + titleGap - gapY
+
   -- 4b. Battery Profile Section Title
   children[#children+1] = {
     type = "label", x=dX + paddingX, y=contentY, w=dW-(paddingX*2), 
@@ -212,51 +220,40 @@ function M.build(children, widget)
      -- Button (Interactive layer)
      children[#children+1] = {
        type = "button", x=bx, y=by, w=btnW, h=btnH, color=bColor,
-       press = function()
-         local mspModule = nil
-         local mspChunk = loadModuleChunk("/SCRIPTS/TOOLS/rfsuite-core/tasks/msp/runtime")
-         if mspChunk then
-            local ok, mod = pcall(mspChunk)
-            if ok and type(mod) == "table" then mspModule = mod end
-         end
-
-         if mspModule and mspModule.getState then
+        press = function()
+          local mspModule = requireModule("tasks/msp/runtime.lua")
+          if mspModule and mspModule.getState then
             local mState = mspModule.getState()
-            if mState.queue then
+            if mState and mState.queue then
                -- 1. Set Battery Profile
-               local apiChunk = loadModuleChunk("/SCRIPTS/TOOLS/rfsuite-core/tasks/msp/api/battery_profile")
-               if apiChunk then
-                 local api = apiChunk()
-                 if api and type(api.buildWritePayload) == "function" then
-                   mState.queue:add({
-                      command = api.writeCommand,
-                      payload = api.buildWritePayload({ batteryProfile = c.index }),
-                      simulatorResponse = {}
-                   })
-                 end
+               local api = requireModule("tasks/msp/api/battery_profile.lua")
+               if api and type(api.buildWritePayload) == "function" then
+                 mState.queue:add({
+                    command = api.writeCommand,
+                    payload = api.buildWritePayload({ batteryProfile = c.index }),
+                    simulatorResponse = {}
+                 })
                end
                -- 2. Save to EEPROM so the FC applies and broadcasts the change
-               local eepromChunk = loadModuleChunk("/SCRIPTS/TOOLS/rfsuite-core/tasks/msp/api/eeprom_write")
-               if eepromChunk then
-                 local eepromApi = eepromChunk()
-                 if eepromApi and type(eepromApi.buildWritePayload) == "function" then
-                   mState.queue:add({
-                      command = eepromApi.writeCommand,
-                      payload = eepromApi.buildWritePayload({}),
-                      simulatorResponse = {}
-                   })
-                 end
+               local eepromApi = requireModule("tasks/msp/api/eeprom_write.lua")
+               if eepromApi and type(eepromApi.buildWritePayload) == "function" then
+                 mState.queue:add({
+                    command = eepromApi.writeCommand,
+                    payload = eepromApi.buildWritePayload({}),
+                    simulatorResponse = {},
+                    isWrite = true,
+                 })
                end
             end
-         end
+          end
 
-         -- Close after selection
-         widget.built = false
-         widget.renderKey = nil
-         if lcd and type(lcd.exitFullScreen) == "function" then
-            lcd.exitFullScreen()
-         end
-       end
+          -- Close after selection
+          widget.built = false
+          widget.renderKey = nil
+          if lcd and type(lcd.exitFullScreen) == "function" then
+             lcd.exitFullScreen()
+          end
+        end
      }
      
      -- Label (visual only)

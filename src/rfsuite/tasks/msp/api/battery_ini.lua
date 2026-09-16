@@ -57,10 +57,10 @@ function Api.parse(buf)
         if parsed[name] then parsed[name] = parsed[name] end
       end
     end
-    return { parsed = parsed }
+    return parsed
   end
 
-  return { parsed = defaults() }
+  return defaults()
 end
 
 function Api.buildWritePayload(payloadData)

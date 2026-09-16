@@ -59,7 +59,7 @@ function Api.parse(buf)
   for i = 1, 8 do
     parsed["freq_"..i] = read_u16_le(buf, pos); pos = pos + 2
   end
-  return { parsed = parsed }
+  return parsed
 end
 
 function Api.buildWritePayload(data)

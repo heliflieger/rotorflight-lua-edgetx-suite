@@ -24,18 +24,18 @@ end
 
 local function getEscVersion(buffer)
     local layoutRevision = getPageValue(buffer, 5)
-    if layoutRevision ~= nil then
+    if layoutRevision ~= nil and layoutRevision ~= "" then
         return "Revision " .. tostring(layoutRevision)
     end
 
-    return " "
+    return ""
 end
 
 local function getEscFirmware(buffer)
     local major = getPageValue(buffer, 3)
     local minor = getPageValue(buffer, 4)
     if major == nil or minor == nil then
-        return " "
+        return ""
     end
 
     return "FW" .. tostring(major) .. "." .. tostring(minor)

@@ -11,26 +11,114 @@ $ErrorActionPreference = 'Stop'
 
 $workspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
-if ([string]::IsNullOrWhiteSpace($Language)) {
-    $settingsPath = Join-Path $workspaceRoot '.vscode\settings.json'
-    if (Test-Path $settingsPath) {
+$languageSource = 'default (en)'
+
+function Get-LanguageFromSettingsFile {
+    param([string]$FilePath)
+
+    if (-not (Test-Path $FilePath)) { return $null }
+    try {
+        $content = Get-Content -Path $FilePath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+
+        # 1. Try native JSON parsing
         try {
-            $settings = Get-Content -Path $settingsPath -Raw | ConvertFrom-Json
-            if ($settings.'rfsuite.deploy.language') {
-                $Language = $settings.'rfsuite.deploy.language'
+            $json = $content | ConvertFrom-Json
+            if ($json.'rfsuite.deploy.language') {
+                return [string]$json.'rfsuite.deploy.language'
             }
         } catch {}
-    }
+
+        # 2. Fallback regex parsing (supports JSONC, comments, trailing commas)
+        $match = [regex]::Match($content, '["'']rfsuite\.deploy\.language["'']\s*:\s*["'']([^"'']+)["'']')
+        if ($match.Success) {
+            return $match.Groups[1].Value.Trim()
+        }
+    } catch {}
+
+    return $null
 }
-if ([string]::IsNullOrWhiteSpace($Language)) {
-    $Language = 'de'
+
+if ([string]::IsNullOrWhiteSpace($Language) -or ($Language -like '${config:*')) {
+    $Language = $null
+
+    # 1. Check workspace settings (.vscode/settings.json)
+    $wsSettings = Join-Path $workspaceRoot '.vscode\settings.json'
+    $found = Get-LanguageFromSettingsFile -FilePath $wsSettings
+    if ($found) {
+        $Language = $found
+        $languageSource = "workspace settings ($wsSettings)"
+    }
+
+    # 2. Check workspace files (*.code-workspace in workspace root or parent)
+    if ([string]::IsNullOrWhiteSpace($Language)) {
+        $codeWorkspaces = @(
+            Get-ChildItem -Path $workspaceRoot -Filter '*.code-workspace' -File -ErrorAction SilentlyContinue
+            Get-ChildItem -Path (Join-Path $workspaceRoot '..') -Filter '*.code-workspace' -File -ErrorAction SilentlyContinue
+        )
+        foreach ($cw in $codeWorkspaces) {
+            $found = Get-LanguageFromSettingsFile -FilePath $cw.FullName
+            if ($found) {
+                $Language = $found
+                $languageSource = "workspace file ($($cw.FullName))"
+                break
+            }
+        }
+    }
+
+    # 3. Check VS Code / VSCodium User settings & Profiles across platforms
+    if ([string]::IsNullOrWhiteSpace($Language)) {
+        $userDirs = @(
+            $(if ($env:APPDATA) { Join-Path $env:APPDATA 'Code\User' }),
+            $(if ($env:APPDATA) { Join-Path $env:APPDATA 'Code - Insiders\User' }),
+            $(if ($env:APPDATA) { Join-Path $env:APPDATA 'VSCodium\User' }),
+            $(if ($env:HOME) { Join-Path $env:HOME 'Library/Application Support/Code/User' }),
+            $(if ($env:HOME) { Join-Path $env:HOME 'Library/Application Support/Code - Insiders/User' }),
+            $(if ($env:HOME) { Join-Path $env:HOME 'Library/Application Support/VSCodium/User' }),
+            $(if ($env:HOME) { Join-Path $env:HOME '.config/Code/User' }),
+            $(if ($env:HOME) { Join-Path $env:HOME '.config/Code - Insiders/User' }),
+            $(if ($env:HOME) { Join-Path $env:HOME '.config/VSCodium/User' }),
+            $(if ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.config\Code\User' })
+        )
+        foreach ($uDir in $userDirs) {
+            if (-not $uDir -or -not (Test-Path $uDir)) { continue }
+
+            # Check primary user settings.json
+            $uPath = Join-Path $uDir 'settings.json'
+            $found = Get-LanguageFromSettingsFile -FilePath $uPath
+            if ($found) {
+                $Language = $found
+                $languageSource = "user settings ($uPath)"
+                break
+            }
+
+            # Check all profile settings.json
+            $profileSettings = Get-ChildItem -Path (Join-Path $uDir 'profiles') -Filter 'settings.json' -Recurse -File -ErrorAction SilentlyContinue
+            foreach ($ps in $profileSettings) {
+                $found = Get-LanguageFromSettingsFile -FilePath $ps.FullName
+                if ($found) {
+                    $Language = $found
+                    $languageSource = "profile settings ($($ps.FullName))"
+                    break
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($Language)) { break }
+        }
+    }
+} else {
+    $languageSource = 'command-line argument'
+}
+
+if ([string]::IsNullOrWhiteSpace($Language) -or ($Language -like '${config:*')) {
+    $Language = 'en'
+    $languageSource = 'default fallback (en)'
 }
 $sourceRoot = Join-Path $workspaceRoot 'src'
 $sourceCore = Join-Path $sourceRoot 'rfsuite'
 $sourceAudioRoot = Join-Path $sourceCore 'audio'
 $sourceToolEntrypoint = Join-Path $sourceRoot 'main.lua'
 $sourceWidgetRoot = Join-Path $sourceRoot 'widgets\rfsuite'
-$sourceUserRoot = Join-Path $sourceRoot 'rfsuite.user'
+$sourceFunctionRoot = Join-Path $sourceRoot 'functions'
 
 function Test-LikelyRadioRoot {
     param([Parameter(Mandatory = $true)][string]$Root)
@@ -117,6 +205,7 @@ $targetCore = Join-Path $toolsRoot 'rfsuite-core'
 $targetToolEntrypoint = Join-Path $toolsRoot 'rfsuite.lua'
 $targetUserRoot = Join-Path $toolsRoot 'rfsuite.user'
 $targetWidgetRoot = Join-Path $widgetsRoot 'rfsuite'
+$targetFunctionRoot = Join-Path $TargetRoot 'SCRIPTS\FUNCTIONS'
 $targetSoundsRoot = Join-Path $soundsRoot 'rf'
 
 $legacyToolFolder = Join-Path $toolsRoot 'rfsuite'
@@ -139,10 +228,6 @@ if (-not (Test-Path $sourceWidgetRoot)) {
 
 if (-not (Test-Path $sourceAudioRoot)) {
     throw "Audio source folder not found: $sourceAudioRoot"
-}
-
-if (-not (Test-Path $sourceUserRoot)) {
-    throw "User source folder not found: $sourceUserRoot"
 }
 
 if (-not (Test-Path $toolsRoot)) {
@@ -177,13 +262,9 @@ Get-ChildItem -Path $targetCore -Filter '*.luac' -Recurse -ErrorAction SilentlyC
 
 Copy-Item -Path $sourceToolEntrypoint -Destination $targetToolEntrypoint -Force
 
+# No preference file is deployed: the suite writes its own store on first save.
 if (-not (Test-Path $targetUserRoot)) {
     New-Item -ItemType Directory -Path $targetUserRoot -Force | Out-Null
-}
-
-$targetPreferencesFile = Join-Path $targetUserRoot 'preferences.ini'
-if (-not (Test-Path $targetPreferencesFile)) {
-    Copy-Item -Path (Join-Path $sourceUserRoot 'preferences.ini') -Destination $targetPreferencesFile -Force
 }
 
 function Get-ThemeMetadata {
@@ -290,6 +371,16 @@ New-Item -ItemType Directory -Path $targetWidgetRoot -Force | Out-Null
 Copy-Item -Path (Join-Path $sourceWidgetRoot '*') -Destination $targetWidgetRoot -Recurse -Force
 Get-ChildItem -Path $targetWidgetRoot -Filter '*.luac' -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
+# Special-function scripts. EdgeTX offers every lua file directly under SCRIPTS\FUNCTIONS to a
+# "Play Script" special function, so the folder is flat -- and it is not emptied first, because
+# a pilot's own scripts live in it too.
+if (Test-Path $sourceFunctionRoot) {
+    if (-not (Test-Path $targetFunctionRoot)) {
+        New-Item -ItemType Directory -Path $targetFunctionRoot -Force | Out-Null
+    }
+    Copy-Item -Path (Join-Path $sourceFunctionRoot '*.lua') -Destination $targetFunctionRoot -Force
+}
+
 if (Test-Path $targetSoundsRoot) {
     Remove-Item -Path $targetSoundsRoot -Recurse -Force
 }
@@ -308,18 +399,48 @@ foreach ($wav in @('beep.wav', 'multibeep.wav', 'warn.wav', 'alarm.wav')) {
 New-ThemeIndexFile -TargetCoreDir $targetCore -TargetUserDir $targetUserRoot
 
 # Run translation pre-compiler and resolver to inline the language strings
-Write-Host "Running i18n pre-compiler and resolver for language: $Language"
-python (Join-Path $workspaceRoot '.vscode\scripts\precompile_i18n.py') --root $toolsRoot
-python (Join-Path $workspaceRoot '.vscode\scripts\precompile_i18n.py') --root $targetWidgetRoot
+Write-Host "Running i18n pre-compiler and resolver for language: $Language (source: $languageSource)"
 
-python (Join-Path $workspaceRoot '.vscode\scripts\resolve_i18n_tags.py') --json (Join-Path $sourceCore "i18n\$Language.lua") --root $toolsRoot
-python (Join-Path $workspaceRoot '.vscode\scripts\resolve_i18n_tags.py') --json (Join-Path $sourceCore "i18n\$Language.lua") --root $targetWidgetRoot
+$pythonCmd = 'python'
+if (-not (Get-Command $pythonCmd -ErrorAction SilentlyContinue)) {
+    if (Get-Command 'python3' -ErrorAction SilentlyContinue) {
+        $pythonCmd = 'python3'
+    } elseif (Get-Command 'py' -ErrorAction SilentlyContinue) {
+        $pythonCmd = 'py'
+    } else {
+        $pathsToTry = @(
+            "$env:LOCALAPPDATA\Microsoft\WindowsApps\python.exe",
+            "$env:LOCALAPPDATA\Microsoft\WindowsApps\python3.exe",
+            "C:\msys64\ucrt64\bin\python.exe",
+            "C:\msys64\usr\bin\python.exe",
+            "C:\Python312\python.exe",
+            "C:\Python311\python.exe",
+            "C:\Python310\python.exe",
+            "C:\Program Files\Python312\python.exe",
+            "C:\Program Files\Python311\python.exe",
+            "C:\Program Files\Python310\python.exe"
+        )
+        foreach ($p in $pathsToTry) {
+            if (Test-Path $p) {
+                $pythonCmd = $p
+                break
+            }
+        }
+    }
+}
+
+& $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\precompile_i18n.py') --root $toolsRoot
+& $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\precompile_i18n.py') --root $targetWidgetRoot
+
+& $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\resolve_i18n_tags.py') --json (Join-Path $sourceCore "i18n\$Language.lua") --root $toolsRoot
+& $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\resolve_i18n_tags.py') --json (Join-Path $sourceCore "i18n\$Language.lua") --root $targetWidgetRoot
 
 Write-Host "RFSuite demo deployed to:"
 Write-Host "  Target mode:     $Target"
 Write-Host "  Target root:     $TargetRoot"
-Write-Host "  Language:        $Language"
+Write-Host "  Language:        $Language ($languageSource)"
 Write-Host "  Tool entrypoint: $targetToolEntrypoint"
 Write-Host "  Core package:    $targetCore"
 Write-Host "  User data:       $targetUserRoot"
 Write-Host "  Widget package:  $targetWidgetRoot"
+Write-Host "  Function scripts:$targetFunctionRoot"

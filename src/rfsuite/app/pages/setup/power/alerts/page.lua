@@ -238,9 +238,6 @@ function M.getHeaderActions()
 	}
 end
 
-function M.allowMemAutoRefresh()
-	return true
-end
 
 function M.onReload()
 	ensureDeps()
@@ -266,8 +263,8 @@ function M.onSave(ctx)
 
 	local okPrefs, errPrefs = saveModelPreferences(session)
 	if not okPrefs then
-		if lvgl and lvgl.alert then
-			lvgl.alert({
+		if ctx and type(ctx.reportSave) == "function" then
+			ctx.reportSave({
 				title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
 				message = pageText(ctx and ctx.i18n, "save_error_message", "Save failed") .. ": " .. tostring(errPrefs or "io")
 			})
@@ -275,8 +272,9 @@ function M.onSave(ctx)
 		return false
 	end
 
-	if lvgl and lvgl.alert then
-		lvgl.alert({
+	if ctx and type(ctx.reportSave) == "function" then
+		ctx.reportSave({
+			ok = true,
 			title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
 			message = pageText(ctx and ctx.i18n, "saved_message", "Power alerts saved")
 		})

@@ -17,7 +17,7 @@ end
 
 local function debugLog(message)
   if Log then
-    Log.emit("dashboard.lib", DEBUG_PREFIX .. tostring(message), "debug", true)
+    Log.emit("dashboard.lib", DEBUG_PREFIX .. tostring(message), "debug")
   end
 end
 
@@ -351,7 +351,18 @@ function M.getThemeConfig(prefs, path, defaults, modelPrefs)
     dashboard = {}
   end
 
-  -- First, apply global preferences
+  local prefix = sanitizeThemeKey(path)
+  local prefixPattern = prefix and ("^cfg_" .. prefix .. "_(.+)$")
+
+  -- 1. First, apply global preferences
+  if prefixPattern then
+    for k, v in pairs(dashboard) do
+      local subKey = string.match(k, prefixPattern)
+      if subKey then
+        out[subKey] = v
+      end
+    end
+  end
   for k in pairs(source) do
     local key = themeConfigKey(path, k)
     if key and dashboard[key] ~= nil then
@@ -359,10 +370,18 @@ function M.getThemeConfig(prefs, path, defaults, modelPrefs)
     end
   end
 
-  -- Then, apply model-specific preferences (higher priority)
+  -- 2. Then, apply model-specific preferences (higher priority)
   if type(modelPrefs) == "table" then
     local modelDashboard = modelPrefs.dashboard
     if type(modelDashboard) == "table" then
+      if prefixPattern then
+        for k, v in pairs(modelDashboard) do
+          local subKey = string.match(k, prefixPattern)
+          if subKey then
+            out[subKey] = v
+          end
+        end
+      end
       for k in pairs(source) do
         local key = themeConfigKey(path, k)
         if key and modelDashboard[key] ~= nil then
@@ -375,20 +394,43 @@ function M.getThemeConfig(prefs, path, defaults, modelPrefs)
   return out
 end
 
+-- A theme's configuration describes the aircraft rather than the radio: the battery bounds a
+-- theme is configured with are the cell count of one model. So the per-model store is the
+-- target whenever there is one, and the global file is the fallback for a radio that has none
+-- -- not a second copy.
+--
+-- Writing both made every value the last configured model chose the default for every model
+-- that has none of its own, and getThemeConfig reads the global half first, so the leak is
+-- read straight back. It reaches further than the numbers: widgets/dashboard/runtime.lua
+-- treats any v_min/v_max it finds as a deliberate choice (`_customVoltage`) and then skips
+-- normalising the bounds to the cell count it measured, so one configured theme switched that
+-- normalisation off for every other model as well.
+--
+-- Saving into the per-model store therefore also clears this theme's keys from the global
+-- file, whatever they hold. A value there cannot be told apart from the copy the old
+-- unconditional double write left behind, so keeping the ones that merely differ would carry
+-- the leak on for every radio configured before this: the next model with no store of its own
+-- would read that number and lose its cell-count normalisation exactly as before.
 function M.setThemeConfig(prefs, path, values, modelPrefs)
-  -- If modelPrefs provided, save to model prefs; otherwise save to global prefs
-  local target = modelPrefs or prefs
-  if type(target) ~= "table" then return end
   if type(values) ~= "table" then return end
 
-  target.dashboard = target.dashboard or {}
-  local dashboard = target.dashboard
-  if type(dashboard) ~= "table" then return end
+  local target = (type(modelPrefs) == "table") and modelPrefs or prefs
+  if type(target) ~= "table" then return end
 
+  target.dashboard = target.dashboard or {}
   for k, v in pairs(values) do
     local key = themeConfigKey(path, k)
     if key then
-      dashboard[key] = v
+      target.dashboard[key] = v
+    end
+  end
+
+  if target ~= prefs and type(prefs) == "table" and type(prefs.dashboard) == "table" then
+    for k in pairs(values) do
+      local key = themeConfigKey(path, k)
+      if key then
+        prefs.dashboard[key] = nil
+      end
     end
   end
 end

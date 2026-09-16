@@ -15,12 +15,18 @@ local SERVO_FIELDS = {
   {"flags", "U16"}
 }
 
+-- Eight U16 per servo, in the order SERVO_FIELDS declares and the firmware writes them:
+-- mid, min, max, rneg, rpos, rate, speed, flags. The previous fixture had SEVEN pairs per
+-- row -- `rpos` was missing from every one -- so each servo consumed two bytes of the next
+-- one and the shift compounded down the block, with the last servo reading past its end.
+-- What pins the alignment is the fourth row: 77,1 is 333, the firmware's own default servo
+-- rate, and it can only land on `rate` if `rpos` is the field that is absent.
 local SIM_RESPONSE = {
   4,
-  180,5, 12,254, 244,1, 244,1, 144,0, 0,0, 1,0,
-  160,5, 12,254, 244,1, 244,1, 144,0, 0,0, 1,0,
-  14,6, 12,254, 244,1, 244,1, 144,0, 0,0, 0,0,
-  120,5, 212,254, 44,1, 244,1, 77,1, 0,0, 0,0
+  180,5, 12,254, 244,1, 244,1, 244,1, 144,0, 0,0, 1,0,
+  160,5, 12,254, 244,1, 244,1, 244,1, 144,0, 0,0, 1,0,
+  14,6,  12,254, 244,1, 244,1, 244,1, 144,0, 0,0, 0,0,
+  120,5, 212,254, 44,1, 244,1, 244,1, 77,1,  0,0, 0,0
 }
 
 local function read_s16_le(buf, pos)
@@ -60,7 +66,7 @@ function Api.parse(buf)
       end
     end
   end
-  return { parsed = parsed }
+  return parsed
 end
 
 Api.simulatorResponse = SIM_RESPONSE

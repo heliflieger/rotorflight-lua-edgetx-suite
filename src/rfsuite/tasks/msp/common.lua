@@ -13,6 +13,21 @@ local function loadTransport(protocol)
   return transport
 end
 
+local Env = nil
+
+local function getEnv()
+  if Env == nil then
+    if _G.rfsuite and _G.rfsuite.require then
+      Env = _G.rfsuite.require("lib/env.lua") or false
+    else
+      local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/env.lua", "t")
+      local ok, mod = pcall(chunk)
+      Env = (ok and type(mod) == "table") and mod or false
+    end
+  end
+  return Env or nil
+end
+
 local function new(protocol)
   local transport = loadTransport(protocol)
   if not transport then return nil end
@@ -88,6 +103,19 @@ local function new(protocol)
   local function mspProcessTxQ()
     if #mspTxBuf == 0 then return false end
 
+    -- Where this chunk starts. `transport.mspSend` hands the frame to a ONE-SLOT uplink buffer
+    -- that answers false while it is still occupied, and a chunk that was refused was never
+    -- sent -- so the index must not move past it. Without this a request longer than one chunk
+    -- loses its tail: the flight controller assembles nothing, answers nothing, and the whole
+    -- message is retried from the beginning after the timeout.
+    local chunkIdx = mspTxIdx
+    local chunkCRC = mspTxCRC
+    -- ... and the sequence, which buildStatusByte advances as a side effect of being called.
+    -- A re-sent chunk has to carry the sequence it was built with: the receiver drops the whole
+    -- request when the numbers skip, so restoring the index without the sequence turns a lost
+    -- chunk into a lost message just the same.
+    local chunkSeq = mspSeq
+
     local payload = {}
     payload[1] = buildStatusByte(mspTxIdx == 1)
 
@@ -107,14 +135,23 @@ local function new(protocol)
         for j = i + 1, maxTxBufferSize do
           payload[j] = 0
         end
-        transport.mspSend(payload)
+        if not transport.mspSend(payload) then
+          mspTxIdx = chunkIdx
+          mspTxCRC = chunkCRC
+          mspSeq = chunkSeq
+          return true
+        end
         clearArray(mspTxBuf)
         mspTxIdx = 1
         mspTxCRC = 0
         return false
       end
 
-      transport.mspSend(payload)
+      if not transport.mspSend(payload) then
+        mspTxIdx = chunkIdx
+        mspTxCRC = chunkCRC
+        mspSeq = chunkSeq
+      end
       return true
     end
 
@@ -122,7 +159,13 @@ local function new(protocol)
       payload[j] = payload[j] or 0
     end
 
-    transport.mspSend(payload)
+    if not transport.mspSend(payload) then
+      mspTxIdx = chunkIdx
+      mspTxCRC = chunkCRC
+      mspSeq = chunkSeq
+      return true
+    end
+
     if mspTxIdx > #mspTxBuf then
       clearArray(mspTxBuf)
       mspTxIdx = 1
@@ -281,7 +324,14 @@ local function new(protocol)
     local polls = 0
     local nilPolls = 0
 
-    while nowSeconds() < deadline do
+    -- In the widget state the loop is bounded by counts alone (maxPolls and the nil caps):
+    -- the firmware bills a widget call in instructions, not wall time, so the same time
+    -- window costs more iterations on a faster board and cannot be accounted statically.
+    -- The tool state has no instruction hook, wants throughput, and keeps the window.
+    local env = getEnv()
+    local countsOnly = env ~= nil and type(env.isWidget) == "function" and env.isWidget() == true
+
+    while countsOnly or nowSeconds() < deadline do
       polls = polls + 1
       if polls > maxPolls then
         return nil
@@ -315,11 +365,27 @@ local function new(protocol)
     mspTxCRC = 0
   end
 
+  -- Drop a half-finished reassembly. Chunks of a reply whose request has been abandoned keep
+  -- arriving; with the receive state left as it is they are still accepted, still complete,
+  -- and still report the command id of the request that is gone -- so the completion is
+  -- handed to whatever asks for that same command next.
+  local function mspClearRxBuf()
+    clearArray(mspRxBuf)
+    mspRxSize = 0
+    mspRxCRC = 0
+    mspRxReq = 0
+    mspRxError = false
+    mspStarted = false
+    mspRemoteSeq = 0
+    mspLastReq = 0
+  end
+
   return {
     sendRequest = mspSendRequest,
     processTxQ = mspProcessTxQ,
     pollReply = mspPollReply,
     clearTxBuf = mspClearTxBuf,
+    clearRxBuf = mspClearRxBuf,
     setProtocolVersion = function(v)
       local n = tonumber(v)
       mspVersion = (n == 2) and 2 or 1

@@ -214,75 +214,14 @@
       }
     },
     {
-      "label": "Updater: Build Tool",
+      "label": "RFSuite: Build Radio Install ZIPs (Python)",
       "type": "shell",
       "command": "cmd.exe",
       "args": [
         "/c",
-        "${workspaceFolder}\\bin\\updater\\src\\make.cmd"
-      ],
-      "group": "build",
-      "problemMatcher": [],
-      "presentation": {
-        "panel": "dedicated",
-        "clear": true,
-        "showReuseMessage": false
-      }
-    },
-    {
-      "label": "Updater: Run Tool",
-      "type": "process",
-      "command": "${workspaceFolder}\\bin\\updater\\updater.exe",
-      "options": {
-        "cwd": "${workspaceFolder}\\bin\\updater"
-      },
-      "problemMatcher": [],
-      "runOptions": {
-        "instanceLimit": 1
-      },
-      "presentation": {
-        "panel": "dedicated",
-        "showReuseMessage": false
-      }
-    },
-    {
-      "label": "Updater: Build + Run Tool",
-      "dependsOn": [
-        "Updater: Build Tool",
-        "Updater: Run Tool"
-      ],
-      "dependsOrder": "sequence",
-      "group": "build",
-      "runOptions": {
-        "instanceLimit": 1
-      }
-    },
-    {
-      "label": "Updater: Run Python Source (Dev)",
-      "type": "shell",
-      "command": "python",
-      "args": [
-        "${workspaceFolder}\\bin\\updater\\src\\updater.py"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}\\bin\\updater\\src"
-      },
-      "problemMatcher": [],
-      "runOptions": {
-        "instanceLimit": 1
-      },
-      "presentation": {
-        "panel": "dedicated",
-        "clear": true,
-        "showReuseMessage": false
-      }
-    },
-    {
-      "label": "RFSuite: Build Radio Install ZIPs (Python)",
-      "type": "shell",
-      "command": "python",
-      "args": [
-        "${workspaceFolder}\\.github\\scripts\\build_zips.py"
+        "${workspaceFolder}\\bin\\package\\package.cmd",
+        "en",
+        "local-test"
       ],
       "group": "build",
       "problemMatcher": [],

@@ -2,7 +2,7 @@ local M = {}
 
 M.MAJOR = 0
 M.MINOR = 1
-M.PATCH = 0
+M.PATCH = 7
 
 M.VERSION = M.MAJOR .. "." .. M.MINOR .. "." .. M.PATCH
 

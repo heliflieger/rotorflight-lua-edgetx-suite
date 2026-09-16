@@ -7,7 +7,7 @@ local Api = {
 }
 
 local FIELD_SPEC = {
-    {"esc_signature","U8"}, {"esc_command","U8"}, {"esc_model","U8"}, {"esc_version","U8"},
+    {"esc_signature","U8"}, {"esc_command","U8"}, {"esc_version","U8"}, {"esc_model","U8"},
     {"governor","U16"}, {"cell_cutoff","U16"}, {"timing","U16"}, {"lv_bec_voltage","U16"},
     {"motor_direction","U16"}, {"gov_p","U16"}, {"gov_i","U16"}, {"acceleration","U16"},
     {"auto_restart_time","U16"}, {"hv_bec_voltage","U16"}, {"startup_power","U16"}, {"brake_type","U16"},

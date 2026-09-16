@@ -10,10 +10,13 @@ local function loadModule(path)
 end
 
 local Controls = nil
+local SavePipeline = nil
 local Common = nil
 local MspRuntime = nil
 local SerialConfigApi = nil
 local RxConfigApi = nil
+local BoardInfoApi = nil
+local PortLabels = nil
 local ApiVersion = nil
 local LoadingOverlay = nil
 local t = nil
@@ -75,6 +78,7 @@ local ui = {
   portsOriginal = {},
   portsWorking = {},
   rxSerialProvider = 0,
+  boardDesign = nil,
   runtime = newRuntime(),
   loading = false,
   progress = 0,
@@ -92,6 +96,8 @@ local function ensureDeps()
   if not MspRuntime then MspRuntime = loadModule("tasks/msp/runtime.lua") end
   if not SerialConfigApi then SerialConfigApi = loadModule("tasks/msp/api/serial_config.lua") end
   if not RxConfigApi then RxConfigApi = loadModule("tasks/msp/api/rx_config.lua") end
+  if not BoardInfoApi then BoardInfoApi = loadModule("tasks/msp/api/board_info.lua") end
+  if not PortLabels then PortLabels = loadModule("lib/port_labels.lua") end
   if not ApiVersion then ApiVersion = loadModule("lib/api_version.lua") end
   if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
   if not t then t = Common and Common.pageT("setup_ports") or nil end
@@ -270,10 +276,26 @@ local function applyReceiverGuardToWorkingCopy()
   end
 end
 
+-- What a row is called.
+--
+-- The identifier the firmware reports is a UART number, and that is not what is written beside
+-- the socket: the board says "Port A" or "S.BUS", and which UART that is depends on the board.
+-- MSP_BOARD_INFO reports a board design, and the design is the key to the printed names, so a
+-- row carries both -- the label the pilot can find on the machine in front of him, and the UART
+-- name the firmware's CLI and the documentation use for the same socket.
+--
+-- The pairing is the Configurator's, which draws exactly this on its own Ports tab and falls
+-- back to the bare UART name for a design it has no map for
+-- (rotorflight-configurator src/js/tabs/configuration.js:475-481). A board outside those designs
+-- is the normal case rather than an error, and it looks exactly as this page always has.
 local function portLabel(identifier)
   local name = UART_NAMES[identifier]
-  if name then return name end
-  return pageText(nil, "port_prefix", "Port") .. " " .. tostring(identifier)
+  if not name then
+    return pageText(nil, "port_prefix", "Port") .. " " .. tostring(identifier)
+  end
+  local printed = PortLabels and PortLabels.label(ui.boardDesign, identifier)
+  if not printed then return name end
+  return printed .. " [" .. name .. "]"
 end
 
 local function loadFromSession()
@@ -285,6 +307,7 @@ local function loadFromSession()
     ui.portsWorking = clonePorts(saved.ports)
   end
   ui.rxSerialProvider = tonumber(saved.rxSerialProvider) or 0
+  ui.boardDesign = saved.boardDesign
 end
 
 local function saveToSession()
@@ -295,6 +318,7 @@ local function saveToSession()
   end
   session.setup_ports.ports = clonePorts(ui.portsWorking)
   session.setup_ports.rxSerialProvider = ui.rxSerialProvider
+  session.setup_ports.boardDesign = ui.boardDesign
 end
 
 local function queuePortsRead(isAutoReload)
@@ -318,13 +342,53 @@ local function queuePortsRead(isAutoReload)
     end
   end
 
+  local function finishRead()
+    ui.runtime.readPending = false
+    ui.loading = false
+    if type(ui.runtime.requestRebuild) == "function" then
+      ui.runtime.requestRebuild()
+    end
+  end
+
+  -- The third and last read, queued once the two below have answered: MSP_BOARD_INFO, which is
+  -- what tells this page which board it is talking to and so what that board calls its sockets.
+  --
+  -- A failure here ends the read the same way a success does. A board that does not answer the
+  -- command, or answers with a design nothing is known about, leaves every row with its plain
+  -- UART name -- which is what this page showed before it asked at all, and is not a reason to
+  -- withhold the port configuration the two reads before it already have.
+  local function queueBoardInfoRead()
+    if not BoardInfoApi then
+      ui.progress = 100
+      finishRead()
+      return
+    end
+
+    queue:add({
+      command = BoardInfoApi.command,
+      simulatorResponse = BoardInfoApi.simulatorResponse,
+      processReply = function(self, buf)
+        local parsed = BoardInfoApi.parse(buf)
+        ui.boardDesign = parsed and parsed.board_design or nil
+        saveToSession()
+        ui.progress = 100
+        finishRead()
+      end,
+      errorHandler = function()
+        ui.boardDesign = nil
+        saveToSession()
+        ui.progress = 100
+        finishRead()
+      end
+    })
+  end
+
   -- Step 1: Read SERIAL_CONFIG
   queue:add({
     command = SerialConfigApi.command,
     simulatorResponse = SerialConfigApi.simulatorResponse,
     processReply = function(self, buf)
-      local parsedObj = SerialConfigApi.parse(buf)
-      local parsed = parsedObj and parsedObj.parsed
+      local parsed = SerialConfigApi.parse(buf)
       if parsed then
         local ports = {}
         local maxPorts = 12
@@ -351,7 +415,7 @@ local function queuePortsRead(isAutoReload)
       end
 
       -- Step 2: Read RX_CONFIG
-      ui.progress = 50
+      ui.progress = 33
       if type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
@@ -360,27 +424,23 @@ local function queuePortsRead(isAutoReload)
         command = RxConfigApi.command,
         simulatorResponse = RxConfigApi.simulatorResponse,
         processReply = function(self2, buf2)
-          local parsedObj2 = RxConfigApi.parse(buf2)
-          local parsed2 = parsedObj2 and parsedObj2.parsed
+          local parsed2 = RxConfigApi.parse(buf2)
           if parsed2 then
             ui.rxSerialProvider = tonumber(parsed2.serialrx_provider) or 0
             saveToSession()
           end
 
-          ui.runtime.readPending = false
-          ui.loading = false
           ui.dirty = false
-          ui.progress = 100
+          ui.progress = 66
           if type(ui.runtime.requestRebuild) == "function" then
             ui.runtime.requestRebuild()
           end
+
+          queueBoardInfoRead()
         end,
         errorHandler = function()
-          ui.runtime.readPending = false
-          ui.loading = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
+          ui.progress = 66
+          queueBoardInfoRead()
         end
       })
     end,
@@ -397,71 +457,46 @@ local function queuePortsRead(isAutoReload)
 end
 
 local function queuePortsWrite()
-  if not MspRuntime or not SerialConfigApi or type(MspRuntime.getState) ~= "function" then
+  if not SavePipeline then SavePipeline = loadModule("tasks/msp/save_pipeline.lua") end
+  if not SavePipeline or not SerialConfigApi then
     return false, "msp_runtime_unavailable"
-  end
-
-  local mspState = MspRuntime.getState()
-  local queue = mspState and mspState.queue
-  if not queue or type(queue.add) ~= "function" then
-    return false, "msp_queue_unavailable"
   end
 
   applyReceiverGuardToWorkingCopy()
 
-  local index = 1
-  local total = #ui.portsWorking
-
-  local function writeNext()
-    if index > total then
-      -- Step 2: Write EEPROM
-      local eepromApi = loadModule("tasks/msp/api/eeprom_write.lua")
-      if eepromApi then
-        queue:add({
-          command = eepromApi.writeCommand,
-          payload = {},
-          isWrite = true,
-          simulatorResponse = {},
-          processReply = function()
-            -- Step 3: Reboot FC
-            local rebootApi = loadModule("tasks/msp/api/reboot.lua")
-            if rebootApi then
-              queue:add({
-                command = rebootApi.writeCommand,
-                payload = rebootApi.buildWritePayload({ rebootMode = 0 }),
-                isWrite = true,
-                simulatorResponse = {},
-                processReply = function() end,
-                errorHandler = function() end
-              })
-            end
-          end,
-          errorHandler = function() end
-        })
-      end
-      return
-    end
-
-    local port = ui.portsWorking[index]
-    local payload = SerialConfigApi.buildWritePayload(port)
-
-    queue:add({
+  -- One write per port, as before. What was a recursive writeNext() queueing the next port from
+  -- the previous one's processReply is a list of steps here, so the same order costs no
+  -- recursion and the EEPROM commit is not buried three closures deep.
+  local steps = {}
+  for i = 1, #ui.portsWorking do
+    steps[#steps + 1] = {
+      label = "MSP_SET_CF_SERIAL_CONFIG",
       command = SerialConfigApi.writeCommand,
-      payload = payload,
-      isWrite = true,
-      simulatorResponse = {},
-      processReply = function()
-        index = index + 1
-        writeNext()
-      end,
-      errorHandler = function()
-        -- Proceed to next even if fail
-      end
-    })
+      payload = SerialConfigApi.buildWritePayload(ui.portsWorking[i])
+    }
   end
 
-  writeNext()
-  return true, nil
+  -- Behaviour change worth naming: a port write that failed used to run an errorHandler whose
+  -- comment says it proceeds to the next port and whose body is empty, so the chain simply
+  -- stopped -- no further port, no EEPROM commit, no reboot and nothing on screen. The pipeline
+  -- ends the save on a failed step and says which one.
+  return SavePipeline.start({
+    pageId = "setup_ports",
+    steps = steps,
+    reboot = true,
+    invalidateSessionKeys = { "setup_ports" },
+    onSaved = function()
+      ui.dirty = false
+    end,
+    onDone = function(result)
+      if result.status ~= "done" then
+        ui.dirty = true
+      end
+      if ui.runtime and type(ui.runtime.requestRebuild) == "function" then
+        ui.runtime.requestRebuild()
+      end
+    end
+  })
 end
 
 local function buildSessionSignature()
@@ -483,9 +518,9 @@ local function ensureLoaded()
 end
 
 local function appendPortRow(children, x, y, w, lineTitle, port, portIndex, i18n)
-  local rowH = 52
-  local labelY = y + 16
-  local comboY = y + 6
+  local rowH = (Controls and Controls.ROW_H) or 64
+  local labelY = (Controls and Controls.labelY and Controls.labelY(y, rowH)) or (y + math.floor((rowH - 21) / 2))
+  local comboY = (Controls and Controls.controlY and Controls.controlY(y, rowH)) or (y + math.floor((rowH - 32) / 2))
   local dividerY = y + rowH
 
   local gap = 6
@@ -526,7 +561,7 @@ local function appendPortRow(children, x, y, w, lineTitle, port, portIndex, i18n
   children[#children + 1] = {
     type  = "choice",
     x = xFunc, y = comboY,
-    w = wFunc, h = 36,
+    w = wFunc,
     title = pageText(i18n, "title", "Ports"),
     values = functionFieldValues,
     active = function() return not port.receiver_locked end,
@@ -587,7 +622,7 @@ local function appendPortRow(children, x, y, w, lineTitle, port, portIndex, i18n
   children[#children + 1] = {
     type  = "choice",
     x = xBaud, y = comboY,
-    w = wBaud, h = 36,
+    w = wBaud,
     title = pageText(i18n, "title", "Ports"),
     values = baudFieldValues,
     active = function() return not port.receiver_locked end,
@@ -615,7 +650,7 @@ local function appendPortRow(children, x, y, w, lineTitle, port, portIndex, i18n
     type   = "rectangle",
     x = x, y = dividerY,
     w = w, h = 1,
-    color  = GREY_DEFAULT, filled = true
+    color  = COLOR_THEME_SECONDARY2, filled = true
   }
 
   return rowH + 1
@@ -629,6 +664,11 @@ end
 function M.onActivate()
   ensureDeps()
   ensureLoaded()
+  -- A save whose overlay was dismissed finished without a screen. Its outcome was held
+  -- back rather than raised over whatever page the user went to; claim it now.
+  if SavePipeline and type(SavePipeline.takeResult) == "function" then
+    SavePipeline.takeResult("setup_ports")
+  end
 end
 
 function M.wakeup(ctx)
@@ -717,8 +757,8 @@ end
 function M.onSave(ctx)
   local ok, err = queuePortsWrite()
   if not ok then
-    if lvgl and lvgl.alert then
-      lvgl.alert({
+    if ctx and type(ctx.reportSave) == "function" then
+      ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
         message = tostring(err or "MSP write failed")
       })
@@ -726,13 +766,12 @@ function M.onSave(ctx)
     return false
   end
 
-  ui.dirty = false
-  if lvgl and lvgl.alert then
-    lvgl.alert({
-      title = pageText(ctx and ctx.i18n, "saved_title", "Saved"),
-      message = pageText(ctx and ctx.i18n, "saved_message", "Ports configuration saved")
-    })
-  end
+  -- Nothing is announced here. This function has only QUEUED the save: the writes, the commit
+  -- and -- on this page -- the restart are all still ahead of it, and a dialog saying the
+  -- settings are saved would be a claim it cannot make. It was also drawn on TOP of the
+  -- overlay that reports the save, from a place where that overlay could not be repainted away
+  -- first, and while a native dialog stands the tool's run() does not run at all. The pipeline
+  -- reports the outcome in the overlay, once, when it knows it.
   return true
 end
 
@@ -754,9 +793,6 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.allowMemAutoRefresh()
-  return true
-end
 
 function M.onClose()
   if Common and type(Common.resetPageState) == "function" then
@@ -770,6 +806,8 @@ function M.onClose()
   MspRuntime = nil
   SerialConfigApi = nil
   RxConfigApi = nil
+  BoardInfoApi = nil
+  PortLabels = nil
   ApiVersion = nil
   LoadingOverlay = nil
   t = nil
