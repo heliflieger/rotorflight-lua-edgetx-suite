@@ -126,17 +126,15 @@ local function publishConnected(val)
   session.rfConnected = val
   if val == false then
     session.fblConnected = false
-    session.flightcount = 0
-    -- The flight record belongs to the connection: which battery was picked for it, and whether
-    -- a use has already been counted against that pack. A link that comes back is, as far as
-    -- anything here can tell, a fresh pack, so the record is dropped rather than carried into
-    -- it. A record still open goes with it -- nothing disarmed, so there is no honest duration.
+    -- The flight log's pending entry belongs to the connection: which battery was picked for it,
+    -- and whether a use has already been counted against that pack. A link that comes back is, as
+    -- far as anything here can tell, a fresh pack, so the entry is dropped rather than carried
+    -- into it. An entry still open goes with it -- nothing disarmed, so there is no honest duration.
     session.flightlog = nil
-    -- The statistics belong to the connection in the same way: a link that comes back is a fresh
-    -- pack and a fresh session, and a record still open has no honest end to it.
-    if FlightRecord and type(FlightRecord.reset) == "function" then
-      pcall(FlightRecord.reset)
-    end
+    -- The flight statistics and the board's flight count are deliberately NOT dropped here. The
+    -- link going down is what unplugging the pack after a flight looks like, and the dashboard's
+    -- post-flight page reads rfsuite.session.flight for its tiles: a reset at this edge blanked
+    -- them the moment the battery came off. Both are dropped when the next session begins, below.
     -- The tool and each widget are separate Lua states holding their own copy of what the card
     -- said, and the state that renames is usually not the state that puts the name back. One
     -- that first read the file while it was still empty would answer "nothing to do" for the
@@ -158,6 +156,16 @@ local function publishConnected(val)
     -- initialises `state.lastArmed` to the current armed value without firing an edge, which
     -- would defeat the purpose of the reset.
     state.lastArmed = false
+  end
+  if val == true then
+    -- A link coming up is, as far as anything here can tell, a fresh pack and a fresh session,
+    -- and that is what ends the record of the one before it: the statistics and the flight clock
+    -- go, and the board's flight count is zeroed until the connect chain has read this board's.
+    -- A record still open has no honest end to it and goes with them.
+    session.flightcount = 0
+    if FlightRecord and type(FlightRecord.reset) == "function" then
+      pcall(FlightRecord.reset)
+    end
   end
   if Log and type(Log.emit) == "function" then
     pcall(Log.emit, "rfsuite.events", "session.isConnected=" .. tostring(val), "info")

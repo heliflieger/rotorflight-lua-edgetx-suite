@@ -11,7 +11,7 @@ One file per page, at the path of the page under `src/rfsuite/app/pages/` with `
 appended: the page `setup/power/smartfuel/page.lua` is documented in
 `docs/pages/setup/power/smartfuel.md`. Menu entries that only open a submenu have no file.
 
-**Status:** 93 reachable pages, 7 written. 72 of them carry an in-app help text behind the
+**Status:** 93 reachable pages, 11 written. 73 of them carry an in-app help text behind the
 `?` in the header, which is the text to start a page file from; the others start from the
 page source.
 
@@ -105,7 +105,7 @@ a page file are in [_template.md](../_template.md), and the mechanics are explai
 | Flight Log | `tools/flight_log.md` | yes | preview switch *Flight Log*, read-only while armed | written |
 | Diagnostics → FBL Status | `tools/diagnostics/fblstatus.md` | no | needs the flight controller, read-only while armed | to write |
 | Diagnostics → RF Status | `tools/diagnostics/rfstatus.md` | yes | needs the flight controller, read-only while armed | to write |
-| Diagnostics → ELRS Link | `tools/diagnostics/elrs_link.md` | no | read-only while armed | to write |
+| Diagnostics → ELRS Link | [tools/diagnostics/elrs_link.md](tools/diagnostics/elrs_link.md) | yes | read-only while armed | written |
 | Diagnostics → Validate Sensors | `tools/diagnostics/validate_sensors.md` | yes | needs the flight controller, read-only while armed | to write |
 | Diagnostics → SmartFuel | `tools/diagnostics/smartfuel.md` | no | needs the flight controller, read-only while armed, needs MSP API 12.09 | to write |
 | Diagnostics → Session Logs | `tools/diagnostics/session_logs.md` | no | always available | to write |

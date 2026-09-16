@@ -2314,7 +2314,11 @@ function Runtime.new(zone, options)
       self.state.armedSeen = false
       self.state.batteryCellCount = 0
       -- The flight clock and the statistics are the record's; the event runtime drops them on
-      -- the same disconnect that brings this branch about, and the next pass reads what is left.
+      -- the connect edge of its own link detector, which follows this one once the link has held
+      -- for its CONNECT_STABLE_SECONDS -- not on the disconnect before it, which the post-flight
+      -- page has to outlive -- and the passes after that read what is left. Nothing shows them in
+      -- between: this branch has just torn the scene down, and the splash stands until the
+      -- connect chain has run.
       self.state.lastDisarmAt = nil
       self.state.profile = nil
       self.state.rateProfile = nil
@@ -2527,7 +2531,29 @@ function Runtime.new(zone, options)
           _G.rfsuite.session.event_context = nil
         end
       end
-      if self._job.step(self) then
+      -- Run the step under pcall so that a raise (including a CPU-limit kill or a
+      -- theme build error) always clears _job.  Without this guard a raising step
+      -- pins the widget in the JOB branch for ever: the next pass finds _job still
+      -- set, reruns the same step, raises again, and the STATE branch — where
+      -- performBackgroundWork / MspRuntime.tick live — is never reached again.
+      local stepOk, stepDone = pcall(self._job.step, self)
+      if not stepOk then
+        local jobKind = self._job and self._job.kind or "unknown"
+        self._job   = nil
+        self.built  = false
+        -- The entry point owns the CPU-limit response: the hold-off, and the release of the two
+        -- variables the overlay may be holding. It cannot do either if the raise stops here.
+        local isCpuLimit = (LogSink and type(LogSink.isCpuLimitError) == "function" and LogSink.isCpuLimitError(stepDone))
+          or (type(stepDone) == "string" and string.find(stepDone, "CPU limit", 1, true) ~= nil)
+        if isCpuLimit then
+          error(stepDone, 0)
+        end
+        if LogSink and type(LogSink.fault) == "function" then
+          pcall(LogSink.fault, "dashboard.job." .. tostring(jobKind), stepDone)
+        end
+        widgetLog(self, "job step error (" .. tostring(jobKind) .. "): " .. tostring(stepDone), "error")
+      elseif stepDone then
+        -- step returned true: job is done.
         self._job = nil
       end
       -- The second of the two clock reads the gap line is built from; see traceInstructionUsage.

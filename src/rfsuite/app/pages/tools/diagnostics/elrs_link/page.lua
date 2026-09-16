@@ -16,6 +16,7 @@ end
 
 local Common = nil
 local ElrsTask = nil
+local ConfirmDialog = nil
 local t = nil
 
 local state = {
@@ -55,6 +56,7 @@ local function ensureDeps()
   end
   if not t then t = Common and Common.pageT("diagnostics_elrs_link") or nil end
   if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
+  if not ConfirmDialog then ConfirmDialog = loadModule("ui/confirm_dialog.lua") end
 end
 
 local function pageText(i18n, key, fallback)
@@ -174,12 +176,83 @@ local function actionModeLabel(i18n, mode)
     return pageText(i18n, "action_probe_only", "Probe only")
 end
 
+-- The question a sync button asks, with both sides as the page already shows them.
+--
+-- The probe that makes the buttons live has read the module and the flight controller by the
+-- time either one can be pressed, so the question can quote them instead of asking in the
+-- abstract. It quotes the last read rather than the write: the sync re-walks the module before
+-- it decides what to send. Where a side was not read, its summary says so itself.
+local function syncQuestion(i18n, mode)
+  local lines = {}
+  if mode == ElrsTask.MODE_ROTORFLIGHT_TO_ELRS then
+    lines[#lines + 1] = pageText(i18n, "confirm_rf_to_elrs",
+      "Set the ELRS module's packet rate and telemetry ratio to match Rotorflight?")
+  else
+    lines[#lines + 1] = pageText(i18n, "confirm_elrs_to_rf",
+      "Set Rotorflight's telemetry configuration to match the ELRS module, and save it?")
+  end
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = pageText(i18n, "rotorflight", "Rotorflight")
+    .. ": " .. formatRotorflightSummary(i18n)
+  lines[#lines + 1] = pageText(i18n, "elrs_module", "ELRS Module")
+    .. ": " .. formatElrsSummary(i18n)
+  return table.concat(lines, "\n")
+end
+
+-- Ask before either sync writes, and write nothing at all if the answer does not arrive.
+--
+-- Both directions reach a live device: one changes the transmitter module's packet rate and
+-- telemetry ratio, on a radio that may be bound to a helicopter at the time; the other writes the
+-- flight controller's telemetry configuration and commits it to EEPROM. Neither is a reading, so
+-- neither is started from a bare press.
+local function startSync(i18n, mode)
+  if not ElrsTask then return end
+
+  local function rebuild()
+    if type(state.requestRebuild) == "function" then state.requestRebuild() end
+  end
+
+  local shown = false
+  if ConfirmDialog and type(ConfirmDialog.show) == "function" then
+    shown = ConfirmDialog.show({
+      title = pageText(i18n, "confirm_title", "Confirm"),
+      message = syncQuestion(i18n, mode),
+      onConfirm = function()
+        -- The answer can arrive after the page has gone, and the task handle goes with it.
+        if not ElrsTask then return end
+        state.notice = nil
+        requestTelemetryConfig(true)
+        ElrsTask.start(mode)
+        rebuild()
+      end,
+      onCancel = function()
+        -- A declined sync changes nothing, and saying so is what keeps that apart from a button
+        -- that did not react.
+        state.notice = pageText(i18n, "confirm_cancelled", "Nothing was written")
+        rebuild()
+      end
+    })
+  end
+
+  if not shown then
+    -- No question could be put up, so there is no answer to act on. Neither write is something to
+    -- do on the assumption that the pilot would have said yes.
+    state.notice = pageText(i18n, "confirm_no_dialog", "This radio cannot show the confirmation.")
+    rebuild()
+  end
+end
+
 local function rebuildRows(i18n)
   if not ElrsTask then return false end
   
   local statusKey, statusDef = ElrsTask.getStatus()
   local status = pageText(i18n, statusKey, statusDef)
   local isRunning = ElrsTask.isRunning()
+  -- A declined or unanswerable confirmation leaves the task untouched, so its own status still
+  -- reads as the probe that ran before it. The notice is what tells the pilot nothing was
+  -- written. It stands only while nothing is running, so a task that starts for any reason
+  -- takes the row back rather than reporting underneath a stale line.
+  if state.notice and not isRunning then status = state.notice end
 
   local rows = {
     { label = pageText(i18n, "status", "Status"), value = status },
@@ -209,7 +282,7 @@ function M.getModuleTitle()
 end
 
 function M.getHeaderActions()
-  return { reload = true, save = false, help = false }
+  return { reload = true, save = false, help = true }
 end
 
 function M.isPageOpen()
@@ -217,6 +290,7 @@ function M.isPageOpen()
 end
 
 function M.onReload()
+  state.notice = nil
   requestTelemetryConfig(true)
   if ElrsTask then
     ElrsTask.start(ElrsTask.MODE_PROBE)
@@ -320,6 +394,7 @@ function M.build(ctx)
       textColor = WHITE,
       active = buttonsEnabled,
       press = function()
+        state.notice = nil
         requestTelemetryConfig(true)
         ElrsTask.start(ElrsTask.MODE_PROBE)
       end
@@ -334,8 +409,7 @@ function M.build(ctx)
       textColor = WHITE,
       active = buttonsEnabled,
       press = function()
-        requestTelemetryConfig(true)
-        ElrsTask.start(ElrsTask.MODE_ROTORFLIGHT_TO_ELRS)
+        startSync(i18n, ElrsTask.MODE_ROTORFLIGHT_TO_ELRS)
       end
     }
 
@@ -348,8 +422,7 @@ function M.build(ctx)
       textColor = WHITE,
       active = buttonsEnabled,
       press = function()
-        requestTelemetryConfig(true)
-        ElrsTask.start(ElrsTask.MODE_ELRS_TO_ROTORFLIGHT)
+        startSync(i18n, ElrsTask.MODE_ELRS_TO_ROTORFLIGHT)
       end
     }
   end
@@ -388,9 +461,11 @@ function M.closePage()
   state.i18n = nil
   state.fetchingConfig = false
   state.answered = false
+  state.notice = nil
   LoadingOverlay = nil
   Common = nil
   ElrsTask = nil
+  ConfirmDialog = nil
   t = nil
 end
 

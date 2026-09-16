@@ -393,6 +393,11 @@ function Sink.fault(context, err)
   end
 end
 
+--- True if the error is an EdgeTX CPU-limit kill.
+function Sink.isCpuLimitError(err)
+  return type(err) == "string" and string.find(err, "CPU limit", 1, true) ~= nil
+end
+
 --- Last chance to write, on a shutdown the caller controls.
 function Sink.shutdown()
   if not state then return end
@@ -408,6 +413,12 @@ if type(_G) == "table" then
   _G.rfsuite = _G.rfsuite or {}
   _G.rfsuite.logStep = function(label, force, key)
     return Sink.step(label, force, key)
+  end
+  _G.rfsuite.logFault = function(context, err)
+    return Sink.fault(context, err)
+  end
+  _G.rfsuite.isCpuLimitError = function(err)
+    return Sink.isCpuLimitError(err)
   end
 end
 

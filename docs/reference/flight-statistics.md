@@ -58,9 +58,11 @@ and the post-disarm reads already fire on. The arm edge opens a record; the disa
 `last` and starts an empty one. The record is closed **first** of everything that runs on the
 disarm edge, so anything behind it in that chain reads a finished flight.
 
-A link that goes down ends the session the record belongs to: the record is dropped with the rest
-of the connection state, because a link that comes back is, as far as anything here can tell, a
-fresh pack and a fresh session.
+A link that goes down does **not** end the record. After a flight the pilot disarms and unplugs the
+pack, and the post-flight page has to outlive that: its tiles read this record, so the statistics,
+the flight time and the flight count stay as they were for as long as the link is down. The record
+is dropped when the next session begins — when a link comes up again, which is, as far as anything
+here can tell, a fresh pack — and the next arm edge opens a fresh `current` as it always has.
 
 ## The two totals — what changed, and why they can go down
 

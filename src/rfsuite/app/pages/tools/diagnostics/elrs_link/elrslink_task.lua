@@ -548,7 +548,16 @@ local function handleDeviceInfo(data)
     end
     
     local lowerName = string_lower(newName or "")
-    local isElrs = (serial == ELRS_SERIAL_ID) or (srcAddr == CRSF_ADDRESS_CRSF_TRANSMITTER) or string_find(lowerName, "elrs", 1, true) or string_find(lowerName, "expresslrs", 1, true)
+    -- The address identifies nothing on its own: 0xEE is the CRSF transmitter address of the
+    -- protocol, so any transmitter module answers on it, and the ping above is a broadcast that
+    -- reaches every device on the link. What says ExpressLRS is the serial -- their own module
+    -- script reads the same four bytes for the same decision -- with the name as a fallback. The
+    -- address then answers the second question, whether this ExpressLRS device is the transmitter
+    -- module: packet rate and telemetry ratio are its fields, and the writes below go to it.
+    local isExpressLrs = (serial == ELRS_SERIAL_ID)
+        or string_find(lowerName, "elrs", 1, true)
+        or string_find(lowerName, "expresslrs", 1, true)
+    local isElrs = isExpressLrs and (srcAddr == CRSF_ADDRESS_CRSF_TRANSMITTER)
     
     if not isElrs then 
         logMsg("handleDeviceInfo: ignoring non-ELRS device '" .. tostring(newName) .. "' at " .. string.format("0x%02X", srcAddr) .. " serial=" .. string.format("0x%08X", serial))

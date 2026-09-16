@@ -435,7 +435,9 @@ function Record.wakeup(armed)
   publishTotals(flight, session)
 end
 
---- Drop everything. The link going down ends the session the record belongs to.
+--- Drop everything. A link coming up ends the session the record belongs to: the event runtime
+--- calls this on the connect edge, not on the disconnect before it, because after a flight the
+--- pack is unplugged and the post-flight read-out has to outlive that.
 function Record.reset()
   local flight = ensureFlight()
   closedFlights = 0
