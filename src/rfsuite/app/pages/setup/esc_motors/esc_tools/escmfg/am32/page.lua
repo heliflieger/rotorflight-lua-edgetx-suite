@@ -302,6 +302,13 @@ local function queuePostSaveReset(target, nextState)
   })
 end
 
+-- `M.onSave` passes the reason string straight into the report dialog, so a reason that is an
+-- ordinary situation has to be a translated key, not a code token. An AM32 save without a
+-- read is exactly that: an ESC that did not answer, or a page saved before the read came back.
+local MESSAGE_KEYS = {
+  esc_not_read = { "save_error_not_read", "Read the ESC before saving." }
+}
+
 local function queueAm32Write(requestRebuild)
   if not MspRuntime or not EscParametersAm32Api or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
@@ -311,6 +318,13 @@ local function queueAm32Write(requestRebuild)
   local queue = mspState and mspState.queue
   if not queue or type(queue.add) ~= "function" then
     return false, "msp_queue_unavailable"
+  end
+
+  -- The AM32 write is the whole fifty-byte block, not the changed fields, so it can only be
+  -- built from a block that was read. Without one, every field the page does not itself
+  -- carry would be packed as zero and written to the ESC.
+  if not ui.parsedCache then
+    return false, "esc_not_read"
   end
 
   local writeData = {}
@@ -555,9 +569,14 @@ function M.onSave(ctx)
   local ok, err = queueAm32Write(ctx and ctx.requestRebuild)
   if not ok then
     if ctx and type(ctx.reportSave) == "function" then
+      local mapped = MESSAGE_KEYS[err]
+      local message = tostring(err or "MSP write failed")
+      if mapped then
+        message = pageText(ctx and ctx.i18n, mapped[1], mapped[2])
+      end
       ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
-        message = tostring(err or "MSP write failed")
+        message = message
       })
     end
     return false
