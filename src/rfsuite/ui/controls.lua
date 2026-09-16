@@ -406,7 +406,19 @@ function Controls.appendRadioSwitch(children, x, y, w, labelText, value,
     active = opts.active
   else
     opts = opts or {}
+    if active == nil then
+      active = opts.active
+    end
   end
+
+  local activeGetter
+  if type(active) == "function" then
+    activeGetter = active
+  elseif type(active) == "boolean" then
+    local activeVal = active
+    activeGetter = function() return activeVal end
+  end
+
   local getValue
   local setValue
   if type(value) == "function" then
@@ -440,7 +452,7 @@ function Controls.appendRadioSwitch(children, x, y, w, labelText, value,
     x = trackX,
     y = trackY,
     w = TOGGLE_W,
-    active = active,
+    active = activeGetter,
     get = function()
       return getValue()
     end,
@@ -678,6 +690,12 @@ function Controls.appendComboSelect(children, x, y, w, labelText, options,
     font  = SMLSIZE
   }
 
+  local activeGetter = opts.active
+  if type(activeGetter) ~= "function" and activeGetter ~= nil then
+    local activeVal = activeGetter == true
+    activeGetter = function() return activeVal end
+  end
+
   -- Native choice control with EdgeTX popup behavior/styling.
   children[#children + 1] = {
     type  = "choice",
@@ -685,7 +703,7 @@ function Controls.appendComboSelect(children, x, y, w, labelText, options,
     w = comboW,
     title = tostring(labelText or ""),
     values = values,
-    active = opts.active,
+    active = activeGetter,
     get = function()
       return selectedIndex
     end,

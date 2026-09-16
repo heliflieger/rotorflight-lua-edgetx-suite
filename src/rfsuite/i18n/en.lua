@@ -1248,7 +1248,10 @@ return {
         loading_message = "Reading telemetry config",
         save_error_title = "Error",
         saved_title = "Saved",
-        saved_message = "Telemetry sensors saved"
+        saved_message = "Telemetry sensors saved",
+        mode_native = "CRSF Telemetry: Native",
+        mode_custom = "CRSF Telemetry: Custom",
+        native_mode_warn = "Native CRSF mode active. The flight controller sends standard CRSF frames for the native sensors listed in these slots, which is why they cannot be switched off here. Additional sensors require Custom mode."
       },
       setup_gps = {
         title = "GPS",

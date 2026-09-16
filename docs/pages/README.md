@@ -43,7 +43,7 @@ a page file are in [_template.md](../_template.md), and the mechanics are explai
 | --- | --- | --- | --- | --- |
 | Configuration | `setup/configuration.md` | yes | read-only while armed | to write |
 | Radio Config | `setup/radio_config.md` | yes | read-only while armed | to write |
-| Telemetry | `setup/telemetry.md` | yes | read-only while armed | to write |
+| Telemetry | [setup/telemetry.md](setup/telemetry.md) | yes | read-only while armed | written |
 | Accelerometer | [setup/accelerometer.md](setup/accelerometer.md) | yes | read-only while armed | written |
 | Alignment | `setup/alignment.md` | yes | read-only while armed | to write |
 | Ports | `setup/ports.md` | yes | read-only while armed | to write |
