@@ -154,7 +154,7 @@ local function publishConnected(val)
     -- flight — leaving Record.close() at the real disarm to overwrite `flight.last` with an
     -- empty record. (#278)
     --
-    -- `false` rather than `nil`: the nil-guard two lines below the edge condition silently
+    -- `false` rather than `nil`: the nil-guard two lines above the edge condition silently
     -- initialises `state.lastArmed` to the current armed value without firing an edge, which
     -- would defeat the purpose of the reset.
     state.lastArmed = false
@@ -356,26 +356,28 @@ function Events.wakeup()
       end
     end
 
-    -- arm/ disarm transitions: detect changes and call corresponding runners
-    if state.lastArmed == nil then
-      state.lastArmed = armed
-    end
-    if armed ~= state.lastArmed then
-      state.lastArmed = armed
-      local category = armed and "onarm" or "ondisarm"
-      local runner = ensureEventRunner(category)
-      if runner and type(runner.resetAllTasks) == "function" then
-        -- Reset on BOTH edges, because neither is a one-off. The runner marks a task complete
-        -- when it reports itself finished and never looks at it again; without this the first
-        -- arm of a session would be the only one an onarm task ever saw. A task that does not
-        -- report itself finished fares no better: it is re-queued on a timeout it can only meet
-        -- by being called twice inside 25 s, and the runner gives up on it after three rounds.
-        local ok, err = pcall(runner.resetAllTasks)
-        if not ok and Log and type(Log.emit) == "function" then
-          pcall(Log.emit, "rfsuite.events", category .. ".resetAllTasks error: " .. tostring(err), "error")
-        end
+    -- arm/ disarm transitions: detect changes and call corresponding runners (linkStableUp only)
+    if state.linkStableUp then
+      if state.lastArmed == nil then
+        state.lastArmed = armed
       end
-      state.edgeRunner = category
+      if armed ~= state.lastArmed then
+        state.lastArmed = armed
+        local category = armed and "onarm" or "ondisarm"
+        local runner = ensureEventRunner(category)
+        if runner and type(runner.resetAllTasks) == "function" then
+          -- Reset on BOTH edges, because neither is a one-off. The runner marks a task complete
+          -- when it reports itself finished and never looks at it again; without this the first
+          -- arm of a session would be the only one an onarm task ever saw. A task that does not
+          -- report itself finished fares no better: it is re-queued on a timeout it can only meet
+          -- by being called twice inside 25 s, and the runner gives up on it after three rounds.
+          local ok, err = pcall(runner.resetAllTasks)
+          if not ok and Log and type(Log.emit) == "function" then
+            pcall(Log.emit, "rfsuite.events", category .. ".resetAllTasks error: " .. tostring(err), "error")
+          end
+        end
+        state.edgeRunner = category
+      end
     end
 
     -- Driven until it says it has nothing left, not once at the edge -- see driveEdgeRunner.
