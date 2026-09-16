@@ -13,6 +13,8 @@ local Controls = nil
 local Common = nil
 local MspRuntime = nil
 local AccTrimApi = nil
+local StatusApi = nil
+local Calibration = nil
 local LoadingOverlay = nil
 local ConfirmDialog = nil
 local t = nil
@@ -36,7 +38,9 @@ local ui = {
   loading = false,
   progress = 0,
   baseTitle = nil,
-  calibrating = false
+  calibrating = false,
+  calibration = nil,
+  notice = nil
 }
 
 local function getSession()
@@ -49,6 +53,8 @@ local function ensureDeps()
   if not Controls then Controls = loadModule("ui/controls.lua") end
   if not MspRuntime then MspRuntime = loadModule("tasks/msp/runtime.lua") end
   if not AccTrimApi then AccTrimApi = loadModule("tasks/msp/api/acc_trim.lua") end
+  if not StatusApi then StatusApi = loadModule("tasks/msp/api/status.lua") end
+  if not Calibration then Calibration = loadModule("app/pages/setup/accelerometer/calibration.lua") end
   if not LoadingOverlay then LoadingOverlay = loadModule("ui/loading_overlay.lua") end
   if not ConfirmDialog then ConfirmDialog = loadModule("ui/confirm_dialog.lua") end
   if not t then t = Common and Common.pageT("setup_accelerometer") or nil end
@@ -96,6 +102,7 @@ local function queueAccRead(isAutoReload)
     return false, "msp_queue_unavailable"
   end
 
+  local runtime = ui.runtime
   ui.runtime.readPending = true
   if not isAutoReload then
     ui.loading = true
@@ -109,6 +116,7 @@ local function queueAccRead(isAutoReload)
     command = AccTrimApi.command,
     simulatorResponse = AccTrimApi.simulatorResponse,
     processReply = function(self, buf)
+      if ui.runtime ~= runtime then return end
       local parsed = AccTrimApi.parse(buf)
       if parsed then
         ui.config.roll = parsed.roll
@@ -134,6 +142,7 @@ local function queueAccRead(isAutoReload)
       end
     end,
     errorHandler = function()
+      if ui.runtime ~= runtime then return end
       ui.runtime.readPending = false
       ui.loading = false
       if type(ui.runtime.requestRebuild) == "function" then
@@ -224,6 +233,8 @@ function M.wakeup(ctx)
     ui.runtime.requestRebuild = ctx.requestRebuild
   end
 
+  if ui.calibration then ui.calibration.wakeup() end
+
   local signature = buildSessionSignature()
   if signature ~= ui.runtime.lastSessionSignature then
     ui.runtime.lastSessionSignature = signature
@@ -233,9 +244,9 @@ end
 
 function M.getHeaderActions()
   return {
-    save = true,
-    reload = true,
-    star = true,
+    save = not ui.calibrating,
+    reload = not ui.calibrating,
+    star = not ui.calibrating,
     help = true,
     menu = true
   }
@@ -254,6 +265,19 @@ function M.build(ctx)
   local h = ctx.h
   local i18n = ctx.i18n
   
+  if ui.notice then
+    LoadingOverlay.appendNotice(children, {
+      x = x, y = y, w = w, h = h,
+      title = ui.notice.title,
+      message = ui.notice.message,
+      press = function()
+        ui.notice = nil
+        if type(ui.runtime.requestRebuild) == "function" then ui.runtime.requestRebuild() end
+      end
+    })
+    return
+  end
+
   if ui.loading then
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
@@ -265,11 +289,23 @@ function M.build(ctx)
   end
 
   if ui.calibrating then
+    local phase = ui.calibration and ui.calibration.phase or "check"
+    local title, message
+    if phase == "check" then
+      title = pageText(i18n, "checking_title", "Checking")
+      message = pageText(i18n, "checking_message", "Checking the flight controller before calibration. Keep the model level and still.")
+    elseif phase == "start" then
+      title = pageText(i18n, "starting_title", "Starting")
+      message = pageText(i18n, "starting_message", "Requesting calibration. Keep the model level and still.")
+    else
+      title = pageText(i18n, "calibrating_title", "Calibrating")
+      message = pageText(i18n, "calibrating_message", "Calibrating accelerometer. Please keep the model level and still.")
+    end
     LoadingOverlay.append(children, {
       x = x, y = y, w = w, h = h,
-      title = pageText(i18n, "calibrating_title", "Calibrating"),
-      message = pageText(i18n, "calibrating_message", "Calibrating accelerometer. Please keep the model level and still."),
-      progress = 0
+      title = title,
+      message = message,
+      bar = false
     })
     return
   end
@@ -324,6 +360,7 @@ function M.build(ctx)
 end
 
 function M.onSave(ctx)
+  if ui.calibrating then return false end
   local ok, err = queueAccWrite()
   if not ok then
     if ctx and type(ctx.reportSave) == "function" then
@@ -347,6 +384,7 @@ function M.onSave(ctx)
 end
 
 function M.onReload(ctx)
+  if ui.calibrating then return false end
   local session = getSession()
   if session then
     loadFromSession()
@@ -364,88 +402,84 @@ function M.onHelp(ctx)
   return { title = "Help", message = "No help available" }
 end
 
-function M.onStar(ctx)
-  if not ConfirmDialog then return false end
-  
-  local i18n = ctx and ctx.i18n
-  local title = pageText(i18n, "msg_calibrate", "Calibrate the accelerometer?")
-  local message = pageText(i18n, "help_p1", "The accelerometer is used to measure the angle of the flight controller in relation to the horizon. This data is used to stabilize the aircraft and provide self-leveling functionality.")
-  
-  ConfirmDialog.show({
+local function calibrationResult(i18n, result, phase)
+  ui.calibrating = false
+  ui.calibration = nil
+  local message
+  if result == "complete" then
+    message = pageText(i18n, "calibrated_message", "Accelerometer calibrated successfully and saved to EEPROM.")
+    if type(playFile) == "function" then pcall(playFile, "/SOUNDS/rf/beep.wav") end
+    queueAccRead(true)
+  elseif result == "armed" then
+    message = pageText(i18n, "calibration_armed", "Disarm the model before calibrating.")
+  elseif result == "no_acc" then
+    message = pageText(i18n, "calibration_no_acc", "The flight controller reports no accelerometer.")
+  elseif result == "busy" then
+    message = pageText(i18n, "calibration_busy",
+      "The flight controller is already calibrating. Keep the model still and wait before trying again.")
+  elseif result == "disconnected" then
+    message = pageText(i18n, "calibration_disconnected", "Connection lost. Keep the model still; reconnect to check the result.")
+  elseif result == "check_failed" then
+    message = pageText(i18n, "calibration_check_failed", "No valid status received. Calibration was not requested. Check the connection.")
+  elseif result == "start_failed" then
+    message = pageText(i18n, "calibration_start_failed",
+      "No start acknowledgement received. Keep the model still and check the controller.")
+  elseif result == "timeout_active" then
+    message = pageText(i18n, "calibration_timeout_active",
+      "Calibration started; completion is unconfirmed. Keep the model still, then reload trims and verify the result.")
+  elseif result == "timeout_unseen" then
+    message = pageText(i18n, "calibration_timeout_unseen",
+      "No active calibration observed. Keep the model still and check the controller before another attempt.")
+  elseif result == "unavailable" then
+    message = pageText(i18n, "calibration_unavailable", "Calibration support is unavailable. Check the RFSuite installation.")
+  else
+    message = pageText(i18n, "calibration_interrupted",
+      "Calibration monitoring was interrupted. Keep the model still and check the controller.")
+  end
+  local title
+  if result == "complete" then
+    title = pageText(i18n, "calibrated_title", "Calibrated")
+  elseif phase == "check" then
+    title = pageText(i18n, "calibration_not_started_title", "Calibration not started")
+  else
+    title = pageText(i18n, "calibration_unconfirmed_title", "Calibration not confirmed")
+  end
+  ui.notice = {
     title = title,
-    message = message,
+    message = message
+  }
+  if type(ui.runtime.requestRebuild) == "function" then ui.runtime.requestRebuild() end
+end
+
+function M.onStar(ctx)
+  if ui.calibrating or ui.loading or ui.runtime.readPending or not ConfirmDialog then return false end
+  local i18n = ctx and ctx.i18n
+  local runtime = ui.runtime
+  local session = getSession()
+  ConfirmDialog.show({
+    title = pageText(i18n, "msg_calibrate", "Calibrate the accelerometer?"),
+    message = pageText(i18n, "calibration_confirm",
+      "Disarm and hold the model level and still before confirming. Keep it still until completion; saving is automatic."),
     onConfirm = function()
-      -- Trigger calibration!
-      if not MspRuntime or type(MspRuntime.getState) ~= "function" then
+      if ui.runtime ~= runtime or ui.calibrating then return end
+      if getSession() ~= session or not session or session.isConnected ~= true then
+        calibrationResult(i18n, "disconnected", "check")
         return
       end
-      local mspState = MspRuntime.getState()
+      local mspState = MspRuntime and MspRuntime.getState()
       local queue = mspState and mspState.queue
-      if not queue or type(queue.add) ~= "function" then
+      if not queue or not Calibration or not StatusApi then
+        calibrationResult(i18n, "unavailable", "check")
         return
       end
-      
+      ui.notice = nil
       ui.calibrating = true
-      if type(ui.runtime.requestRebuild) == "function" then
-        ui.runtime.requestRebuild()
-      end
-      
-      queue:add({
-        command = 205, -- MSP_ACC_CALIBRATION
-        payload = {},
-        isWrite = true,
-        simulatorResponse = {},
-        processReply = function(self, buf)
-          -- Calibration finished, write EEPROM
-          local eepromApi = loadModule("tasks/msp/api/eeprom_write.lua")
-          if eepromApi then
-            queue:add({
-              command = eepromApi.writeCommand,
-              payload = {},
-              isWrite = true,
-              simulatorResponse = {},
-              processReply = function()
-                ui.calibrating = false
-                if type(playFile) == "function" then
-                  pcall(playFile, "/SOUNDS/rf/beep.wav")
-                end
-                
-                -- Show calibrated alert
-                if ctx and type(ctx.reportSave) == "function" then
-                  ctx.reportSave({
-                    ok = true,
-                    title = pageText(i18n, "calibrated_title", "Calibrated"),
-                    message = pageText(i18n, "calibrated_message", "Accelerometer calibrated successfully and saved to EEPROM.")
-                  })
-                end
-                
-                -- Read new trims
-                queueAccRead(true)
-              end,
-              errorHandler = function()
-                ui.calibrating = false
-                if type(ui.runtime.requestRebuild) == "function" then
-                  ui.runtime.requestRebuild()
-                end
-              end
-            })
-          else
-            ui.calibrating = false
-            if type(ui.runtime.requestRebuild) == "function" then
-              ui.runtime.requestRebuild()
-            end
-          end
-        end,
-        errorHandler = function()
-          ui.calibrating = false
-          if type(ui.runtime.requestRebuild) == "function" then
-            ui.runtime.requestRebuild()
-          end
-        end
-      })
-    end,
-    onCancel = function()
-      -- Do nothing
+      ui.calibration = Calibration.start(queue, StatusApi, session, getSession, function(result, phase)
+        if ui.runtime == runtime then calibrationResult(i18n, result, phase) end
+      end, function()
+        if ui.runtime == runtime and type(runtime.requestRebuild) == "function" then runtime.requestRebuild() end
+      end)
+      if type(runtime.requestRebuild) == "function" then runtime.requestRebuild() end
     end
   })
   return true
@@ -453,6 +487,11 @@ end
 
 
 function M.onClose()
+  if ui.calibration then ui.calibration.cancel() end
+  ui.calibration = nil
+  ui.calibrating = false
+  ui.notice = nil
+  ui.loading = false
   if Common and type(Common.resetPageState) == "function" then
     Common.resetPageState(ui, {
       resetLoaded = true,
@@ -463,6 +502,8 @@ function M.onClose()
   Common = nil
   MspRuntime = nil
   AccTrimApi = nil
+  StatusApi = nil
+  Calibration = nil
   LoadingOverlay = nil
   ConfirmDialog = nil
   t = nil
