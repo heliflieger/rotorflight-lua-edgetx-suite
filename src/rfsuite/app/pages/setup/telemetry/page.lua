@@ -143,6 +143,19 @@ local NOT_AT_SAME_TIME = {
   [68] = { 69, 70, 71 }
 }
 
+local CONFLICTING_WITH = {}
+for parentId, subIds in pairs(NOT_AT_SAME_TIME) do
+  for i = 1, #subIds do
+    CONFLICTING_WITH[subIds[i]] = parentId
+  end
+end
+
+local CRSF_NATIVE_CATALOG_IDS = {
+  [58] = true,
+  [64] = true,
+  [89] = true
+}
+
 local SENSOR_BY_ID = {}
 local SENSOR_IDS = {}
 local SENSOR_BY_GROUP = {}
@@ -157,9 +170,11 @@ end
 local function newRuntime()
   return {
     readPending = false,
+    readComplete = false,
     requestRebuild = nil,
     boolGetters = {},
-    boolSetters = {}
+    boolSetters = {},
+    activeGetters = {}
   }
 end
 
@@ -185,6 +200,8 @@ local ui = {
   },
   config = {},
   telemetryBuffer = nil,
+  crsfTelemetryMode = nil,
+  nativeLockedIds = {},
   runtime = newRuntime(),
   loading = false,
   progress = 0
@@ -252,11 +269,43 @@ local function countSelected()
   return count
 end
 
+local function isNativeLocked(sensorId)
+  return ui.crsfTelemetryMode == 0 and ui.nativeLockedIds and ui.nativeLockedIds[sensorId] == true
+end
+
+local function extractNativeLockedIds(cfg, buffer)
+  local locked = {}
+  if ui.crsfTelemetryMode ~= 0 then
+    return locked
+  end
+  if cfg then
+    for i = 1, 40 do
+      local sensorId = tonumber(cfg["telem_sensor_slot_" .. tostring(i)])
+      if sensorId and CRSF_NATIVE_CATALOG_IDS[sensorId] then
+        locked[sensorId] = true
+      end
+    end
+  elseif buffer and #buffer >= 52 then
+    for pos = 13, 52 do
+      local sensorId = tonumber(buffer[pos])
+      if sensorId and CRSF_NATIVE_CATALOG_IDS[sensorId] then
+        locked[sensorId] = true
+      end
+    end
+  end
+  return locked
+end
+
 local function applyDefaults()
   clearConfig()
   for i = 1, #DEFAULT_SENSORS do
     local id = DEFAULT_SENSORS[i]
     if SENSOR_BY_ID[id] then
+      ui.config[id] = true
+    end
+  end
+  if ui.crsfTelemetryMode == 0 and ui.nativeLockedIds then
+    for id in pairs(ui.nativeLockedIds) do
       ui.config[id] = true
     end
   end
@@ -267,15 +316,33 @@ local function loadFromSession()
   local session = getSession()
   local cfg = (type(session) == "table" and type(session.telemetry_config) == "table") and session.telemetry_config or nil
 
+  if cfg and type(cfg.buffer) == "table" then
+    ui.telemetryBuffer = copyBuffer(cfg.buffer)
+  else
+    ui.telemetryBuffer = nil
+  end
+
+  if cfg and cfg.crsf_telemetry_mode ~= nil then
+    ui.crsfTelemetryMode = tonumber(cfg.crsf_telemetry_mode)
+  elseif ui.telemetryBuffer and #ui.telemetryBuffer >= 8 then
+    ui.crsfTelemetryMode = tonumber(ui.telemetryBuffer[8])
+  else
+    ui.crsfTelemetryMode = nil
+  end
+
+  ui.nativeLockedIds = extractNativeLockedIds(cfg, ui.telemetryBuffer)
+
   clearConfig()
 
   local hasSlots = false
   if cfg then
     for i = 1, 40 do
       local sensorId = tonumber(cfg["telem_sensor_slot_" .. tostring(i)])
-      if sensorId and sensorId ~= 0 and SENSOR_BY_ID[sensorId] then
-        ui.config[sensorId] = true
+      if sensorId and sensorId ~= 0 then
         hasSlots = true
+        if SENSOR_BY_ID[sensorId] then
+          ui.config[sensorId] = true
+        end
       end
     end
   end
@@ -289,12 +356,10 @@ local function loadFromSession()
     end
   end
 
-  if cfg and type(cfg.buffer) == "table" then
-    ui.telemetryBuffer = copyBuffer(cfg.buffer)
-  elseif TelemetryApi and type(TelemetryApi.simulatorResponse) == "table" then
-    ui.telemetryBuffer = copyBuffer(TelemetryApi.simulatorResponse)
-  else
-    ui.telemetryBuffer = {}
+  if ui.crsfTelemetryMode == 0 and ui.nativeLockedIds then
+    for id in pairs(ui.nativeLockedIds) do
+      ui.config[id] = true
+    end
   end
 end
 
@@ -303,6 +368,7 @@ local function queueTelemetryRead()
   if ui.runtime.readPending then
     return false, "read_pending"
   end
+  ui.runtime.readComplete = false
   if not TelemetryApi or not MspRuntime or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -315,6 +381,7 @@ local function queueTelemetryRead()
     return false, "msp_queue_unavailable"
   end
 
+  local readValid = type(session) == "table"
   ui.runtime.readPending = true
   ui.loading = true
   ui.progress = 0
@@ -327,20 +394,42 @@ local function queueTelemetryRead()
       ui.loading = false
       ui.progress = 1
       local parsed = telemetryApi.parse and telemetryApi.parse(buf) or nil
-      if type(session) == "table" and type(parsed) == "table" then
+      if type(parsed) ~= "table" then
+        if Common and Common.failPageRead then
+          return Common.failPageRead(ui)
+        end
+        return
+      end
+      if type(session) == "table" then
         session.telemetry_config = parsed
+      end
+      if parsed and parsed.crsf_telemetry_mode ~= nil then
+        ui.crsfTelemetryMode = tonumber(parsed.crsf_telemetry_mode)
       end
       if not ui.dirty then
         loadFromSession()
+      elseif parsed and parsed.buffer then
+        ui.telemetryBuffer = copyBuffer(parsed.buffer)
+        ui.nativeLockedIds = extractNativeLockedIds(parsed, ui.telemetryBuffer)
+        if ui.crsfTelemetryMode == 0 and ui.nativeLockedIds then
+          for id in pairs(ui.nativeLockedIds) do
+            ui.config[id] = true
+          end
+        end
       end
+      ui.runtime.readComplete = readValid
       if type(ui.runtime.requestRebuild) == "function" then
         ui.runtime.requestRebuild()
       end
     end,
     errorHandler = function()
+      readValid = false
       ui.runtime.readPending = false
       ui.loading = false
       ui.progress = 1
+      if Common and Common.failPageRead then
+        Common.failPageRead(ui)
+      end
     end
   })
 
@@ -360,8 +449,15 @@ local function collectSelectedSensors()
   local selected = {}
   for i = 1, #SENSOR_IDS do
     local id = SENSOR_IDS[i]
-    if ui.config[id] == true then
+    if isNativeLocked(id) then
       selected[#selected + 1] = id
+    elseif ui.config[id] == true then
+      -- A child whose parent is native-locked is displayed off and inactive;
+      -- skip it here so what-is-written matches what-is-shown.
+      local parentId = CONFLICTING_WITH[id]
+      if not (parentId and isNativeLocked(parentId)) then
+        selected[#selected + 1] = id
+      end
     end
   end
   return selected
@@ -375,8 +471,14 @@ local function buildWritePayload(selected)
 
   local index = 1
   for pos = 13, 52 do
-    payload[pos] = selected[index] or 0
-    index = index + 1
+    local origId = tonumber(payload[pos]) or 0
+    if origId ~= 0 and not SENSOR_BY_ID[origId] then
+      -- Unmanaged sensor slot (e.g. native CRSF telemetry ids 2, 72, 108, 109):
+      -- preserve exactly where it was.
+    else
+      payload[pos] = selected[index] or 0
+      index = index + 1
+    end
   end
 
   return payload
@@ -419,6 +521,13 @@ local function getBoolGetter(sensorId)
   if getter then return getter end
 
   getter = function()
+    if isNativeLocked(sensorId) then
+      return true
+    end
+    local parentId = CONFLICTING_WITH[sensorId]
+    if parentId and isNativeLocked(parentId) then
+      return false
+    end
     return ui.config[sensorId] == true
   end
   ui.runtime.boolGetters[sensorId] = getter
@@ -430,6 +539,14 @@ local function getBoolSetter(sensorId)
   if setter then return setter end
 
   setter = function(value)
+    if isNativeLocked(sensorId) then
+      return
+    end
+    local parentId = CONFLICTING_WITH[sensorId]
+    if parentId and isNativeLocked(parentId) then
+      return
+    end
+
     local enabled = value == true
     if ui.config[sensorId] == enabled then return end
 
@@ -440,11 +557,32 @@ local function getBoolSetter(sensorId)
         ui.config[conflicts[i]] = false
       end
     end
+    if enabled and parentId then
+      ui.config[parentId] = false
+    end
 
     markDirty()
   end
   ui.runtime.boolSetters[sensorId] = setter
   return setter
+end
+
+local function getActiveGetter(sensorId)
+  local getter = ui.runtime.activeGetters[sensorId]
+  if getter then return getter end
+
+  getter = function()
+    if isNativeLocked(sensorId) then
+      return false
+    end
+    local parentId = CONFLICTING_WITH[sensorId]
+    if parentId and isNativeLocked(parentId) then
+      return false
+    end
+    return true
+  end
+  ui.runtime.activeGetters[sensorId] = getter
+  return getter
 end
 
 function M.getHeaderActions()
@@ -494,12 +632,31 @@ function M.onStar(ctx)
   return true
 end
 
+function M.canSave()
+  return ui.runtime ~= nil
+    and ui.runtime.readComplete == true
+    and not ui.runtime.readPending
+    and type(ui.telemetryBuffer) == "table"
+    and #ui.telemetryBuffer >= 52
+end
+
 function M.onSave(ctx)
+  if not M.canSave() then return false, "loaded_data_missing" end
   ensureDeps()
   ensureLoaded()
 
+  local unmanagedCount = 0
+  if type(ui.telemetryBuffer) == "table" then
+    for pos = 13, 52 do
+      local origId = tonumber(ui.telemetryBuffer[pos]) or 0
+      if origId ~= 0 and not SENSOR_BY_ID[origId] then
+        unmanagedCount = unmanagedCount + 1
+      end
+    end
+  end
+
   local selected = collectSelectedSensors()
-  if #selected > 40 then
+  if #selected + unmanagedCount > 40 then
     if ctx and type(ctx.reportSave) == "function" then
       ctx.reportSave({
         title = pageText(ctx and ctx.i18n, "save_error_title", "Error"),
@@ -548,6 +705,33 @@ function M.build(ctx)
   local h = ctx.h or 200
 
   local cursorY = y
+
+  if ui.crsfTelemetryMode ~= nil then
+    local modeTitle = ui.crsfTelemetryMode == 0
+      and pageText(i18n, "mode_native", "CRSF Telemetry: Native")
+      or pageText(i18n, "mode_custom", "CRSF Telemetry: Custom")
+
+    if Controls and type(Controls.appendStaticSectionHeader) == "function" then
+      Controls.appendStaticSectionHeader(children, x, cursorY, w, modeTitle)
+      cursorY = cursorY + (Controls.STATIC_SECTION_H or 38)
+    end
+
+    if ui.crsfTelemetryMode == 0 then
+      local warnText = pageText(i18n, "native_mode_warn", "Native CRSF mode active. The flight controller sends standard CRSF frames for the native sensors listed in these slots, which is why they cannot be switched off here. Additional sensors require Custom mode.")
+      local textH = (Controls and Controls.estimateWrappedTextHeight) and Controls.estimateWrappedTextHeight(warnText, w, SMLSIZE) or 16
+      children[#children + 1] = {
+        type = "label",
+        x = x,
+        y = cursorY + 2,
+        w = w,
+        text = warnText,
+        color = COLOR_THEME_WARNING or COLOR_THEME_PRIMARY1,
+        font = SMLSIZE
+      }
+      cursorY = cursorY + textH + 8
+    end
+  end
+
   for g = 1, #SENSOR_GROUP_ORDER do
     local groupKey = SENSOR_GROUP_ORDER[g]
     local items = SENSOR_BY_GROUP[groupKey]
@@ -574,7 +758,8 @@ function M.build(ctx)
             w,
             label,
             getBoolGetter(sensorId),
-            getBoolSetter(sensorId)
+            getBoolSetter(sensorId),
+            getActiveGetter(sensorId)
           )
         end
       end
@@ -615,6 +800,9 @@ function M.onClose()
   ui.runtimeBase = nil
   ui.loading = false
   ui.progress = 0
+  ui.crsfTelemetryMode = nil
+  ui.telemetryBuffer = nil
+  ui.nativeLockedIds = {}
   Controls = nil
   Common = nil
   MspRuntime = nil

@@ -11,7 +11,7 @@ One file per page, at the path of the page under `src/rfsuite/app/pages/` with `
 appended: the page `setup/power/smartfuel/page.lua` is documented in
 `docs/pages/setup/power/smartfuel.md`. Menu entries that only open a submenu have no file.
 
-**Status:** 93 reachable pages, 11 written. 73 of them carry an in-app help text behind the
+**Status:** 93 reachable pages, 13 written. 74 of them carry an in-app help text behind the
 `?` in the header, which is the text to start a page file from; the others start from the
 page source.
 
@@ -31,7 +31,7 @@ a page file are in [_template.md](../_template.md), and the mechanics are explai
 | Advanced → PID Bandwidth | `flight_tuning/advanced/pid_bandwidth.md` | yes | read-only while armed | to write |
 | Advanced → Autolevel | `flight_tuning/advanced/autolevel.md` | yes | read-only while armed | to write |
 | Advanced → Main Rotor | `flight_tuning/advanced/main_rotor.md` | yes | read-only while armed | to write |
-| Advanced → Tail Rotor | `flight_tuning/advanced/tail_rotor.md` | yes | read-only while armed | to write |
+| Advanced → Tail Rotor | [flight_tuning/advanced/tail_rotor.md](flight_tuning/advanced/tail_rotor.md) | yes | read-only while armed | written |
 | Advanced → Rescue | `flight_tuning/advanced/rescue.md` | yes | read-only while armed | to write |
 | Advanced → Rates (Advanced) → Advanced | `flight_tuning/advanced/rates_advanced/advanced.md` | yes | read-only while armed | to write |
 | Advanced → Rates (Advanced) → Cyclic Behaviour | `flight_tuning/advanced/rates_advanced/cyclic_behaviour.md` | yes | read-only while armed | to write |
@@ -43,7 +43,7 @@ a page file are in [_template.md](../_template.md), and the mechanics are explai
 | --- | --- | --- | --- | --- |
 | Configuration | `setup/configuration.md` | yes | read-only while armed | to write |
 | Radio Config | `setup/radio_config.md` | yes | read-only while armed | to write |
-| Telemetry | `setup/telemetry.md` | yes | read-only while armed | to write |
+| Telemetry | [setup/telemetry.md](setup/telemetry.md) | yes | read-only while armed | written |
 | Accelerometer | [setup/accelerometer.md](setup/accelerometer.md) | yes | read-only while armed | written |
 | Alignment | `setup/alignment.md` | yes | read-only while armed | to write |
 | Ports | `setup/ports.md` | yes | read-only while armed | to write |
@@ -108,7 +108,7 @@ a page file are in [_template.md](../_template.md), and the mechanics are explai
 | Diagnostics → ELRS Link | [tools/diagnostics/elrs_link.md](tools/diagnostics/elrs_link.md) | yes | read-only while armed | written |
 | Diagnostics → Validate Sensors | `tools/diagnostics/validate_sensors.md` | yes | needs the flight controller, read-only while armed | to write |
 | Diagnostics → SmartFuel | `tools/diagnostics/smartfuel.md` | no | needs the flight controller, read-only while armed, needs MSP API 12.09 | to write |
-| Diagnostics → Session Logs | `tools/diagnostics/session_logs.md` | no | always available | to write |
+| Diagnostics → Session Logs | [tools/diagnostics/session_logs.md](tools/diagnostics/session_logs.md) | yes | always available | written |
 | Diagnostics → Info | `tools/diagnostics/info.md` | yes | read-only while armed | to write |
 
 ## System → Logs

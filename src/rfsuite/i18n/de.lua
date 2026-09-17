@@ -509,6 +509,7 @@ return {
         tail_torque_assist = "Heck-Drehm.-Assist.",
         tta_gain = "Verst.",
         tta_limit = "Limit",
+        tta_unavailable = "Heck-Drehmoment-Unterstützung nicht verfügbar — Governorprofil konnte nicht gelesen werden. PID-Einstellungen können weiterhin gespeichert werden.",
         loading_title = "Laden",
         loading_message = "Lese Heckrotoreinstellungen",
         help_title = "Heckrotor-Hilfe",
@@ -1242,13 +1243,16 @@ return {
       setup_telemetry = {
         set_defaults_title = "Telemetrie-Sensoren",
         set_defaults_msg = "Standard-Telemetrie-Sensoren laden?",
-        too_many_sensors = "Es koennen maximal 40 Telemetrie-Sensoren aktiviert werden.",
-        help_message = "Waehlen Sie aus, welche Telemetrie-Sensoren im Flugcontroller aktiv sind. Mit '*' laden Sie die Standardwerte.",
+        too_many_sensors = "Es können maximal 40 Telemetrie-Sensoren aktiviert werden.",
+        help_message = "Wählen Sie aus, welche Telemetrie-Sensoren im Flugcontroller aktiv sind. Mit '*' laden Sie die Standardwerte.",
         loading_title = "Laden",
         loading_message = "Lese Telemetrie-Konfiguration",
         save_error_title = "Fehler",
         saved_title = "Gespeichert",
-        saved_message = "Telemetrie-Sensoren gespeichert"
+        saved_message = "Telemetrie-Sensoren gespeichert",
+        mode_native = "CRSF-Telemetrie: Nativ",
+        mode_custom = "CRSF-Telemetrie: Benutzerdefiniert",
+        native_mode_warn = "Nativer CRSF-Modus aktiv. Der Flightcontroller sendet native CRSF-Frames für die in diesen Slots hinterlegten Sensoren, weshalb sie hier nicht abgeschaltet werden können. Zusätzliche Sensoren erfordern den benutzerdefinierten Modus."
       },
       setup_gps = {
         title = "GPS",
@@ -1971,7 +1975,8 @@ return {
       },
       diagnostics_session_logs = {
         no_logs = "Keine Protokolle verfügbar",
-        loading = "Lade Protokolle..."
+        loading = "Lade Protokolle...",
+        help_message = "Zeigt die letzten Log-Zeilen, die dieses Skript im Speicher hält, die neueste unten, nach Stufe eingefärbt. Die Seite aktualisiert sich selbst, sobald Zeilen eintreffen; RELOAD zeichnet sie nur neu. Die Liste liegt im Speicher und ist weg, sobald das Skript endet - schalte dafür Log Session To Card unter Developer > Settings ein, um eine Kopie für einen Bericht zu behalten."
       },
       diagnostics_smartfuel = {
         protocol = "Protokoll",

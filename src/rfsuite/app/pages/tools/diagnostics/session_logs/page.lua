@@ -119,20 +119,21 @@ function M.getModuleTitle()
 end
 
 function M.getHeaderActions()
-  return { reload = true, save = false, help = false }
+  return { reload = true, save = false, help = true }
 end
 
 function M.isPageOpen()
   return true
 end
 
+-- RELOAD means "show it again", the same as it does on every other page with the button: the
+-- log is the data and this page is only a view of it. There is nothing to re-read, so the hook
+-- has nothing to do but hand the page back to the host, which builds it either way -- true asks
+-- for the collection after the build that a page reading nothing may as well take.
+--
+-- The ring itself is left alone. It is the only copy of the session unless Log Session To Card
+-- happens to be running, it is what a pilot opens this page to read, and nothing brings it back.
 function M.onReload()
-  local rf = _G.rfsuite
-  if rf then
-    rf.log_history = {}
-    rf.log_history_seq = (rf.log_history_seq or 0) + 1
-    state.lastSeq = -1
-  end
   return true
 end
 

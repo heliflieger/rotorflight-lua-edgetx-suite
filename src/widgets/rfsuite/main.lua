@@ -52,6 +52,8 @@ local function nowSeconds()
 end
 
 local function isCpuLimitError(err)
+  local fn = type(_G) == "table" and _G.rfsuite and _G.rfsuite.isCpuLimitError
+  if type(fn) == "function" then return fn(err) end
   return type(err) == "string" and string.find(err, "CPU limit", 1, true) ~= nil
 end
 
@@ -60,6 +62,12 @@ end
 -- widget at boot and a fault is not the common case; lib/log_sink.lua then makes the same check
 -- again itself and writes nothing while the option is off.
 local function logFault(context, err)
+  local fn = type(_G) == "table" and _G.rfsuite and _G.rfsuite.logFault
+  if type(fn) == "function" then
+    pcall(fn, context, err)
+    return
+  end
+
   local prefs = type(_G) == "table" and _G.rfsuite and _G.rfsuite.preferences or nil
   local general = prefs and prefs.general
   if type(general) ~= "table" or general.log_to_card ~= true then return end
@@ -116,7 +124,10 @@ local function refresh(widget, event, touchState)
         widget._cpuBackoffUntil = now + 1.2
         letGoWhileBackedOff(widget)
       end
-      widget.built = false
+      -- Clear any pending job so the widget cannot be pinned in the JOB branch
+      -- for ever when a job step raises and unwinds past refresh (see #280).
+      widget._job   = nil
+      widget.built  = false
     end
   end
 end
