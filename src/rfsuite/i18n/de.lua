@@ -1092,6 +1092,7 @@ return {
         save_failed_title = "Speichern fehlgeschlagen",
         save_failed_message = "ESC antwortet nicht / Zeitüberschreitung beim Schreiben.",
         save_error_not_read = "ESC vor dem Speichern lesen.",
+        save_error_invalid_payload = "ESC-Daten konnten nicht erstellt werden. ESC vor dem Speichern erneut lesen.",
         title_motor_override = "Motor-Override",
         motor = "Motor",
         motor_override_note = "Blätter ab und Modell gesichert. Der Motor dreht, sobald das Gas die Null verlässt.",

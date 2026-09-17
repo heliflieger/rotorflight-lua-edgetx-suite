@@ -53,7 +53,8 @@ local ui = {
   runtime = {
     readPending = false,
     requestRebuild = nil,
-    lastSessionSignature = nil
+    lastSessionSignature = nil,
+    escReadComplete = false
   },
   loading = false,
   saving = false,
@@ -79,7 +80,8 @@ local function ensureDeps()
     ui.runtime = {
       readPending = false,
       requestRebuild = nil,
-      lastSessionSignature = nil
+      lastSessionSignature = nil,
+      escReadComplete = false
     }
   end
 end
@@ -126,6 +128,7 @@ local function queueFlyrotorReadActual(queue)
         end
 
         ui.parsedCache = parsed
+        ui.runtime.escReadComplete = true
 
         local escModel = FlrtrInit and type(FlrtrInit.getEscModel) == "function" and FlrtrInit.getEscModel(buf) or nil
         local escVersion = FlrtrInit and type(FlrtrInit.getEscVersion) == "function" and FlrtrInit.getEscVersion(buf) or nil
@@ -151,6 +154,7 @@ local function queueFlyrotorReadActual(queue)
       else
         -- A reply that is shorter than the 56-byte block or carries the wrong signature is
         -- dropped by `Api.parse`; log it so the refused read does not stay silent.
+        ui.runtime.escReadComplete = false
         logMsg(
           "processReply: FlyRotor reply rejected (len " .. tostring(buf and #buf or 0)
             .. ", first byte " .. tostring(buf and buf[1] or "none")
@@ -168,6 +172,7 @@ local function queueFlyrotorReadActual(queue)
       end
     end,
     errorHandler = function()
+      ui.runtime.escReadComplete = false
       ui.runtime.readPending = false
       ui.loading = false
       if type(ui.runtime.requestRebuild) == "function" then
@@ -191,6 +196,7 @@ local function queueFlyrotorRead(isAutoReload)
   if ui.runtime.readPending then return true, nil end
 
   ui.runtime.readPending = true
+  ui.runtime.escReadComplete = false
   if not isAutoReload then
     ui.loading = true
     ui.progress = 0
@@ -206,8 +212,12 @@ end
 -- `M.onSave` passes the reason string straight into the report dialog, so a reason that is an
 -- ordinary situation has to be a translated key, not a code token. A FlyRotor save without a
 -- read is exactly that: an ESC that did not answer, or a page saved before the read came back.
+-- `invalid_payload_length` cannot fire against today's field spec (the builder walks the same
+-- spec and always returns `payloadLength` bytes), but it is the guard for the next edit of the
+-- spec, so it maps to a key as well instead of leaking a code token into the dialog.
 local MESSAGE_KEYS = {
-  esc_not_read = { "save_error_not_read", "Read the ESC before saving." }
+  esc_not_read = { "save_error_not_read", "Read the ESC before saving." },
+  invalid_payload_length = { "save_error_invalid_payload", "ESC data could not be built. Re-read the ESC before saving." }
 }
 
 local function queueFlyrotorWrite(requestRebuild)
@@ -222,9 +232,12 @@ local function queueFlyrotorWrite(requestRebuild)
   end
 
   -- A FlyRotor write is the whole 56-byte block, not the changed fields, so it can only be
-  -- built from a block that was read. Without one, every field the page does not itself
-  -- carry would be packed as zero and written to the ESC.
-  if not ui.parsedCache then
+  -- built from a block that was read. The page module outlives its close (the registry keeps
+  -- it cached), so `parsedCache` alone can hold a block from an earlier visit; the write is
+  -- therefore gated on `escReadComplete`, which records whether *this* visit's read arrived.
+  -- Without one, every field the page does not itself carry would be packed as zero and
+  -- written to the ESC.
+  if not ui.parsedCache or not (ui.runtime and ui.runtime.escReadComplete) then
     return false, "esc_not_read"
   end
 
