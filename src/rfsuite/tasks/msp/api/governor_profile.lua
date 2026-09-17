@@ -57,7 +57,7 @@ function Api.parse(buf)
     out.governor_fallback_drop = tonumber(buf[i]); i = i + 1
     out.governor_flags = to_u16(buf[i], buf[i+1]); i = i + 2
 
-  elseif n >= 13 then
+  elseif n >= 14 then
     -- older layout
     out.governor_headspeed = to_u16(buf[i], buf[i+1]); i = i + 2
     out.governor_gain = tonumber(buf[i]); i = i + 1
@@ -125,7 +125,7 @@ function Api.buildWritePayload(data)
   push(math.floor(min_th) & 0xFF)
 
   -- 17-byte layout only when the profile carried the extra fields;
-  -- otherwise emit the 13-byte record the profile was read as.
+  -- otherwise emit the 14-byte record the profile was read as.
   if fallback_drop == nil or flags == nil then
     return p
   end

@@ -181,6 +181,7 @@ local function queueRcRead(isAutoReload)
                 ui.loading = false
                 ui.dirty = false
                 ui.progress = 100
+                -- Deliberately allow partial save: PID fields are valid even if governor profile read failed
                 ui.runtime.readComplete = readValid
                 if type(ui.runtime.requestRebuild) == "function" then
                   ui.runtime.requestRebuild()
