@@ -1096,6 +1096,47 @@ local function changedHalves(oldStamp, newStamp)
   return { global = globalMoved, model = modelMoved }
 end
 
+--- The locale module, as the dashboard's other holders of it see it.
+--
+-- lib/system_locale.lua registers itself in _G and returns the table that is already there, so
+-- this is the one instance per Lua state -- the same one the theme commons and the object layer
+-- hold. Reading it from _G first is what keeps invalidateLanguage() below from bumping the
+-- generation of a module nobody else can see.
+local function localeModule()
+  local cached = type(_G) == "table" and _G.__rfsuite_system_locale_module or nil
+  if type(cached) == "table" then return cached end
+  return requireModule("lib/system_locale.lua")
+end
+
+--- Drop every locale memo in this Lua state.
+--
+-- Called from the preferences reload, which is the one moment that knows a setting changed. The
+-- language is such a setting, and without this the theme's t(), the object layer's title
+-- normaliser and the widget's own context below each keep answering with the language the widget
+-- started with -- the object layer's memo had no invalidation at all until this.
+local function invalidateLocale()
+  local mod = localeModule()
+  if mod and type(mod.invalidateLanguage) == "function" then
+    pcall(mod.invalidateLanguage)
+  end
+end
+
+--- The widget's i18n context for the language as it stands now.
+local function buildI18nContext()
+  if not (I18nModule and type(I18nModule.new) == "function") then return nil end
+  local mod = localeModule()
+  local locale = nil
+  if mod and type(mod.resolveSystemLanguage) == "function" then
+    local okResolve, resolved = pcall(mod.resolveSystemLanguage, "en")
+    if okResolve and type(resolved) == "string" and resolved ~= "" then
+      locale = resolved
+    end
+  end
+  local ok, ctx = pcall(I18nModule.new, locale)
+  if ok and type(ctx) == "table" then return ctx end
+  return nil
+end
+
 local function reloadPreferencesIfNeeded(self, force, isBackground)
   local now = nowSeconds()
 
@@ -1239,6 +1280,17 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
     loaded = true
     self.preferences = prefs
     publishPreferencesToGlobal(prefs)
+
+    -- The language is one of the settings in this file, and a memo of it that outlives a single
+    -- call would keep answering with the old one. The order matters: the memos go first, so the
+    -- context below is built from the language as it is now and not from the one just dropped.
+    -- Gated on doGlobal because a save made from the settings screen can touch the per-model file
+    -- alone, and that file carries no language.
+    invalidateLocale()
+    local ctx = buildI18nContext()
+    if ctx then
+      self.i18n = ctx
+    end
 
     -- Expose i18n on the runtime state so theme renderers can access it
     if self.i18n then
@@ -2315,25 +2367,10 @@ function Runtime.new(zone, options)
     mspLastTick = 0
   }
 
-  -- Initialize i18n context for the widget using system locale
-  if I18nModule and type(I18nModule.new) == "function" then
-    local locale = nil
-    local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
-    local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/system_locale.lua", mode)
-    if chunk then
-      local ok, localeMod = pcall(chunk)
-      if ok and type(localeMod) == "table" and type(localeMod.resolveSystemLanguage) == "function" then
-        local okResolve, resolved = pcall(localeMod.resolveSystemLanguage, "en")
-        if okResolve and type(resolved) == "string" and resolved ~= "" then
-          locale = resolved
-        end
-      end
-    end
-    local ok, ctx = pcall(I18nModule.new, locale)
-    if ok and type(ctx) == "table" then
-      widget.i18n = ctx
-    end
-  end
+  -- Initialize i18n context for the widget using system locale. buildI18nContext is the same
+  -- call the preferences reload makes after a language changed, so the widget's context is built
+  -- from one place and not from two that can drift.
+  widget.i18n = buildI18nContext()
   -- ensure renderers can access the same i18n via state
   if widget.i18n then
     widget.state.i18n = widget.i18n
