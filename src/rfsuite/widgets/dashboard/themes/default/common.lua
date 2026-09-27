@@ -7,6 +7,8 @@ local Common = {}
 local i18nModule = nil
 local i18nContext = nil
 local i18nLocale = nil
+local resolvedLocale = nil
+local resolvedGeneration = nil
 local localeModule = nil
 
 local function getLocaleModule()
@@ -42,16 +44,41 @@ local function getLocaleModule()
   return localeModule
 end
 
+-- The language, once per generation rather than once per call.
+--
+-- t() is reachable from a label text getter that is handed to lvgl.build(), so it runs in the
+-- firmware's reactive sweep, on whatever budget refresh() left over and outside this file's own
+-- pcall. A closure in that position may read precomputed state and its own compiled config; it
+-- makes no file probe. Resolving the language is a settings read, so it does not belong here --
+-- and GEMINI.md says so for this file by name.
+--
+-- lib/system_locale.lua answers with a short time memo, so the read it does is bounded rather
+-- than per call. That is the floor, not the fix: a language changed in the settings would still
+-- not reach this file until the widget's Lua state is rebuilt. The generation counter is what
+-- makes the memo safe to keep: the preferences reload calls invalidateLanguage(), the counter
+-- moves, and the next call re-resolves.
+--
+-- A module without the field is one that cannot signal a change, and then the memo is not used at
+-- all: this falls back to resolving per call, which is the behaviour before this memo existed.
 local function resolveLocale()
   local mod = getLocaleModule()
+  local generation = mod and mod.localeGeneration or nil
+  if resolvedLocale and resolvedLocale ~= "" and generation ~= nil and generation == resolvedGeneration then
+    return resolvedLocale
+  end
+
   if mod and type(mod.resolveSystemLanguage) == "function" then
     local ok, locale = pcall(mod.resolveSystemLanguage, "en")
     if ok and type(locale) == "string" and locale ~= "" then
-      return locale
+      resolvedLocale = locale
+      resolvedGeneration = generation
+      return resolvedLocale
     end
   end
 
-  return "en"
+  resolvedLocale = "en"
+  resolvedGeneration = generation
+  return resolvedLocale
 end
 
 local function getI18nContext()

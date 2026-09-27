@@ -198,6 +198,30 @@ function M.resolveSystemLanguage(defaultLang)
   return lang
 end
 
+--- Forget the answer, and tell everyone who memoised it.
+--
+-- The 200-tick window above is a TIME memo. It bounds how stale an answer can be, which is what
+-- makes it affordable for a theme's t() to call the resolver on every call -- but it cannot say
+-- that an answer is wrong, only that it might be. So a language changed in the settings needs a
+-- second signal, and a settings save is exactly that.
+--
+-- This is that signal, and it is the one invalidation point in the suite. The dashboard's
+-- preferences reload calls it; the generation counter moves; the theme commons and the object
+-- layer re-resolve on their next call rather than on the widget's next restart. Without it the
+-- window alone leaves every locale memo that outlives a single call holding the old language for
+-- as long as the Lua state lives, which is what the object layer's own memo did.
+--
+-- Deliberately a FIELD and not a function: its readers sit on a path a reactive closure walks,
+-- and the whole cost of the check has to be one table index.
+M.localeGeneration = 0
+
+function M.invalidateLanguage()
+  cachedLanguage = nil
+  cachedLanguageFor = nil
+  cachedLanguageAt = nil
+  M.localeGeneration = M.localeGeneration + 1
+end
+
 function M.resolveAudioFolder(defaultFolder)
   local lang = M.resolveSystemLanguage(defaultFolder or "en")
   if lang ~= "de" and lang ~= "en" then
