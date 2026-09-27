@@ -156,6 +156,10 @@ So a declarative theme whose box *values* depend on the phase — one that draws
 a `renderKey(zone, state)` function that includes `state.flightMode`. Without that, the scene it
 built for the previous phase keeps standing, which is exactly the saving described above.
 
+The pass that loads a new module writes both fields before the render key is computed, so the
+scene the dashboard queues for a phase change is keyed on the new module, and a theme's own
+`renderKey(zone, state)` sees the new phase the first time it is called after the change.
+
 The path is resolved per phase as well (`resolveThemePathForState`), which is what the
 *Per-Phase Themes* switch under *System* → *Settings* → *Dashboard* → *Design* acts on. There
 are three theme slots, not five: `armed` resolves through the preflight slot and `offline`
