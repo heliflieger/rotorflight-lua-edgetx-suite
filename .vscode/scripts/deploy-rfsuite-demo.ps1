@@ -430,10 +430,17 @@ if (-not (Get-Command $pythonCmd -ErrorAction SilentlyContinue)) {
 }
 
 & $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\precompile_i18n.py') --root $toolsRoot
+if ($LASTEXITCODE -ne 0) { throw "precompile_i18n failed on $toolsRoot (exit $LASTEXITCODE); the demo was not deployed." }
 & $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\precompile_i18n.py') --root $targetWidgetRoot
+if ($LASTEXITCODE -ne 0) { throw "precompile_i18n failed on $targetWidgetRoot (exit $LASTEXITCODE); the demo was not deployed." }
 
+# The resolver exits non-zero on an unresolved key or a file it could not write, so
+# its verdict has to be read here. Ignoring it is how a demo reaches a radio with
+# every marker still standing while the script says it deployed.
 & $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\resolve_i18n_tags.py') --json (Join-Path $sourceCore "i18n\$Language.lua") --root $toolsRoot
+if ($LASTEXITCODE -ne 0) { throw "resolve_i18n_tags failed on $toolsRoot (exit $LASTEXITCODE); the demo was not deployed." }
 & $pythonCmd (Join-Path $workspaceRoot '.vscode\scripts\resolve_i18n_tags.py') --json (Join-Path $sourceCore "i18n\$Language.lua") --root $targetWidgetRoot
+if ($LASTEXITCODE -ne 0) { throw "resolve_i18n_tags failed on $targetWidgetRoot (exit $LASTEXITCODE); the demo was not deployed." }
 
 Write-Host "RFSuite demo deployed to:"
 Write-Host "  Target mode:     $Target"
