@@ -734,12 +734,18 @@ def main():
     if args.self_test:
         return self_test()
 
-    if not args.json or not args.root:
-        ap.error('--json and --root are required unless --list-transforms or --self-test is given')
-
+    # Before the --json/--root check, not after: the message on that check says
+    # both are required "unless --list-transforms ... is given", and with the
+    # order the other way round that sentence was false -- the flag was refused
+    # for wanting exactly what it was asked to do without. (This is how master
+    # behaved too, so it was never a regression here; it was just a message that
+    # lied about its own script.)
     if args.list_transforms:
         print_transform_list()
         return 0
+
+    if not args.json or not args.root:
+        ap.error('--json and --root are required unless --list-transforms or --self-test is given')
 
     translations_path = Path(args.json)
     translations = load_translations(translations_path)

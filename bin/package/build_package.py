@@ -50,10 +50,13 @@ I18N_MARKER = "@i18n("
 def count_i18n_markers(roots):
     """Count the literal @i18n( markers standing in the staged tree.
 
-    The i18n stage can only ever take markers away, never add them. So a stage
-    that ran and left every marker standing has resolved nothing -- which is
-    also what a run in which every write failed looks like from out here, and
-    which is why this count is worth taking on both sides of the stage.
+    The *resolver* only ever takes markers away; the precompiler is what adds
+    them, and it runs before this. So the count to compare is "markers the
+    resolver left standing" against "markers the resolver was able to reach",
+    and it is the second that the resolver's own refusal message quotes (2863 of
+    551). Taking it on both sides of the stage is what catches a run in which
+    every write failed: from out here that looks exactly like a stage that
+    resolved nothing.
     """
     total = 0
     for root in roots:

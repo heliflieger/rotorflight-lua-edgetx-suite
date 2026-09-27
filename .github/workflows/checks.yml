@@ -9,24 +9,14 @@ name: Gates
 # does mean a check added here has to be added there too, which is the same
 # "keep in sync" convention that let an untranslated artefact through in the first
 # place. Worth collapsing; not worth doing in the same commit as a fix.
+#
+# No inputs: every gate below measures the tree it is given, so a caller that
+# passes a base and a body was carrying two arguments nothing read. The
+# documentation rule that did read a body moved to pr.yml, and the reason is on
+# the comment where its job used to be.
 
 on:
   workflow_call:
-    inputs:
-      base:
-        description: >-
-          Commit the documentation rule measures the changed files against.
-          Empty means HEAD~1, which is what a tag or a direct push wants.
-        required: false
-        type: string
-        default: ''
-      body:
-        description: >-
-          Pull request body, if the caller has one. A tag carries none, and the
-          documentation rule treats an empty body as no body.
-        required: false
-        type: string
-        default: ''
 
 jobs:
   instruction-budget:
@@ -83,45 +73,18 @@ jobs:
       - name: Prove the exit status can go red
         run: python .vscode/scripts/resolve_i18n_tags.py --self-test
 
-  documentation-rule:
-    name: Documentation rule
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          # the check diffs against an earlier commit, which a shallow clone does not carry
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Prove the check can go red
-        run: python bin/docs/verify_documentation_rule.py --self-test
-
-      - name: Write the body to a file
-        # through the environment, never interpolated into the script: a body is
-        # text anybody can write
-        env:
-          PR_BODY: ${{ inputs.body }}
-        run: printf '%s' "$PR_BODY" > pr-body.txt
-
-      - name: Check the documentation rule
-        env:
-          DOC_BASE: ${{ inputs.base }}
-        run: |
-          BASE="$DOC_BASE"
-          if [ -z "$BASE" ]; then
-            BASE=$(git rev-parse HEAD~1 2>/dev/null || echo '')
-          fi
-          if [ -z "$BASE" ]; then
-            echo "no earlier commit to measure against, nothing to check"
-            exit 0
-          fi
-          python bin/docs/verify_documentation_rule.py --base "$BASE" --body-file pr-body.txt
+  # The documentation rule is deliberately NOT a job here, though this file
+  # used to carry it. That rule can be satisfied by a "Documentation:" line in
+  # the *pull request* body, and a push or a tag has no such body: push.yml
+  # passes only `base`, release.yml and snapshot.yml pass nothing, so the body
+  # input arrives empty and the rule falls back to demanding a file under
+  # docs/. Measured over the last 15 commits on master, that fails 7 of them --
+  # and all three of snapshot/0.1.4, 0.1.5 and 0.1.6 are among the shape that
+  # fails, each changing src/ and no docs/. So keeping the job here meant the
+  # merge that introduced it would have stopped a release tag on any such
+  # commit. The rule belongs to pr.yml, which is the only place that has a body
+  # to offer; it is a rule about what a change claims, not about what a tree
+  # looks like.
 
   translation-coverage:
     name: Translation coverage

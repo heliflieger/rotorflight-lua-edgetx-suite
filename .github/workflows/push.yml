@@ -8,10 +8,8 @@ on:
 
 jobs:
   gates:
-    name: Gates
-    uses: ./.github/workflows/checks.yml
-    with:
-      base: ${{ github.event.before }}
+        name: Gates
+        uses: ./.github/workflows/checks.yml
 
   create-zip:
     needs: gates
