@@ -590,6 +590,17 @@ def process_file(path: Path, translations: dict, fallback_translations: dict = N
         print(f"[i18n] DRY-RUN would update {path} — {n} replacement(s)")
         return n, stats.get('unresolved', {}), 0
 
+    # Nothing to write is not a failed write. TAG_RE.subn counts every match,
+    # including one whose key resolves to nothing and is therefore handed back
+    # untouched, so `n > 0` does not mean the text was meant to change. Without
+    # this a file whose only marker is unresolved is rewritten with its own
+    # content, the verification below reads the unchanged file as a write that
+    # did not take, and the run reports a *disk* failure for what is a missing
+    # key. The unresolved key is counted in stats['unresolved'] either way, and
+    # that is what decides the exit status.
+    if new_text == before:
+        return 0, stats.get('unresolved', {}), 0
+
     # check writability (best-effort on Windows)
     writable = os.access(path, os.W_OK) and os.access(path.parent, os.W_OK)
     if not writable:
@@ -612,8 +623,8 @@ def process_file(path: Path, translations: dict, fallback_translations: dict = N
         print(f"[i18n] WARNING: couldn’t read back for verify: {path} — {e}")
         after = None
 
-    # n > 0 holds throughout, so the text was meant to change. An unchanged or
-    # unreadable file here is a write that did not take effect, not a no-op.
+    # The text was meant to change (checked above) and the file still reads back
+    # as it was, or cannot be read at all: a write that did not take effect.
     if after is None or after == before:
         print(f"[i18n] WARNING: write verification shows no change: {path}")
         return 0, stats.get('unresolved', {}), 1
@@ -645,15 +656,26 @@ def self_test():
         "}\n"
     )
 
-    # (label, marker key, file made read-only, expected status, file must have changed)
+    # (label, marker key, file made read-only, expected status, file must have
+    # changed, expected write failures reported)
+    #
+    # The write-failure column is the point of the third one. An unresolved key
+    # used to be reported as a failed write as well, because the untouched marker
+    # was counted as a replacement, the file was rewritten with its own content,
+    # and the write verification read the unchanged file as a write that did not
+    # take. The exit status was right in both cases and the reason was not, which
+    # points a reader at the disk when the key is what is missing.
     cases = [
-        ("clean tree, key resolves", "known", False, 0, True),
-        ("unresolved key", "absent", False, 1, False),
-        ("file that cannot be written", "known", True, 1, False),
+        ("clean tree, key resolves", "known", False, 0, True, 0),
+        ("unresolved key", "absent", False, 1, False, 0),
+        ("file that cannot be written", "known", True, 1, False, 1),
     ]
 
+    import io
+    from contextlib import redirect_stdout
+
     ok = True
-    for label, key, readonly, expect, expect_changed in cases:
+    for label, key, readonly, expect, expect_changed, expect_wf in cases:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             (base / "i18n").mkdir()
@@ -683,14 +705,27 @@ def self_test():
             print(f"\n=== self-test: {label} ===")
             saved_argv = sys.argv
             sys.argv = [saved_argv[0], "--json", str(bundle_path), "--root", str(root)]
+            buf = io.StringIO()
             try:
-                status = main() or 0
+                with redirect_stdout(buf):
+                    status = main() or 0
             finally:
                 sys.argv = saved_argv
                 if readonly:
                     os.chmod(target, saved_mode)
+            output = buf.getvalue()
+            print(output, end="")
 
             problems = []
+            got_wf = None
+            m_wf = re.search(r"write failures: (\d+)", output)
+            if m_wf:
+                got_wf = int(m_wf.group(1))
+            if got_wf != expect_wf:
+                # Named on its own, because a case that is only "not 0" would
+                # pass on a run that reported nothing at all.
+                problems.append(
+                    "reported %s write failure(s), expected %d" % (got_wf, expect_wf))
             if not os.access(target, os.R_OK) or not os.access(target, os.W_OK):
                 # The restore did not put the file back the way it was: the read bit,
                 # the write bit or both are gone. Report it as a failure of this case
