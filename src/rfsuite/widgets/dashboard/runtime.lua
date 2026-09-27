@@ -1096,6 +1096,47 @@ local function changedHalves(oldStamp, newStamp)
   return { global = globalMoved, model = modelMoved }
 end
 
+--- The locale module, as the dashboard's other holders of it see it.
+--
+-- lib/system_locale.lua registers itself in _G and returns the table that is already there, so
+-- this is the one instance per Lua state -- the same one the theme commons and the object layer
+-- hold. Reading it from _G first is what keeps invalidateLanguage() below from bumping the
+-- generation of a module nobody else can see.
+local function localeModule()
+  local cached = type(_G) == "table" and _G.__rfsuite_system_locale_module or nil
+  if type(cached) == "table" then return cached end
+  return requireModule("lib/system_locale.lua")
+end
+
+--- Drop every locale memo in this Lua state.
+--
+-- Called from the preferences reload, which is the one moment that knows a setting changed. The
+-- language is such a setting, and without this the theme's t(), the object layer's title
+-- normaliser and the widget's own context below each keep answering with the language the widget
+-- started with -- the object layer's memo had no invalidation at all until this.
+local function invalidateLocale()
+  local mod = localeModule()
+  if mod and type(mod.invalidateLanguage) == "function" then
+    pcall(mod.invalidateLanguage)
+  end
+end
+
+--- The widget's i18n context for the language as it stands now.
+local function buildI18nContext()
+  if not (I18nModule and type(I18nModule.new) == "function") then return nil end
+  local mod = localeModule()
+  local locale = nil
+  if mod and type(mod.resolveSystemLanguage) == "function" then
+    local okResolve, resolved = pcall(mod.resolveSystemLanguage, "en")
+    if okResolve and type(resolved) == "string" and resolved ~= "" then
+      locale = resolved
+    end
+  end
+  local ok, ctx = pcall(I18nModule.new, locale)
+  if ok and type(ctx) == "table" then return ctx end
+  return nil
+end
+
 local function reloadPreferencesIfNeeded(self, force, isBackground)
   local now = nowSeconds()
 
@@ -1239,6 +1280,17 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
     loaded = true
     self.preferences = prefs
     publishPreferencesToGlobal(prefs)
+
+    -- The language is one of the settings in this file, and a memo of it that outlives a single
+    -- call would keep answering with the old one. The order matters: the memos go first, so the
+    -- context below is built from the language as it is now and not from the one just dropped.
+    -- Gated on doGlobal because a save made from the settings screen can touch the per-model file
+    -- alone, and that file carries no language.
+    invalidateLocale()
+    local ctx = buildI18nContext()
+    if ctx then
+      self.i18n = ctx
+    end
 
     -- Expose i18n on the runtime state so theme renderers can access it
     if self.i18n then
@@ -2315,25 +2367,10 @@ function Runtime.new(zone, options)
     mspLastTick = 0
   }
 
-  -- Initialize i18n context for the widget using system locale
-  if I18nModule and type(I18nModule.new) == "function" then
-    local locale = nil
-    local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
-    local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/system_locale.lua", mode)
-    if chunk then
-      local ok, localeMod = pcall(chunk)
-      if ok and type(localeMod) == "table" and type(localeMod.resolveSystemLanguage) == "function" then
-        local okResolve, resolved = pcall(localeMod.resolveSystemLanguage, "en")
-        if okResolve and type(resolved) == "string" and resolved ~= "" then
-          locale = resolved
-        end
-      end
-    end
-    local ok, ctx = pcall(I18nModule.new, locale)
-    if ok and type(ctx) == "table" then
-      widget.i18n = ctx
-    end
-  end
+  -- Initialize i18n context for the widget using system locale. buildI18nContext is the same
+  -- call the preferences reload makes after a language changed, so the widget's context is built
+  -- from one place and not from two that can drift.
+  widget.i18n = buildI18nContext()
   -- ensure renderers can access the same i18n via state
   if widget.i18n then
     widget.state.i18n = widget.i18n
@@ -2547,6 +2584,15 @@ function Runtime.new(zone, options)
 
     self.built = false
     self.renderKey = nil
+    -- The scene is to be keyed on the module this call has just loaded. refresh() copies the phase
+    -- onto the state only at the top of a pass, and the 2 Hz throttle may hand back the key of the
+    -- previous module; a scene queued under that key is built again once the throttle computes
+    -- the new one. So the two fields refresh() copies are written here too, and the throttle is
+    -- opened, which makes the next key computed the new module's. The cached key is left alone:
+    -- the throttle overwrites it, and a surface that takes the throttle first falls back to it.
+    self.state.flightMode = self.flightMode
+    self.state.themePhase = self.themeStateKey or self.flightMode
+    self._lastUIRefresh = 0
     -- A pending job may belong to the theme just torn down; drop it. The next STATE
     -- pass re-detects and enqueues a build against the new theme, in a pass of its own.
     self._job = nil
@@ -3024,8 +3070,23 @@ function Runtime.new(zone, options)
       return
     end
 
-    -- A theme reload waits for the next logic tick (see performBackgroundWork). Queuing a scene job here
-    -- would build against the theme that reload is about to replace, and run ahead of it.
+    -- In EdgeTX, `event` is nil in normal widget mode, and an integer (including 0 for idle) in fullscreen.
+    local isInteractive = (event ~= nil)
+    if not isInteractive then
+      -- Leaving fullscreen is the one exit the firmware does not always report -- a long press on
+      -- RTN closes it and Lua may never see the key -- so the ground surface is dropped whenever a
+      -- pass arrives without an event rather than when a close is observed. Ahead of the two
+      -- early returns below, so a pass that returns there drops it as well.
+      self.inflightFullscreen = nil
+      -- Re-opening the picker from the quick menu is a fullscreen state and is dropped on the
+      -- way out for the same reason the tuning surface is: a long press on RTN closes
+      -- fullscreen without Lua ever seeing the key.
+      self.batteryPickOpen = nil
+    end
+
+    -- A theme reload that fell on a read pass waits for the next logic tick; the deferral itself
+    -- is in performBackgroundWork. Queuing a scene job here would build against the theme that
+    -- reload is about to replace, and run ahead of it. widget.background queues no scene jobs.
     if self._themeReloadPending then
       self._passEndAt = nowSeconds()
       return
@@ -3033,22 +3094,10 @@ function Runtime.new(zone, options)
 
     if not self.theme then return end
 
-    -- In EdgeTX, `event` is nil in normal widget mode, and an integer (including 0 for idle) in fullscreen.
-    local isInteractive = (event ~= nil)
     local tuningMode = inflightMode(self, isInteractive)
     -- See the gap line in traceInstructionUsage: a state pass is named by the surface it is for,
     -- so a hole measured while the tuning surface was up can be told from one on the dashboard.
     self._passWork = tuningMode or "state"
-    if not isInteractive then
-      -- Leaving fullscreen is the one exit the firmware does not always report -- a long press on
-      -- RTN closes it and Lua may never see the key -- so the ground surface is dropped whenever a
-      -- pass arrives without an event rather than when a close is observed.
-      self.inflightFullscreen = nil
-      -- Re-opening the picker from the quick menu is a fullscreen state and is dropped on the
-      -- way out for the same reason the tuning surface is: a long press on RTN closes
-      -- fullscreen without Lua ever seeing the key.
-      self.batteryPickOpen = nil
-    end
     local nextRenderKey = nil
     if tuningMode then
       -- The same 2 Hz throttle the scene key is under. The values and the armed row are reactive

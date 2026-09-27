@@ -570,17 +570,22 @@ function Sensors.getValue(source)
   -- firmware's per-call instruction limit. This is the throttle the simulator half of this file
   -- has always applied to its own searches, for the same reason (Sensors.sim_last_search above).
   --
-  -- FIRST searches are limited too, to FIRST_SEARCHES_PER_PASS. After Sensors.reset() no source
-  -- has a miss on record, so without a limit the next read searches every source's whole list in
-  -- one pass. On connect that pass also carries the connect chain, and with CRSF custom telemetry
-  -- every sensor already exists but carries no value until the suite's own decoder publishes it,
-  -- so every candidate of every list is paid for. A source held back here has not missed and is
-  -- not marked: it is simply searched at the next read, so everything the radio carries is
-  -- resolved within a few reads of the reset rather than in the first one.
+  -- FIRST searches are limited too, to FIRST_SEARCHES_PER_PASS. They are the searches of a source
+  -- with no miss on record: after Sensors.reset() that is every source, and later it is any source
+  -- whose last search found it. Without a limit the next read after a reset searches every
+  -- source's whole list in one pass. On connect that pass also carries the connect chain, and with
+  -- CRSF custom telemetry every sensor already exists but carries no value until the suite's own
+  -- decoder publishes it, so every candidate of every list is paid for. A source held back here
+  -- has not missed and is not marked: it is simply searched at the next read, so everything the
+  -- radio carries is resolved within a few reads of the reset rather than in the first one.
+  --
+  -- `armflags` is not held back. It is the one source whose absence reads as "not armed", and
+  -- the widget asks for it after five others, so a cap would delay the arming state by a read
+  -- after every reset. Its list is short, and before the limit it was searched on the first read.
   if previousWait ~= nil then
     if Sensors.last_search == now then return nil end
     Sensors.last_search = now
-  else
+  elseif source ~= "armflags" then
     if Sensors.first_search_at ~= now then
       Sensors.first_search_at = now
       Sensors.first_searches = 0

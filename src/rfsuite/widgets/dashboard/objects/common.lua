@@ -8,6 +8,7 @@ local i18nModule = nil
 local i18nContext = nil
 local i18nLocale = nil
 local resolvedLocale = nil
+local resolvedGeneration = nil
 local sensorsModule = nil
 local linkRatesModule = nil
 local crsfModule = nil
@@ -81,21 +82,33 @@ local function getLocaleModule()
   return localeModule
 end
 
+-- This memo was here before the theme commons had one, and it is why the layer was the reference
+-- for the fix in #253 rather than a place the fix had to reach. What it lacked was an
+-- invalidation: nothing in the tree ever set resolvedLocale back to nil, so a language changed in
+-- Settings > Localization did not reach the dashboard until the widget's Lua state was rebuilt.
+-- The generation counter is that missing half -- the preferences reload calls
+-- system_locale.invalidateLanguage(), and the next call here re-resolves.
+--
+-- A module without the field cannot signal a change, and then nothing is memoised, which is the
+-- per-call behaviour this file had before.
 local function resolveLocale()
-  if resolvedLocale and resolvedLocale ~= "" then
+  local mod = getLocaleModule()
+  local generation = mod and mod.localeGeneration or nil
+  if resolvedLocale and resolvedLocale ~= "" and generation ~= nil and generation == resolvedGeneration then
     return resolvedLocale
   end
 
-  local mod = getLocaleModule()
   if mod and type(mod.resolveSystemLanguage) == "function" then
     local ok, locale = pcall(mod.resolveSystemLanguage, "en")
     if ok and type(locale) == "string" and locale ~= "" then
       resolvedLocale = locale
+      resolvedGeneration = generation
       return resolvedLocale
     end
   end
 
   resolvedLocale = "en"
+  resolvedGeneration = generation
   return resolvedLocale
 end
 
