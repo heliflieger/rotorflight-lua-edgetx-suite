@@ -125,7 +125,7 @@ a page file are in [_template.md](../_template.md), and the mechanics are explai
 | Dashboard → Design | `settings/dashboard/theme.md` | yes | always available | to write |
 | Dashboard → Settings (one page per configurable theme) | [settings/dashboard/settings.md](settings/dashboard/settings.md) | yes | always available | written |
 | Dashboard → In-Flight Tuning | [settings/dashboard/inflight.md](settings/dashboard/inflight.md) | yes | preview switch *In-flight tuning* | written |
-| Localization | `settings/localization.md` | yes | always available | to write |
+| Localization | [settings/localization.md](settings/localization.md) | yes | always available | written |
 | Audio → Volume | [settings/audio/volume.md](settings/audio/volume.md) | yes | always available | written |
 | Audio → Events → Arming | `settings/audio/events/arming.md` | yes | always available | to write |
 | Audio → Events → Governor | `settings/audio/events/governor.md` | yes | always available | to write |
