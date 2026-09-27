@@ -150,6 +150,48 @@ A key that has no entry in the chosen bundle survives into the package as a lite
 `@i18n(...)@` marker and shows up that way on the radio, so check the resolver's output when
 adding strings.
 
+**A packaged card carries no locale bundle**, so on an installed card a runtime lookup finds
+nothing and a pilot gets the fallback the precompiler baked into the marker. Which call forms
+that covers, and the three shapes a string has to have to reach a pilot, are in
+[docs/developer/i18n.md](docs/developer/i18n.md).
+
+**A packaged card carries no locale bundle.** `build_package.py` copies `src/rfsuite/` without
+`i18n/` and puts back `i18n/init.lua` alone, so on an installed card a runtime `i18n.t(key)` finds
+nothing and answers with the key. A pilot therefore sees the **fallback** the precompiler baked
+into the marker, and a string the precompiler did not rewrite is English in every locale, whether
+or not its key is translated. Three shapes have to hold for a string to reach a pilot, and a call
+that misses any of them still reads correctly on the desktop, which is what makes them easy to
+miss:
+
+- **The call is named `t` or `pageText`** (or `Common.t` for the cross-page form). The precompiler's
+  pattern knows those two names and no others -- a wrapper called anything else is a runtime
+  lookup, and its callers are what get rewritten, not it.
+- **The file offers a prefix to derive**: a `pageT("...")` or `Common.pageT("...")` call, a
+  `keyPrefix` local, or a `buildSimplePage` second argument. Without one the whole rewrite block is
+  skipped for that file.
+- **The fallback is one string literal.** The pattern reads it out of the call; a `..` chain is not
+  a string it can take, and a call that has none still resolves, the marker simply carries no
+  fallback for an untranslated locale.
+
+The house form that satisfies all three, and the one every other help sheet already uses:
+
+```lua
+local t = Common and Common.pageT("<page_prefix>") or function(_, _, fb) return fb end
+local someText = t(i18n, "some_key", "The English fallback.")
+```
+
+`keyPrefix` is for a module that has no page of its own and borrows another page's block -- it takes
+the full form, `keyPrefix = "app.pages.<page_prefix>"`, and the precompiler strips the leading
+`app.pages.` back off. Name the block the translation is really in, not the caller's, or the string
+resolves for one page and falls through for the rest.
+
+**What a single literal costs:** a long help text joined up with `..` is a few lines under the
+140 that `.luacheckrc` names, and flat it is one line of roughly 280. The tree already carries 667
+lines over 140 (the longest 1493) and no CI job runs `luacheck`, so the trade falls on correctness.
+German is not the only language this is about: it is the only one where a pilot can see the
+difference without reading English.
+
+
 
 ## Style
 

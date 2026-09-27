@@ -12,10 +12,10 @@ return function(ctx)
   local t = Common and Common.pageT("setup_esc_motors") or function(_, _, fb) return fb end
   local i18n = ctx.i18n
 
-  local help_p1 = t(i18n, "help_p1_motor_override",
-    "Drive one motor directly, blades off, to check its direction or to teach an ESC its "
-    .. "throttle range. The flight controller refuses the override while armed and stops the "
-    .. "motor a second after the last command, so leaving this page stops it.")
+  -- One literal, not a concatenation: the precompiler reads the fallback out of the call, and a
+  -- `..` chain is not a string it can take. Left joined up, this sheet shipped English into a
+  -- German install even though its key is translated (#284).
+  local help_p1 = t(i18n, "help_p1_motor_override", "Drive one motor directly, blades off, to check its direction or to teach an ESC its throttle range. The flight controller refuses the override while armed and stops the motor a second after the last command, so leaving this page stops it.")
 
   return {
     title = t(i18n, "help_title_motor_override", "Motor Override Help"),

@@ -51,7 +51,14 @@ function M.stepDone(state)
   return false
 end
 
-function M.fail(state, i18n, tfn, reason)
+-- The block `loading_failed` actually lives in. This module is shared by four pages and three of
+-- them hand it a translator built for their OWN page, so at runtime only the info page ever found
+-- this string and the other three fell through to the English fallback -- packaged or not. Naming
+-- the block is what lets the i18n precompiler resolve the key for every caller, and it names the
+-- block the translation is really in rather than the caller's (#284).
+local keyPrefix = "app.pages.diagnostics_info"
+
+function M.fail(state, i18n, t, reason)
   local total = tonumber(state.total) or 0
   -- warn, and with the reason: this is the path that puts "Loading failed" on the screen, and
   -- until now the reason went into a label and nowhere else -- so a page that failed to load
@@ -63,7 +70,7 @@ function M.fail(state, i18n, tfn, reason)
   state.loading = false
   state.showLoadingOverlay = false
 
-  local prefix = tfn(i18n, "loading_failed", "Loading failed")
+  local prefix = t(i18n, "loading_failed", "Loading failed")
   if reason and reason ~= "" then
     state.errorMessage = prefix .. ": " .. tostring(reason)
   else
@@ -88,7 +95,7 @@ end
 -- into the page's own child list and needs no special case anywhere.
 --
 -- The caller supplies the geometry it is drawing into, because only the caller knows it.
-function M.appendErrorNotice(children, opts, state, i18n, tfn)
+function M.appendErrorNotice(children, opts, state, i18n, t)
   if type(children) ~= "table" or type(opts) ~= "table" or type(state) ~= "table" then
     return false
   end
@@ -108,7 +115,7 @@ function M.appendErrorNotice(children, opts, state, i18n, tfn)
     y = opts.y,
     w = opts.w,
     h = opts.h,
-    title = tfn(i18n, "loading_failed", "Loading failed"),
+    title = t(i18n, "loading_failed", "Loading failed"),
     message = message,
     -- "OK" rather than a lookup: no page bundle in the tree carries a key for it, so a
     -- lookup here would only be a lookup that fails.
