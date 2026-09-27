@@ -731,6 +731,7 @@ return {
       settings_localization = {
         section_localization = "Localization",
         language             = "Language",
+        language_auto        = "Automatic",
         language_en          = "English",
         language_de          = "German",
         temperature_unit     = "Temperature Unit",
@@ -739,7 +740,7 @@ return {
         temp_fahrenheit      = "Fahrenheit",
         alt_meter            = "Meter",
         alt_feet             = "Feet",
-        help_message         = "Configure language and unit formats used by RFSuite.",
+        help_message         = "Leave the language on automatic to follow the card or the radio, or choose one. Also sets the unit formats.",
         saved_title          = "Saved",
         saved_message        = "Settings saved",
         save_error_title     = "Error",

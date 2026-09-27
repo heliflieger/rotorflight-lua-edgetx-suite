@@ -251,9 +251,9 @@ local function requestOverride(i18n, enabled)
   local title, message
   if enabled then
     title = pageText(i18n, "motor_override_enable", "Enable motor override")
-    message = pageText(i18n, "motor_override_enable_msg",
-      "The flight controller drives the motor directly. Remove the blades, secure the craft "
-      .. "and stand clear.")
+    -- One literal, not a concatenation -- see the note in help.lua. The precompiler takes the
+    -- fallback out of the call, and a `..` chain is not a string it can read (#284).
+    message = pageText(i18n, "motor_override_enable_msg", "The flight controller drives the motor directly. Remove the blades, secure the craft and stand clear.")
   else
     title = pageText(i18n, "motor_override_disable", "Disable motor override")
     message = pageText(i18n, "motor_override_disable_msg",
