@@ -126,3 +126,26 @@ jobs:
 
       - name: Report the strings a locale build cannot translate
         run: python bin/i18n/check_translations.py
+
+  i18n-resolver:
+    # Added because a resolver self-test that only ran in checks.yml reached
+    # master broken: the restore of the read-only case chmod-ed back to
+    # stat.S_IWRITE, which on POSIX leaves the file --w------- with no read
+    # bit, so the self-test's own read-back raised. It passed on Windows,
+    # where the same call only toggles the read-only attribute, and pr.yml did
+    # not run the step -- so the first run on any push was the failing one.
+    # A gate nobody watches on a pull request is not known to be a gate.
+    name: i18n resolver
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the resolver can report a failure
+        run: python .vscode/scripts/resolve_i18n_tags.py --self-test

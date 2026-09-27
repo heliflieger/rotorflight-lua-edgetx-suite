@@ -665,6 +665,16 @@ def self_test():
             original = 'title = "@i18n(selftest.%s)@",\n' % key
             target.write_text(original, encoding='utf-8')
 
+            # Captured before the chmod, because restoring "writable" is not the
+            # same as restoring what was there. stat.S_IWRITE is 0o200 on POSIX, so
+            # chmod-ing to it leaves the file --w------- with every read bit
+            # cleared, and the read-back below then raises PermissionError. Windows
+            # only toggles the read-only attribute for the same call, which is why
+            # this passed on a Windows workstation and failed on the
+            # ubuntu-latest job in checks.yml -- the first run of this step on any
+            # push, since pr.yml does not run it.
+            saved_mode = os.stat(target).st_mode
+
             if readonly:
                 # Windows honours the read-only attribute with a real PermissionError
                 # on write, which is the path a protected install takes.
@@ -678,10 +688,20 @@ def self_test():
             finally:
                 sys.argv = saved_argv
                 if readonly:
-                    os.chmod(target, stat.S_IWRITE)
+                    os.chmod(target, saved_mode)
 
-            changed = target.read_text(encoding='utf-8') != original
             problems = []
+            if not os.access(target, os.R_OK) or not os.access(target, os.W_OK):
+                # The restore did not put the file back the way it was: the read bit,
+                # the write bit or both are gone. Report it as a failure of this case
+                # instead of letting the read-back raise, which would abort the
+                # remaining cases and hide the exit-status verdicts.
+                problems.append(
+                    "file is not usable after the restore (readable=%s, writable=%s)"
+                    % (os.access(target, os.R_OK), os.access(target, os.W_OK)))
+                changed = False
+            else:
+                changed = target.read_text(encoding='utf-8') != original
             if status != expect:
                 problems.append(f"exit status {status}, expected {expect}")
             if changed != expect_changed:
