@@ -28,11 +28,18 @@ Always available.
 - Only an explicit choice is written. *Automatic* is the **absence** of the `language` key in
   `preferences.ini`, which is what the resolution reads; choosing *Automatic* again removes the
   line and hands the decision back to the card or the radio. It is the only way back from this
-  page, and saving the page for another reason — a unit change, say — never writes the key.
-- A language takes effect immediately after saving rather than at the next boot: the tool, the
-  dashboard themes and the audio folder all switch over.
+  page, and saving the page for another reason -- a unit change, say -- never writes the key.
+- **What the setting steers depends on how the suite was installed.** On a packaged card the
+  package decides the language of the screen -- every label is a literal by then -- and this
+  setting chooses the language of the **announcements**, from the `SOUNDS/rf/<language>` folder.
+  Run from source or in the simulator it also sets the tool's own language, from the next start
+  of the tool.
+- **Not even the voice changes while the tool runs.** An announcement resolves its folder once and
+  keeps it for the life of the Lua state, so one that has already played stays in the old language
+  until that state is created again. Announcements that have not played yet use the new one.
 - The two unit settings do not reach the flight controller; they are settings of this radio and
   apply to every model.
+
 
 Related: [configuration-files.md](../../reference/configuration-files.md) for the file itself and
 what the suite keeps in it.

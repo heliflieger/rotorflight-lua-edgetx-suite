@@ -740,7 +740,7 @@ return {
         temp_fahrenheit      = "Fahrenheit",
         alt_meter            = "Meter",
         alt_feet             = "Fuss",
-        help_message         = "Lass die Sprache auf automatisch, um Karte oder Sender zu folgen, oder waehle eine. Stellt ausserdem die Einheitenformate.",
+        help_message         = "Lass die Sprache auf automatisch, um Karte oder Sender zu folgen, oder waehle eine. Stellt ausserdem die Einheitenformate ein.",
         saved_title          = "Gespeichert",
         saved_message        = "Einstellungen gespeichert",
         save_error_title     = "Fehler",
