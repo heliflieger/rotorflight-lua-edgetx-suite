@@ -1,0 +1,143 @@
+name: Gates
+
+# The checks that decide whether a build may ship. Called by the workflows that
+# publish, so a release tag or a direct push to master runs the same gates a pull
+# request does instead of going straight from checkout to artefact.
+#
+# pr.yml still carries its own copy of these jobs. It is the gate that has been
+# protecting master so far, and rewriting it belongs in its own change -- but that
+# does mean a check added here has to be added there too, which is the same
+# "keep in sync" convention that let an untranslated artefact through in the first
+# place. Worth collapsing; not worth doing in the same commit as a fix.
+
+on:
+  workflow_call:
+    inputs:
+      base:
+        description: >-
+          Commit the documentation rule measures the changed files against.
+          Empty means HEAD~1, which is what a tag or a direct push wants.
+        required: false
+        type: string
+        default: ''
+      body:
+        description: >-
+          Pull request body, if the caller has one. A tag carries none, and the
+          documentation rule treats an empty body as no body.
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  instruction-budget:
+    name: Instruction budget
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.3
+        run: sudo apt-get update && sudo apt-get install -y lua5.3
+
+      - name: Prove the gate can go red
+        run: lua5.3 bin/accounting/measure.lua --self-test
+
+      - name: Account instructions per pass
+        run: lua5.3 bin/accounting/measure.lua --check
+
+  i18n-precompiler:
+    name: i18n precompiler
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the checks can go red
+        run: python .vscode/scripts/test_precompile_i18n.py --self-test
+
+      - name: Precompile one page and compare
+        run: python .vscode/scripts/test_precompile_i18n.py
+
+  i18n-resolver:
+    name: i18n resolver exit status
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The packager runs the resolver with check=True, so an exit status that
+      # cannot report a failure means a failed i18n stage ships quietly.
+      - name: Prove the exit status can go red
+        run: python .vscode/scripts/resolve_i18n_tags.py --self-test
+
+  documentation-rule:
+    name: Documentation rule
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # the check diffs against an earlier commit, which a shallow clone does not carry
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the check can go red
+        run: python bin/docs/verify_documentation_rule.py --self-test
+
+      - name: Write the body to a file
+        # through the environment, never interpolated into the script: a body is
+        # text anybody can write
+        env:
+          PR_BODY: ${{ inputs.body }}
+        run: printf '%s' "$PR_BODY" > pr-body.txt
+
+      - name: Check the documentation rule
+        env:
+          DOC_BASE: ${{ inputs.base }}
+        run: |
+          BASE="$DOC_BASE"
+          if [ -z "$BASE" ]; then
+            BASE=$(git rev-parse HEAD~1 2>/dev/null || echo '')
+          fi
+          if [ -z "$BASE" ]; then
+            echo "no earlier commit to measure against, nothing to check"
+            exit 0
+          fi
+          python bin/docs/verify_documentation_rule.py --base "$BASE" --body-file pr-body.txt
+
+  translation-coverage:
+    name: Translation coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the check can go red
+        run: python bin/i18n/check_translations.py --self-test
+
+      - name: Report the strings a locale build cannot translate
+        run: python bin/i18n/check_translations.py

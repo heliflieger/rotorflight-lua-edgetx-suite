@@ -7,7 +7,14 @@ on:
       - 'RF-*'
 
 jobs:
+  gates:
+    name: Gates
+    uses: ./.github/workflows/checks.yml
+    with:
+      base: ${{ github.event.before }}
+
   create-zip:
+    needs: gates
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

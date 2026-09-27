@@ -566,6 +566,15 @@ def replace_tags_in_text(text: str, translations: dict, stats: dict, fallback_tr
 
 
 def process_file(path: Path, translations: dict, fallback_translations: dict = None, dry_run=False, lang='en'):
+    """Resolve one file.
+
+    Returns (replaced, unresolved, write_failures).
+
+    write_failures is separate from replaced on purpose. A file that could not be
+    written used to report 0 replacements, which is the same number a file that
+    needed no change reports, so a run in which every write failed was
+    indistinguishable from a clean tree.
+    """
     before = path.read_text(encoding='utf-8')
     stats = {}
     new_text, n = replace_tags_in_text(before, translations, stats, fallback_translations)
@@ -575,11 +584,11 @@ def process_file(path: Path, translations: dict, fallback_translations: dict = N
         n += 1
 
     if n == 0:
-        return 0, stats.get('unresolved', {})
+        return 0, stats.get('unresolved', {}), 0
 
     if dry_run:
         print(f"[i18n] DRY-RUN would update {path} — {n} replacement(s)")
-        return n, stats.get('unresolved', {})
+        return n, stats.get('unresolved', {}), 0
 
     # check writability (best-effort on Windows)
     writable = os.access(path, os.W_OK) and os.access(path.parent, os.W_OK)
@@ -591,10 +600,10 @@ def process_file(path: Path, translations: dict, fallback_translations: dict = N
         path.write_text(new_text, encoding='utf-8')
     except PermissionError as e:
         print(f"[i18n] FAILED to write (permission): {path} — {e}")
-        return 0, stats.get('unresolved', {})
+        return 0, stats.get('unresolved', {}), 1
     except OSError as e:
         print(f"[i18n] FAILED to write (os error): {path} — {e}")
-        return 0, stats.get('unresolved', {})
+        return 0, stats.get('unresolved', {}), 1
 
     # verify the write actually stuck
     try:
@@ -603,28 +612,114 @@ def process_file(path: Path, translations: dict, fallback_translations: dict = N
         print(f"[i18n] WARNING: couldn’t read back for verify: {path} — {e}")
         after = None
 
+    # n > 0 holds throughout, so the text was meant to change. An unchanged or
+    # unreadable file here is a write that did not take effect, not a no-op.
     if after is None or after == before:
         print(f"[i18n] WARNING: write verification shows no change: {path}")
-        return 0, stats.get('unresolved', {})
+        return 0, stats.get('unresolved', {}), 1
 
-    return n, stats.get('unresolved', {})
+    return n, stats.get('unresolved', {}), 0
 
 def iter_source_files(root: Path, exts=('.lua', '.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.txt')):
     for p in root.rglob('*'):
         if p.is_file() and p.suffix.lower() in exts:
             yield p
 
+def self_test():
+    """Prove the exit status can go red, and stays green on a clean tree.
+
+    A gate nobody has watched go red is not known to be a gate. The packager runs
+    this resolver with check=True, so a resolver that cannot report a failure is
+    exactly the failure this exit status exists to prevent.
+
+    Returns 0 if every case behaved as specified, 1 otherwise.
+    """
+    import stat
+    import tempfile
+
+    bundle = (
+        "return {\n"
+        "  selftest = {\n"
+        '    known = "Known Text",\n'
+        "  },\n"
+        "}\n"
+    )
+
+    # (label, marker key, file made read-only, expected status, file must have changed)
+    cases = [
+        ("clean tree, key resolves", "known", False, 0, True),
+        ("unresolved key", "absent", False, 1, False),
+        ("file that cannot be written", "known", True, 1, False),
+    ]
+
+    ok = True
+    for label, key, readonly, expect, expect_changed in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "i18n").mkdir()
+            bundle_path = base / "i18n" / "en.lua"
+            bundle_path.write_text(bundle, encoding='utf-8')
+            root = base / "src"
+            root.mkdir()
+            target = root / "page.lua"
+            original = 'title = "@i18n(selftest.%s)@",\n' % key
+            target.write_text(original, encoding='utf-8')
+
+            if readonly:
+                # Windows honours the read-only attribute with a real PermissionError
+                # on write, which is the path a protected install takes.
+                os.chmod(target, stat.S_IREAD)
+
+            print(f"\n=== self-test: {label} ===")
+            saved_argv = sys.argv
+            sys.argv = [saved_argv[0], "--json", str(bundle_path), "--root", str(root)]
+            try:
+                status = main() or 0
+            finally:
+                sys.argv = saved_argv
+                if readonly:
+                    os.chmod(target, stat.S_IWRITE)
+
+            changed = target.read_text(encoding='utf-8') != original
+            problems = []
+            if status != expect:
+                problems.append(f"exit status {status}, expected {expect}")
+            if changed != expect_changed:
+                problems.append(f"file changed={changed}, expected {expect_changed}")
+
+            if problems:
+                ok = False
+                print(f"[self-test] FAIL: {label}: " + "; ".join(problems))
+            else:
+                print(f"[self-test] PASS: {label} (exit {status}, file changed={changed})")
+
+    print()
+    if ok:
+        print("[self-test] all cases behaved as specified")
+        return 0
+    print("[self-test] FAILED: the exit status does not tell the truth")
+    return 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="Resolve @i18n(...)@ tags in a codebase")
     ap.add_argument('--list-transforms', action='store_true', help='List available transforms and exit')
-    ap.add_argument('--json', required=True, help='Path to en.json')
-    ap.add_argument('--root', required=True, help='Root of codebase to scan')
+    ap.add_argument('--self-test', action='store_true',
+                    help='Prove the exit status reports unresolved keys and failed writes')
+    ap.add_argument('--json', required=False, help='Path to en.json')
+    ap.add_argument('--root', required=False, help='Root of codebase to scan')
     ap.add_argument('--dry-run', action='store_true', help='Do not write changes')
     args = ap.parse_args()
 
+    if args.self_test:
+        return self_test()
+
+    if not args.json or not args.root:
+        ap.error('--json and --root are required unless --list-transforms or --self-test is given')
+
     if args.list_transforms:
         print_transform_list()
-        return
+        return 0
 
     translations_path = Path(args.json)
     translations = load_translations(translations_path)
@@ -644,9 +739,11 @@ def main():
     total_files_changed = 0
     total_replacements = 0
     unresolved_agg = {}
+    write_failures = 0
 
     for f in iter_source_files(root):
-        replaced, unresolved = process_file(f, translations, fallback_translations=fallback_translations, dry_run=args.dry_run, lang=translations_path.stem.lower())
+        replaced, unresolved, failed = process_file(f, translations, fallback_translations=fallback_translations, dry_run=args.dry_run, lang=translations_path.stem.lower())
+        write_failures += failed
         if replaced:
             total_files_changed += 1
             total_replacements += replaced
@@ -654,7 +751,7 @@ def main():
         for k, c in unresolved.items():
             unresolved_agg[k] = unresolved_agg.get(k, 0) + c
 
-    print(f"[i18n] DONE — files changed: {total_files_changed}, total replacements: {total_replacements}")
+    print(f"[i18n] DONE — files changed: {total_files_changed}, total replacements: {total_replacements}, write failures: {write_failures}")
 
     if unresolved_agg:
         print("[i18n] unresolved keys:")
@@ -662,5 +759,17 @@ def main():
         for k, c in sorted(unresolved_agg.items(), key=lambda kv: (-kv[1], kv[0])):
             print(f"  {k}: {c} occurrence(s)")
 
+    # main() returns None on every path, so sys.exit(main()) used to exit 0
+    # whatever happened. An unresolved key means a marker reaches the radio as
+    # itself, and a failed write means the file still holds one; both are red.
+    if unresolved_agg:
+        print(f"[i18n] FAILED: {len(unresolved_agg)} unresolved key(s). The tree still carries markers that no bundle can resolve.")
+        return 1
+
+    if write_failures:
+        print(f"[i18n] FAILED: {write_failures} file(s) that needed a change could not be written.")
+        return 1
+
+    return 0
 if __name__ == "__main__":
     sys.exit(main())
