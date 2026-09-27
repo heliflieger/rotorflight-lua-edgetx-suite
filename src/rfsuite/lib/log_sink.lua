@@ -48,6 +48,12 @@ local STEP_MIN_INTERVAL = 0.25 -- seconds between step writes, unless the caller
 local FLUSH_INTERVAL = 3.0
 local FLUSH_INTERVAL_ARMED = 10.0
 
+-- How many held lines one tick formats and writes. Formatting is the Lua cost of a write -- about
+-- forty instructions a line -- and it is billed to whichever widget pass ticks the sink, so a full
+-- list of SINK_MAX lines in one call would take most of that pass. A longer backlog goes out one
+-- batch per tick instead, on the ticks that follow.
+local FLUSH_BATCH_LINES = 50
+
 local function nowSeconds()
   if type(getTime) ~= "function" then return 0 end
   local ok, value = pcall(getTime)
@@ -201,6 +207,9 @@ local function startSession()
     -- when a session opens is the start-up sequence, and a start is one of the things this
     -- exists to explain -- there is no point holding it back for three seconds.
     firstFlushDone = false,
+    -- True while a backlog longer than one batch is being written out, one batch per tick. Only
+    -- a write that reached the card sets it, so a card that refuses is asked once an interval.
+    draining = false,
     lastStep = 0,
     stepCount = 0
   }
@@ -233,7 +242,10 @@ end
 -- interval, not a cap's worth. Measured, a retained entry of a payload line is about 340 bytes,
 -- so keeping two thousand of them would have been two thirds of a small radio's whole Lua
 -- budget -- for lines that had already been written.
-local function pendingText()
+--
+-- `limit` takes only the oldest that many entries; the rest keep their place for the next call.
+-- Without it, everything held is taken.
+local function pendingText(limit)
   local list = ring()
   if not list then return nil end
 
@@ -241,11 +253,14 @@ local function pendingText()
   local lost = tonumber(_G.rfsuite.log_sink_lost) or 0
   if held == 0 and lost == 0 then return nil end
 
+  local take = held
+  if limit and take > limit then take = limit end
+
   local parts = {}
   if lost > 0 then
     parts[#parts + 1] = string.format("[----][rfsuite.log][warn] %d line(s) lost (buffer overflow before flush)\n", lost)
   end
-  for index = 1, held do
+  for index = 1, take do
     local entry = list[index]
     if type(entry) == "table" then
       parts[#parts + 1] = formatEntry(entry)
@@ -253,18 +268,23 @@ local function pendingText()
   end
 
   if #parts == 0 then return nil end
-  return table.concat(parts), #parts, held
+  return table.concat(parts), #parts, take
 end
 
 --- Called only once the bytes are on the card: drop what was written, and only that much.
 --
 -- `written` is the count this flush took. Anything the logger appended while the write was in
--- progress keeps its place, which is why this removes from the front rather than emptying.
+-- progress keeps its place, which is why this removes from the front rather than emptying. One
+-- move and a tail clear rather than table.remove(list, 1) per line, which shifts every remaining
+-- entry down on each call.
 local function commit(written)
   local list = ring()
   if not list then return end
-  for _ = 1, math.min(written or 0, #list) do
-    table.remove(list, 1)
+  local held = #list
+  local count = math.min(written or 0, held)
+  table.move(list, count + 1, held, 1)
+  for index = held - count + 1, held do
+    list[index] = nil
   end
   _G.rfsuite.log_sink_lost = 0
 end
@@ -280,12 +300,15 @@ local function openIfNeeded()
   return true
 end
 
-local function flush()
-  if state.capped then return end
+-- Write out at most `limit` held lines, or all of them without one. Returns true only when the
+-- write reached the card and more than `limit` lines are still held -- the one case in which the
+-- next tick should not wait for the interval.
+local function flush(limit)
+  if state.capped then return false end
 
-  local text, count, seq = pendingText()
-  if not text then return end
-  if not openIfNeeded() then return end
+  local text, count, seq = pendingText(limit)
+  if not text then return false end
+  if not openIfNeeded() then return false end
 
   if state.lines + count > MAX_FILE_LINES then
     -- Stop rather than truncate in place: a file that keeps its beginning and says where it
@@ -294,13 +317,15 @@ local function flush()
       commit(seq)
     end
     state.capped = true
-    return
+    return false
   end
 
-  if writeFile(state.path, "a", text) then
-    commit(seq)
-    state.lines = state.lines + count
-  end
+  if not writeFile(state.path, "a", text) then return false end
+  commit(seq)
+  state.lines = state.lines + count
+
+  local list = ring()
+  return limit ~= nil and list ~= nil and #list > limit
 end
 
 -- Bring the session up on whichever call comes first. The tick is the usual one, but a step or
@@ -321,6 +346,10 @@ end
 --
 -- `armed` only lengthens the interval; it never stops the writing. A flight is when a log is
 -- worth the most, and the appends are small enough to keep making them.
+--
+-- A tick writes at most FLUSH_BATCH_LINES. While a longer backlog is going out the interval is
+-- not waited for, so it drains one batch per tick; after a write that failed it is, so a card
+-- that refuses the file is asked once an interval rather than on every tick.
 function Sink.tick(armed)
   if not isEnabled() then
     if state then endSession() end
@@ -331,10 +360,10 @@ function Sink.tick(armed)
 
   local now = nowSeconds()
   local interval = armed and FLUSH_INTERVAL_ARMED or FLUSH_INTERVAL
-  if state.firstFlushDone and (now - state.lastFlush) < interval then return end
+  if state.firstFlushDone and not state.draining and (now - state.lastFlush) < interval then return end
   state.firstFlushDone = true
   state.lastFlush = now
-  flush()
+  state.draining = flush(FLUSH_BATCH_LINES)
 end
 
 --- Record what is being started, in a file that is closed again immediately.

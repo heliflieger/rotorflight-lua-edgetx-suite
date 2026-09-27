@@ -68,7 +68,11 @@ The sensor chosen for a value is forgotten in three places, and it is worth know
 because they are not the same event:
 
 - **The dashboard widget and the tool** each forget the choice on their own link edges, so a
-  session that begins after a reconnect matches everything again from the top of its list.
+  session that begins after a reconnect matches everything again from the top of its list. That
+  matching is spread over the first few reads -- normally no more than four values start their
+  search in one pass -- so after a reconnect the dashboard's values appear over about two seconds rather than
+  all on the first read, and somewhat later where other readers in the same pass start searches
+  of their own. The same applies when the widget starts.
 - **The radio's own telemetry reset** -- which happens when a model is loaded, when the radio is
   switched on, and on *Reset Telemetry* -- is what puts the sensor rows themselves back to "never
   received". That is the event the zero test above is measured against.

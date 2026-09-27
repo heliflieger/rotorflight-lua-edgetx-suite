@@ -1096,6 +1096,47 @@ local function changedHalves(oldStamp, newStamp)
   return { global = globalMoved, model = modelMoved }
 end
 
+--- The locale module, as the dashboard's other holders of it see it.
+--
+-- lib/system_locale.lua registers itself in _G and returns the table that is already there, so
+-- this is the one instance per Lua state -- the same one the theme commons and the object layer
+-- hold. Reading it from _G first is what keeps invalidateLanguage() below from bumping the
+-- generation of a module nobody else can see.
+local function localeModule()
+  local cached = type(_G) == "table" and _G.__rfsuite_system_locale_module or nil
+  if type(cached) == "table" then return cached end
+  return requireModule("lib/system_locale.lua")
+end
+
+--- Drop every locale memo in this Lua state.
+--
+-- Called from the preferences reload, which is the one moment that knows a setting changed. The
+-- language is such a setting, and without this the theme's t(), the object layer's title
+-- normaliser and the widget's own context below each keep answering with the language the widget
+-- started with -- the object layer's memo had no invalidation at all until this.
+local function invalidateLocale()
+  local mod = localeModule()
+  if mod and type(mod.invalidateLanguage) == "function" then
+    pcall(mod.invalidateLanguage)
+  end
+end
+
+--- The widget's i18n context for the language as it stands now.
+local function buildI18nContext()
+  if not (I18nModule and type(I18nModule.new) == "function") then return nil end
+  local mod = localeModule()
+  local locale = nil
+  if mod and type(mod.resolveSystemLanguage) == "function" then
+    local okResolve, resolved = pcall(mod.resolveSystemLanguage, "en")
+    if okResolve and type(resolved) == "string" and resolved ~= "" then
+      locale = resolved
+    end
+  end
+  local ok, ctx = pcall(I18nModule.new, locale)
+  if ok and type(ctx) == "table" then return ctx end
+  return nil
+end
+
 local function reloadPreferencesIfNeeded(self, force, isBackground)
   local now = nowSeconds()
 
@@ -1239,6 +1280,17 @@ local function reloadPreferencesIfNeeded(self, force, isBackground)
     loaded = true
     self.preferences = prefs
     publishPreferencesToGlobal(prefs)
+
+    -- The language is one of the settings in this file, and a memo of it that outlives a single
+    -- call would keep answering with the old one. The order matters: the memos go first, so the
+    -- context below is built from the language as it is now and not from the one just dropped.
+    -- Gated on doGlobal because a save made from the settings screen can touch the per-model file
+    -- alone, and that file carries no language.
+    invalidateLocale()
+    local ctx = buildI18nContext()
+    if ctx then
+      self.i18n = ctx
+    end
 
     -- Expose i18n on the runtime state so theme renderers can access it
     if self.i18n then
@@ -2315,25 +2367,10 @@ function Runtime.new(zone, options)
     mspLastTick = 0
   }
 
-  -- Initialize i18n context for the widget using system locale
-  if I18nModule and type(I18nModule.new) == "function" then
-    local locale = nil
-    local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
-    local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/lib/system_locale.lua", mode)
-    if chunk then
-      local ok, localeMod = pcall(chunk)
-      if ok and type(localeMod) == "table" and type(localeMod.resolveSystemLanguage) == "function" then
-        local okResolve, resolved = pcall(localeMod.resolveSystemLanguage, "en")
-        if okResolve and type(resolved) == "string" and resolved ~= "" then
-          locale = resolved
-        end
-      end
-    end
-    local ok, ctx = pcall(I18nModule.new, locale)
-    if ok and type(ctx) == "table" then
-      widget.i18n = ctx
-    end
-  end
+  -- Initialize i18n context for the widget using system locale. buildI18nContext is the same
+  -- call the preferences reload makes after a language changed, so the widget's context is built
+  -- from one place and not from two that can drift.
+  widget.i18n = buildI18nContext()
   -- ensure renderers can access the same i18n via state
   if widget.i18n then
     widget.state.i18n = widget.i18n
@@ -2508,6 +2545,9 @@ function Runtime.new(zone, options)
   end
 
   local function reloadActiveTheme(self)
+    -- A reload carried over from a telemetry read pass is answered by this one, whoever called
+    -- it. Cleared first, so a load that raises is retried by the same tests as it was before.
+    self._themeReloadPending = nil
     local modelPrefs = self.modelPreferences or (type(_G) == "table" and _G.rfsuite and type(_G.rfsuite.session) == "table" and _G.rfsuite.session.modelPreferences) or nil
     local selectedTheme = resolveThemePathForState((self.preferences and self.preferences.dashboard) or EMPTY_DASHBOARD, modelPrefs, self.flightMode)
     local nextConfig = {}
@@ -2640,9 +2680,11 @@ function Runtime.new(zone, options)
     -- Use hadInflightFlight instead of flightMode, because flightMode can jump to preflight
     -- when sensors go offline, while hadInflightFlight stays true until next session.
     local isPostflightOffline = (self.state.hadInflightFlight == true) and (self.state.rfConnected ~= true)
+    local readThisPass = false
     if not isPostflightOffline then
       if (now - (self._lastTelemetryReadAt or 0)) >= TELEMETRY_READ_SECONDS then
         self._lastTelemetryReadAt = now
+        readThisPass = true
         readTelemetry(self.state, self.audioState)
         -- The snapshot the reactive closures read, rebuilt on the same cadence as the
         -- telemetry read that feeds it -- probing is legal here and nowhere in the sweep.
@@ -2824,13 +2866,32 @@ function Runtime.new(zone, options)
     -- it already has on screen, and a rebuild there would be a torn-down LVGL tree for no
     -- visible difference -- once per arm, and again on every link transition after a flight.
     local modeChanged = (nextMode ~= self.flightMode)
-    self.flightMode = nextMode
-
-    if selectedTheme ~= self.themePath
+    local wantReload = self._themeReloadPending == true
+      or selectedTheme ~= self.themePath
       or modelPrefsChanged
       or not self.theme
-      or (modeChanged and self.themeStateKeys[nextMode] ~= self.themeStateKey) then
-      reloadActiveTheme(self)
+      or (modeChanged and self.themeStateKeys[nextMode] ~= self.themeStateKey)
+
+    -- A theme reload does not share a pass with the telemetry read: the two are the largest
+    -- pieces of state work this runtime has, and on connect they land together with the connect
+    -- chain. A reload that falls due in a read pass is carried to the next logic tick, and the
+    -- flight mode waits with it, so nothing in between sees the new mode against the old theme.
+    -- The next tick computes the mode again from the same state; only a preference change, which
+    -- this pass has already consumed above, has to ride on the flag. A reload is carried once: the
+    -- next tick is normally not a read pass (the read runs every TELEMETRY_READ_SECONDS, the tick
+    -- every LOGIC_TICK_SECONDS), but where passes come further apart than the read interval every
+    -- tick reads, and a carried reload then runs anyway rather than waiting for ever.
+    if wantReload and readThisPass and self._themeReloadPending ~= true then
+      self._themeReloadPending = true
+      -- As the reload itself would: a job already queued belongs to the theme being replaced. In
+      -- a foreground pass none is (a job pass never reaches this function), but widget.background
+      -- runs this work whatever is queued.
+      self._job = nil
+    else
+      self.flightMode = nextMode
+      if wantReload then
+        reloadActiveTheme(self)
+      end
     end
     
     -- The overlay, last in the pass: it reads the per-model preferences and the connection state
@@ -2997,6 +3058,13 @@ function Runtime.new(zone, options)
       if not self.built then
         self._job = { kind = "splash", step = splashJobStep }
       end
+      return
+    end
+
+    -- A theme reload waits for the next logic tick (see performBackgroundWork). Queuing a scene job here
+    -- would build against the theme that reload is about to replace, and run ahead of it.
+    if self._themeReloadPending then
+      self._passEndAt = nowSeconds()
       return
     end
 

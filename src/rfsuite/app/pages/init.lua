@@ -120,8 +120,36 @@ local loadedByPagePath = {}
 local iconByMenuId = {}
 local pagePathByMenuId = {}
 local cacheOrder = {}
+local failedByMenuId = {}
 local MAX_CACHED_PAGE_MODULES = 2
 local closePageModule
+
+-- Runs a page file and returns what it returns, or false and the message when the file cannot
+-- be loaded -- a card that cannot be read, a missing file, no memory left -- or its top level
+-- raises.
+local function runPageFile(fullPath)
+  local chunk, err = loadScript(fullPath, "t")
+  if not chunk then
+    return false, err
+  end
+  return pcall(chunk)
+end
+
+-- What the registry hands out for a page whose file could not be run. Raising here would end the
+-- tool, since none of the registry's callers is inside a pcall, and nil already means "this id
+-- is a menu" to the host. The stand-in's build raises the loader's message instead, so the host
+-- shows the page-build failure screen with it. It is kept until the page is released, so every
+-- caller during one visit gets the same answer and the next visit reads the card again.
+local function failedPage(menuId, err)
+  local message = tostring(err)
+  local module = {
+    build = function()
+      error(message, 0)
+    end
+  }
+  failedByMenuId[menuId] = module
+  return module
+end
 
 local function isDynamicDashboardSettingsPage(menuId)
   if type(menuId) ~= "string" then return false end
@@ -185,14 +213,18 @@ local function loadPageModule(menuId)
     if loadedByPagePath[fullPath] then
       return loadedByPagePath[fullPath]
     end
-    local chunk = assert(loadScript(fullPath, "t"))
-    local module = chunk()
+    local ok, module = runPageFile(fullPath)
+    if not ok then
+      return failedPage(menuId, module)
+    end
     loadedByPagePath[fullPath] = module
     return module
   end
 
-  local chunk = assert(loadScript(fullPath, "t"))
-  local module = chunk()
+  local ok, module = runPageFile(fullPath)
+  if not ok then
+    return failedPage(menuId, module)
+  end
   if isCacheableMenuId(menuId) then
     loadedByMenuId[menuId] = module
     touchCache(menuId)
@@ -251,6 +283,11 @@ function registry.get(menuId)
     return module
   end
 
+  local failed = failedByMenuId[menuId]
+  if failed ~= nil then
+    return failed
+  end
+
   local loaded = loadPageModule(menuId)
   if loaded and isCacheableMenuId(menuId) then
     evictIfNeeded(menuId)
@@ -259,6 +296,9 @@ function registry.get(menuId)
 end
 
 function registry.release(menuId, ctx)
+  if menuId ~= nil then
+    failedByMenuId[menuId] = nil
+  end
   local released = false
   if not isCacheableMenuId(menuId) then
     released = closePageModule(menuId, ctx)

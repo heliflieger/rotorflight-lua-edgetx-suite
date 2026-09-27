@@ -9,6 +9,8 @@ local LOGO_FILE = "/SCRIPTS/TOOLS/rfsuite-core/widgets/dashboard/gfx/logo.png"
 local i18nModule = nil
 local i18nContext = nil
 local i18nLocale = nil
+local resolvedLocale = nil
+local resolvedGeneration = nil
 local localeModule = nil
 
 local function getLocaleModule()
@@ -44,16 +46,31 @@ local function getLocaleModule()
   return localeModule
 end
 
+-- The language, once per generation rather than once per call. The reasoning is the one in
+-- themes/default/common.lua, and it is the same rule GEMINI.md states for both files: a closure
+-- handed to lvgl.build() runs in the reactive sweep and makes no file probe, and resolving the
+-- language is a settings read. lib/system_locale.lua bounds that read with a short time memo; the
+-- generation counter is what makes memoising here safe, because it moves when the settings are
+-- reloaded. A module without the field cannot signal a change, and then nothing is memoised.
 local function resolveLocale()
   local mod = getLocaleModule()
+  local generation = mod and mod.localeGeneration or nil
+  if resolvedLocale and resolvedLocale ~= "" and generation ~= nil and generation == resolvedGeneration then
+    return resolvedLocale
+  end
+
   if mod and type(mod.resolveSystemLanguage) == "function" then
     local ok, locale = pcall(mod.resolveSystemLanguage, "en")
     if ok and type(locale) == "string" and locale ~= "" then
-      return locale
+      resolvedLocale = locale
+      resolvedGeneration = generation
+      return resolvedLocale
     end
   end
 
-  return "en"
+  resolvedLocale = "en"
+  resolvedGeneration = generation
+  return resolvedLocale
 end
 
 local function getI18nContext()

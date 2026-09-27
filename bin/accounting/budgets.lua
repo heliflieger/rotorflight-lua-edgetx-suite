@@ -33,7 +33,7 @@ return {
     -- The ceiling below is unchanged, and the STATE target is derived from it --
     -- 14 000 less the largest shipped theme's sweep -- rather than chosen.
     ----------------------------------------------------------------------------
-    ["pass.state"] = { target = 12200, measured = 11437, proposed = 8000 },
+    ["pass.state"] = { target = 12200, measured = 10594, proposed = 8000 },
     -- The same class of pass with the model ARMED and telemetry moving between passes.
     -- It shares pass.state's ceiling because it is the same class of pass; it has a row
     -- of its own because every other steady-state row here is measured disarmed against
@@ -139,7 +139,7 @@ return {
     ["theme.@rt-rc"] = { target = 14000, measured = 11676 },
     ["theme.@rt-rc-n"] = { target = 14000, measured = 11170 },
     ["theme.@srb-rc"] = { target = 14000, measured = 12887 },
-    ["theme.default"] = { target = 14000, measured = 13237 },
+    ["theme.default"] = { target = 14000, measured = 11746 },
     ["theme.rfstatus"] = { target = 14000, measured = 10515 },
 
     ----------------------------------------------------------------------------
@@ -199,7 +199,7 @@ return {
     -- The whole background half of a STATE pass: the event runner, the
     -- custom-telemetry drain and the arm/disarm edges. The largest single term in
     -- a STATE pass, at roughly two fifths of it.
-    ["unit.events.wakeup"] = { target = 5600, measured = 4457 },
+    ["unit.events.wakeup"] = { target = 5600, measured = 4169 },
     -- The same wakeup with the model ARMED and telemetry moving, which is the only
     -- shape in which the flight record does its work: it advances the flight clock on
     -- every wakeup and samples the tracked sensors on its own 0.5 s cadence, so the
@@ -209,16 +209,16 @@ return {
     -- With the clock advancing per pass the sample is in the worst wakeup by
     -- construction, which is what this row is for, and it costs 6137. The previous
     -- figure is kept in `proposed` so the report says so on every run.
-    ["unit.events.wakeup.armed"] = { target = 7700, measured = 6137, proposed = 5600 },
+    ["unit.events.wakeup.armed"] = { target = 7700, measured = 5779, proposed = 5600 },
     -- The custom-telemetry drain with a full frame backlog waiting: POP_CAP frames
     -- popped and accounted, DECODE_CAP of them walked through the per-sensor
     -- decoders. This is what the two counts in telemetry_bg/drain.lua buy.
-    ["unit.telemetry.drain"] = { target = 3300, measured = 2557 },
+    ["unit.telemetry.drain"] = { target = 3300, measured = 2607 },
     -- The same wakeup while the background function script is draining for the
     -- whole radio: the drain and the adjustment teller are skipped and SmartFuel
     -- is not, so what is left is what only this Lua state can compute. The gap to
     -- the row above is what a pass saves by handing over.
-    ["unit.telemetry.handoff"] = { target = 350, measured = 241 },
+    ["unit.telemetry.handoff"] = { target = 350, measured = 287 },
     ["unit.msp.pump"] = { target = 300, measured = 218 },
     -- The API-layer parse of the largest reply the suite scripts, in one piece. It
     -- lands in whatever pass completes the reassembly.

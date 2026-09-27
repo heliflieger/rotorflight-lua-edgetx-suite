@@ -34,7 +34,22 @@ local state = {
   lastFirmwareFuelMissingLog = 0
 }
 
+-- Every module this file loads is a shared library, and the rest of the Lua state -- the
+-- dashboard, the flight record -- takes it through lib/require.lua. A bare loadScript here
+-- compiled a second copy of each one, and for lib/sensors.lua that copy kept a path cache, miss
+-- records and a search throttle of its own, which the Sensors.reset() at the link edges never
+-- reached. Only a table is taken from the memoizer: it stores `true` for a module that returned
+-- nothing, and every slot below is indexed as a table. A load that fails prints
+-- lib/require.lua's own line; an answer that is not a table is taken as absent without one, and
+-- none of the five modules below returns anything else. Every shipped host sets
+-- `rfsuite.require` before its event runners start, so the bare load below is a fallback only.
 local function loadModule(path)
+  local req = _G.rfsuite and _G.rfsuite.require
+  if type(req) == "function" then
+    local mod = req(path)
+    if type(mod) == "table" then return mod end
+    return nil
+  end
   local mode = (_G.rfsuite and _G.rfsuite.loadMode) or "bt"
   local chunk = loadScript("/SCRIPTS/TOOLS/rfsuite-core/" .. path, mode)
   if type(chunk) ~= "function" then return nil end
@@ -463,9 +478,11 @@ local function publishTelemetryValue(sid, value, unit, sensorName, cacheValueKey
 end
 
 function Smart.wakeup()
-  -- One module per wakeup, for the same reason the caller in tasks.lua takes them one at a
-  -- time: five top-level chunks in a single widget pass is the largest remaining block of the
-  -- cold start, and `lib/sensors.lua` brings the logger in with it. A slot that cannot be
+  -- One module per wakeup. In the widget the dashboard loads three of the five at its top level
+  -- and the MSP runtime's version read loads lib/api_version.lua, so those slots are normally
+  -- memoizer lookups. What still compiles here is lib/smartfuel_reserve.lua, which otherwise
+  -- only the tool's pages load, and without the memoizer every slot would. One per call keeps
+  -- that compile in a call of its own, as tasks.lua does with its modules. A slot that cannot be
   -- filled is recorded as `false` rather than left nil, so an absent module is not asked for
   -- again on every wakeup; the two guards below already read `false` as absent.
   if Sensors == nil then
@@ -548,7 +565,6 @@ function Smart.wakeup()
     logSmart("smart reset source=" .. tostring(sourceMode) .. " cap=" .. tostring(packCapacity), "info")
   end
 
-  local voltage = tonumber(getSensor("voltage"))
   if not firmwareActive then
     if not voltage or voltage <= 2 then
       resetComputedState()

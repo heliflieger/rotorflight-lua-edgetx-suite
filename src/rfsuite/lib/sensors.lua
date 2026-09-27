@@ -94,12 +94,15 @@ end
 local fieldInfoCache = {}
 local valueMisses = {}
 
-local function readTelemetryValue(name)
+-- `now` is the caller's clock reading. Sensors.getValue reads the clock once and hands it to every
+-- candidate it tries, instead of each candidate reading it again: a search after Sensors.reset()
+-- tries every name on a source's list, and the clock is only compared here against a 1 s miss
+-- window.
+local function readTelemetryValue(name, now)
   if type(name) ~= "string" then return nil end
   local getV = _G.getValue
   if type(getV) ~= "function" then return nil end
 
-  local now = nowSeconds()
   if now - (valueMisses[name] or 0) < 1.0 then return nil end
 
   local getFInfo = _G.getFieldInfo
@@ -474,6 +477,10 @@ end
 -- edges of that link call Sensors.reset() below, which puts every source back on the first wait.
 local SEARCH_MISS_SECONDS = 2.0
 local SEARCH_MISS_MAX_SECONDS = 30.0
+-- How many sources may start their FIRST search in one pass; see the throttle in Sensors.getValue.
+-- Like the repeated-search throttle beside it, the count is keyed on the clock reading, so a pass
+-- that outlasts one 10 ms clock tick gets a fresh count for the rest of it.
+local FIRST_SEARCHES_PER_PASS = 4
 -- Module-local, like fieldInfoCache and valueMisses above and unlike Sensors.active_paths: it is
 -- a timer of this file's own and nothing outside reads it. Sensors.reset() clears it.
 local searchWaits = {}
@@ -522,17 +529,19 @@ function Sensors.getValue(source)
     return nil
   end
 
+  -- One clock reading for the whole call, handed to every candidate below.
+  local now = nowSeconds()
+
   local activePath = Sensors.active_paths and Sensors.active_paths[source]
   if activePath then
     local paths = Sensors.search_paths[source]
     local primaryPath = paths and paths[1]
     if primaryPath and activePath ~= primaryPath then
-      local now = nowSeconds()
       Sensors.probe_times = Sensors.probe_times or {}
       local lastProbe = Sensors.probe_times[source] or 0
       if now - lastProbe >= 3.0 then
         Sensors.probe_times[source] = now
-        local primaryVal = readTelemetryValue(primaryPath)
+        local primaryVal = readTelemetryValue(primaryPath, now)
         if type(primaryVal) == "number" and (primaryVal ~= 0 or telemetryValueIsLive(primaryPath)) then
           Sensors.active_paths = Sensors.active_paths or {}
           Sensors.active_paths[source] = primaryPath
@@ -542,14 +551,13 @@ function Sensors.getValue(source)
       end
     end
 
-    local val = readTelemetryValue(activePath)
+    local val = readTelemetryValue(activePath, now)
     if type(val) == "number" then
       if debugWanted() then debugLog("telemetry-hit-cached:" .. source, "hit " .. activePath .. " = " .. tostring(val)) end
       return val
     end
   end
 
-  local now = nowSeconds()
   Sensors.search_misses = Sensors.search_misses or {}
   if now - (Sensors.search_misses[source] or 0) < (searchWaits[source] or SEARCH_MISS_SECONDS) then
     return nil
@@ -561,11 +569,24 @@ function Sensors.getValue(source)
   -- absent ones would otherwise search in the same pass -- and that pass is the one against the
   -- firmware's per-call instruction limit. This is the throttle the simulator half of this file
   -- has always applied to its own searches, for the same reason (Sensors.sim_last_search above).
-  -- A source that has not missed yet is never held back, so the pass that first asks still
-  -- resolves everything the radio actually carries.
+  --
+  -- FIRST searches are limited too, to FIRST_SEARCHES_PER_PASS. After Sensors.reset() no source
+  -- has a miss on record, so without a limit the next read searches every source's whole list in
+  -- one pass. On connect that pass also carries the connect chain, and with CRSF custom telemetry
+  -- every sensor already exists but carries no value until the suite's own decoder publishes it,
+  -- so every candidate of every list is paid for. A source held back here has not missed and is
+  -- not marked: it is simply searched at the next read, so everything the radio carries is
+  -- resolved within a few reads of the reset rather than in the first one.
   if previousWait ~= nil then
     if Sensors.last_search == now then return nil end
     Sensors.last_search = now
+  else
+    if Sensors.first_search_at ~= now then
+      Sensors.first_search_at = now
+      Sensors.first_searches = 0
+    end
+    if Sensors.first_searches >= FIRST_SEARCHES_PER_PASS then return nil end
+    Sensors.first_searches = Sensors.first_searches + 1
   end
 
   -- Taken away for the duration of the search and written back only by the miss tail below, so
@@ -575,7 +596,7 @@ function Sensors.getValue(source)
   local paths = Sensors.search_paths[source]
   if paths then
     for i = 1, #paths do
-      local val = readTelemetryValue(paths[i])
+      local val = readTelemetryValue(paths[i], now)
       if type(val) == "number" and (val ~= 0 or telemetryValueIsLive(paths[i])) then
         Sensors.active_paths = Sensors.active_paths or {}
         Sensors.active_paths[source] = paths[i]
@@ -588,7 +609,7 @@ function Sensors.getValue(source)
   if resolved then
     -- The alias is the first search path for most sources, so without this test the loop above
     -- rejects a dead sensor and this retries the same name and adopts it at 0 for the session.
-    local value = readTelemetryValue(resolved)
+    local value = readTelemetryValue(resolved, now)
     if type(value) == "number" and (value ~= 0 or telemetryValueIsLive(resolved)) then
       Sensors.active_paths = Sensors.active_paths or {}
       Sensors.active_paths[source] = resolved
@@ -597,7 +618,7 @@ function Sensors.getValue(source)
     end
   end
 
-  local direct = readTelemetryValue(source)
+  local direct = readTelemetryValue(source, now)
   if type(direct) == "number" and (direct ~= 0 or telemetryValueIsLive(source)) then
     Sensors.active_paths = Sensors.active_paths or {}
     Sensors.active_paths[source] = source
@@ -637,6 +658,8 @@ function Sensors.reset()
     end
   end
   Sensors.last_search = nil
+  Sensors.first_search_at = nil
+  Sensors.first_searches = nil
   if fieldInfoCache then
     for k in pairs(fieldInfoCache) do
       fieldInfoCache[k] = nil
