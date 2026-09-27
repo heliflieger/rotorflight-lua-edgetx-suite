@@ -20,7 +20,7 @@ local Common = nil
 -- `language` optional on purpose, and system_locale.lua resolves an absent key from the baked
 -- package locale or from the radio's own setting. A hard "en" default here both made the combo
 -- read English on a build that resolves to German, and -- because onSave below wrote every
--- schema key -- wrote that English into preferences.ini on any save of this page, pinning the
+-- schema key -- wrote that English into preferences.lua on any save of this page, pinning the
 -- locale for a change the pilot made to the temperature unit (#275).
 local AUTO = ""
 

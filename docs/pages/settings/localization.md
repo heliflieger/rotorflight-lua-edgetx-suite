@@ -26,7 +26,7 @@ Always available.
 ## Notes
 
 - Only an explicit choice is written. *Automatic* is the **absence** of the `language` key in
-  `preferences.ini`, which is what the resolution reads; choosing *Automatic* again removes the
+  `preferences.lua`, which is what the resolution reads; choosing *Automatic* again removes the
   line and hands the decision back to the card or the radio. It is the only way back from this
   page, and saving the page for another reason -- a unit change, say -- never writes the key.
 - **What the setting steers depends on how the suite was installed.** On a packaged card the
