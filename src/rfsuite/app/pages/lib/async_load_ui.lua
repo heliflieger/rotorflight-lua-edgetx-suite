@@ -51,11 +51,17 @@ function M.stepDone(state)
   return false
 end
 
--- The block `loading_failed` actually lives in. This module is shared by four pages and three of
--- them hand it a translator built for their OWN page, so at runtime only the info page ever found
--- this string and the other three fell through to the English fallback -- packaged or not. Naming
--- the block is what lets the i18n precompiler resolve the key for every caller, and it names the
--- block the translation is really in rather than the caller's (#284).
+-- The block `loading_failed` actually lives in. This module is shared by four
+-- pages, and each of them hands it a translator bound to its OWN block --
+-- developer_api_tester, developer_msp_experiments, diagnostics_fblstatus and
+-- diagnostics_info all carry `loading_failed` in both bundles, so in a source
+-- run every one of the four already resolved it, through the caller's own `t`.
+--
+-- A packaged card is the case that was broken: it carries no bundle, so
+-- `t(i18n, ...)` has nothing to look in and all four callers took the inline
+-- English fallback. Naming the block is what lets the precompiler resolve the
+-- key for every caller, and it names the block the translation is really in
+-- rather than the caller's (#284).
 local keyPrefix = "app.pages.diagnostics_info"
 
 function M.fail(state, i18n, t, reason)

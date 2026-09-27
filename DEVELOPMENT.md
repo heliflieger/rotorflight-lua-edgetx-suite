@@ -150,18 +150,16 @@ A key that has no entry in the chosen bundle survives into the package as a lite
 `@i18n(...)@` marker and shows up that way on the radio, so check the resolver's output when
 adding strings.
 
-**A packaged card carries no locale bundle**, so on an installed card a runtime lookup finds
-nothing and a pilot gets the fallback the precompiler baked into the marker. Which call forms
-that covers, and the three shapes a string has to have to reach a pilot, are in
-[docs/developer/i18n.md](docs/developer/i18n.md).
+The call forms this covers — the page-local family and the full-key forms beside it — are written
+down in [docs/developer/i18n.md](docs/developer/i18n.md).
 
 **A packaged card carries no locale bundle.** `build_package.py` copies `src/rfsuite/` without
 `i18n/` and puts back `i18n/init.lua` alone, so on an installed card a runtime `i18n.t(key)` finds
 nothing and answers with the key. A pilot therefore sees the **fallback** the precompiler baked
 into the marker, and a string the precompiler did not rewrite is English in every locale, whether
-or not its key is translated. Three shapes have to hold for a string to reach a pilot, and a call
-that misses any of them still reads correctly on the desktop, which is what makes them easy to
-miss:
+or not its key is translated. Three shapes have to hold for a **page-local** call to be rewritten
+at all — a call that misses any of them still reads correctly on the desktop, which is what makes
+them easy to miss:
 
 - **The call is named `t` or `pageText`** (or `Common.t` for the cross-page form). The precompiler's
   pattern knows those two names and no others -- a wrapper called anything else is a runtime
@@ -169,9 +167,15 @@ miss:
 - **The file offers a prefix to derive**: a `pageT("...")` or `Common.pageT("...")` call, a
   `keyPrefix` local, or a `buildSimplePage` second argument. Without one the whole rewrite block is
   skipped for that file.
-- **The fallback is one string literal.** The pattern reads it out of the call; a `..` chain is not
-  a string it can take, and a call that has none still resolves, the marker simply carries no
-  fallback for an untranslated locale.
+- **The fallback is one string literal.** The pattern reads it out of the call; a `..` chain spread
+  over several lines is not a string it can take, and a call that has none still resolves as long as
+  the key exists in `en.lua` — the resolver falls back to it before it ever reaches an inline
+  fallback.
+
+These three sit inside the `if prefix:` block. A **full-key** call such as
+`tr("app.msp.unsupported_title", "Unsupported MSP API")` or `i18n.t("some.key")` is rewritten after
+it, with no prefix and no particular name — renaming one of those to `t` would break a call that
+already works.
 
 The house form that satisfies all three, and the one every other help sheet already uses:
 
