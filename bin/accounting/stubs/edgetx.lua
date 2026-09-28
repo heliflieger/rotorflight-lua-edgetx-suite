@@ -121,6 +121,19 @@ local function listDir(path)
   return names
 end
 
+-- madeDirs is a cache of what has been made, and it is the one thing here that can be
+-- wrong without any visible error: forget an entry and the cost is a few extra mkdirs,
+-- keep one for a directory that is gone and the next write into it skips the mkdir and
+-- fails. Two ways that used to happen, both platform-dependent -- on Linux os.remove on
+-- an *empty* directory succeeds, so emptyDir took a subdirectory away on the branch meant
+-- for files and never forgot it, and removeTree only ever forgot its own path, never its
+-- children's. So both hand the whole table over rather than reason about which entries the
+-- walk happened to touch. Nothing in the measured run writes to the card, so re-issuing the
+-- mkdirs costs nothing there; in the self-test it is a handful of processes.
+local function forgetMadeDirs()
+  for path in pairs(madeDirs) do madeDirs[path] = nil end
+end
+
 -- Remove a directory and everything under it. os.remove is asked first and the recursion is
 -- the fallback, because telling a file from a directory by opening it is a question with two
 -- answers: fopen on a directory succeeds on Linux and fails on Windows, so the same card
@@ -128,6 +141,7 @@ end
 -- treated as a file there and left behind with its contents in place. os.remove fails on a
 -- directory on both platforms, which is the one answer that holds everywhere.
 local function removeTree(path)
+  forgetMadeDirs()
   for _, name in ipairs(listDir(path)) do
     local child = path .. "/" .. name
     if not os.remove(child) then
@@ -135,20 +149,19 @@ local function removeTree(path)
     end
   end
   os.execute(string.format('rmdir "%s" 2>%s', path, NULL_DEVICE))
-  madeDirs[path] = nil
 end
 
 -- Empty a directory without removing it. Stubs.clearCard() uses this rather than
 -- removeTree() so the card root survives the call: that root is what takeCardRoot() claimed
 -- with mkdir, and handing it back would let a second run take a card this one is still using.
 local function emptyDir(path)
+  forgetMadeDirs()
   for _, name in ipairs(listDir(path)) do
     local child = path .. "/" .. name
     if not os.remove(child) then
       removeTree(child)
     end
   end
-  madeDirs[path] = nil
 end
 
 --- Empty the card this run was given.
@@ -679,6 +692,29 @@ function Stubs.selfTest()
   expect("clearCard() keeps the card root", write(Stubs.cardRoot .. "/.probe", "x"),
     "the card root is gone, so a second run could claim it")
   os.remove(Stubs.cardRoot .. "/.probe")
+
+  -- 5. Writing into a directory again after the card was emptied must work. The sequence is
+  --    the one from the review: write a file, remove it, empty the card, then write into the
+  --    same directory again. On Linux os.remove on an *empty* directory succeeds, so the
+  --    subdirectory used to go on the branch meant for files and the madeDirs entry for it
+  --    survived -- and the next write skipped its mkdir and failed. A directory not made
+  --    before is written alongside it as the control, so the case says which of the two it
+  --    is that fails rather than that "writing fails".
+  --
+  --    Like the case above, this one needs Linux to mean anything: on Windows os.remove fails
+  --    on any directory, so the recursion runs and the entry is dropped either way.
+  Stubs.clearCard()
+  expect("a first write into a card directory succeeds",
+    write(volume, "a"), "the first write already failed")
+  expect("a first remove of that file succeeds",
+    (os.remove(cardPath(volume)) or false) == true, "the remove did not report success")
+  Stubs.clearCard()
+  expect("a write into the same directory after the card was emptied succeeds",
+    write(volume, "b"), "the directory was made before, the card was emptied, and the " ..
+    "write did not re-make it")
+  expect("a write into a directory never made before still succeeds",
+    write("/SCRIPTS/TOOLS/other/c.lua", "c"), "the control write failed, so the case " ..
+    "above is not saying what it means to say")
 
   return failures
 end

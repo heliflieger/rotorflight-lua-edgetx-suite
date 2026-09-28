@@ -86,14 +86,25 @@ reported as a margin to widen rather than a pass to celebrate.
 - **One card per run, not one per machine.** The card is claimed with `mkdir` as the test,
   so two runs on one machine cannot share it -- running master and a branch side by side is
   the case that would otherwise have one run's startup empty land in the middle of the
-  other's measurement. A run killed outright leaves its card in the temp directory, where a
-  fixed name would at least have been collected by the next run: a stale directory in TEMP
-  is cheaper than a corrupt measurement.
+  other's measurement. The name is given back on every way out, including the green path that
+  ends the file rather than exiting.
+  **Two ways a card is left behind, and both are litter rather than a wrong measurement:**
+  a run killed outright, and -- the more common one -- a run that stops on a Lua error in the
+  measured tree, which bypasses the `os.exit` wrapper. Either leaves an empty directory with
+  a unique name in the temp folder, and a later run takes a card of its own rather than
+  reading it. It is not swept, deliberately: collecting stale cards means deciding that a
+  directory is not a *running* one, which needs a lock or a clock heuristic, and both are
+  worth more than an empty directory in TEMP. A `pcall` around the body would be worse still,
+  in an instrument whose job is to go red.
 - The card has a self-test, run from `measure.lua --self-test` so both CI jobs exercise it.
   Every defect the card can have -- a nested write that does not make its deepest directory,
   the two spellings of a card path answering at two different directories, a write landing
-  outside the card, a card that is not emptied -- leaves all 51 rows exactly as they were.
-  The report cannot see any of it, so something has to.
+  outside the card, a card that is not emptied, a directory cache that still claims a
+  directory the empty took away -- leaves all 51 rows exactly as they were.
+  The report cannot see any of it, so something has to. Two of the cases only bite on Linux
+  (`fopen` on a directory succeeds there and `os.remove` on an empty one does too), and on a
+  Windows host the self-test passes with those two defects put back: the platform is the
+  only thing that makes them visible, which is why the job that runs this is on the CI.
 
 Three consecutive runs produce byte-identical reports.
 
