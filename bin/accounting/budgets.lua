@@ -75,10 +75,10 @@ return {
     -- this block the previous scenario's runtimes, whose connect sequence never finished and
     -- so never let the drain run here.
     --
-    -- The card the run is given (stubs/edgetx.lua) does not move this row again: the store
-    -- is now written and the 30 s look parses one, which is worth a few hundred instructions
-    -- on pass 300 -- and the dearest pass is an early one-off, so the row is set from the
-    -- figure above on either side of that change.
+    -- The card the run is given (stubs/edgetx.lua) does not move this row: the store is now
+    -- written and the 30 s look at pass 300 parses one, which costs a few hundred
+    -- instructions -- and the dearest pass of this block is an early one-off rather than that
+    -- one, so the row reads the figure above on either side of the change.
     ["pass.service"] = { target = 6000, measured = 5314, proposed = 2200 },
 
     -- One run() of SCRIPTS/FUNCTIONS/rfsbg.lua with a full frame backlog waiting,
