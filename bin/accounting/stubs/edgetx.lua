@@ -28,15 +28,15 @@ local repoRoot = "."
 -- So every card path is remapped here, the way loadScript is remapped onto the repository
 -- below: the sources still spell paths the way they spell them on a radio, and the run
 -- reads and writes a card of its own in the system temp directory, emptied when the run
--- starts and again when it finishes. A path outside the card is left exactly as it was,
--- so measure.lua's own file access -- which is repo-relative -- is untouched.
+-- starts and again when the last measurement is done. A path outside the card is left
+-- exactly as it was, so measure.lua's own file access -- which is repo-relative -- is
+-- untouched.
 -- ---------------------------------------------------------------------------
 local CARD_PREFIX = "/SCRIPTS"
 local CARD_VOLUME_PREFIX = "SCRIPTS:"
 
-local function tempRoot()
-  return os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
-end
+Stubs.cardRoot = (os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp")
+  .. "/rfsuite-accounting-card"
 
 --- The path a card path is answered at, or nil when the path is not on the card.
 local function cardPath(path)
@@ -52,27 +52,36 @@ local function cardPath(path)
   return Stubs.cardRoot .. rest
 end
 
-Stubs.cardRoot = tempRoot() .. "/rfsuite-accounting-card"
+-- mkdir and rmdir are the two commands this needs, and both spell the same in the two shells
+-- it runs under. A directory is made once and then remembered, so an open on a path whose
+-- parent is already there costs a table lookup rather than a process.
+--
+-- The null device is named per platform on purpose: `2>NUL` under a POSIX shell is a redirect
+-- to a file called NUL, which would drop one into the working directory on every run.
+local NULL_DEVICE = package.config:sub(1, 1) == "\\" and "NUL" or "/dev/null"
 
--- mkdir and rmdir are the two commands this needs, and both spell the same in the two
--- shells it runs under. A directory is made once and then remembered, so an open on a
--- path whose parent is already there costs a table lookup rather than a process.
 local madeDirs = {}
 
 local function ensureDir(path)
   if madeDirs[path] then return end
   madeDirs[path] = true
-  local built = ""
-  for piece in string.gmatch(path, "[^/\\]+") do
-    built = built .. "/" .. piece
-    os.execute('mkdir "' .. built .. '" 2>NUL')
+  -- Every prefix that ends in a separator, shortest first, so "C:\" on Windows and "/" on a
+  -- desktop are both kept: the path is cut at its own separators, never re-joined with one.
+  local at = 1
+  while true do
+    local _, e = string.find(path, "[/\\]", at)
+    if not e then break end
+    if e < #path then
+      os.execute(string.format('mkdir "%s" 2>%s', string.sub(path, 1, e), NULL_DEVICE))
+    end
+    at = e + 1
   end
 end
 
 -- The tree walk for the cleanup uses the same `ls -1` the rest of the instrument lists
 -- with, for the same reason: one listing means two hosts enumerate in one order.
 local function listDir(path)
-  local pipe = io.popen('ls -1 "' .. path .. '" 2>/dev/null')
+  local pipe = io.popen(string.format('ls -1 "%s" 2>%s', path, NULL_DEVICE))
   if not pipe then return {} end
   local names = {}
   for name in pipe:lines() do names[#names + 1] = name end
@@ -92,7 +101,7 @@ local function removeTree(path)
       removeTree(child)
     end
   end
-  os.execute('rmdir "' .. path .. '" 2>NUL')
+  os.execute(string.format('rmdir "%s" 2>%s', path, NULL_DEVICE))
   madeDirs[path] = nil
 end
 
@@ -105,8 +114,6 @@ end
 function Stubs.clearCard()
   removeTree(Stubs.cardRoot)
 end
-
-Stubs.cardPath = cardPath
 
 -- Installed once, at load: the remap is a property of the interpreter, not of a world, and
 -- a per-world install would wrap the wrapper again on every scenario.
