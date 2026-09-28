@@ -30,6 +30,13 @@ local Stubs = assert(loadfile(HERE .. "/stubs/edgetx.lua"))()
 local FC = assert(loadfile(HERE .. "/stubs/fc.lua"))()
 local Budgets = assert(loadfile(HERE .. "/budgets.lua"))()
 
+-- The card this run is given is emptied before anything is measured. The suite addresses its
+-- settings by absolute card path, and under the stubs that used to mean the host's own
+-- /SCRIPTS -- so a run that died on a control it could not satisfy left a settings file
+-- behind, and the next run read it. Nothing on the host can reach the measurement now, and
+-- nothing the measurement writes survives it.
+Stubs.clearCard()
+
 local API_DIR = ROOT .. "/src/rfsuite/tasks/msp/api"
 local THEMES_DIR = ROOT .. "/src/rfsuite/widgets/dashboard/themes"
 local OBJECTS_DIR = ROOT .. "/src/rfsuite/widgets/dashboard/objects"
@@ -37,8 +44,10 @@ local OBJECTS_DIR = ROOT .. "/src/rfsuite/widgets/dashboard/objects"
 local ZONE = { x = 0, y = 0, w = 800, h = 458 }
 
 -- ---------------------------------------------------------------------------
--- Directory listing. `ls -1` is the one external call in here; everything else
--- is the interpreter. Sorted, because two hosts must enumerate in one order.
+-- Directory listing. `ls -1` is the one external call in the measurement itself;
+-- everything else here is the interpreter. Sorted, because two hosts must
+-- enumerate in one order. (The card the run is given in stubs/edgetx.lua shells
+-- out to `mkdir` and `rmdir` as well, to make and to empty that directory.)
 -- ---------------------------------------------------------------------------
 local function listDir(path)
   local pipe = io.popen("ls -1 " .. path .. " 2>/dev/null")
@@ -1102,6 +1111,11 @@ end
 ------------------------------------------------------------------------------
 -- Check and report.
 ------------------------------------------------------------------------------
+-- The card is emptied here rather than at the end of the file: nothing below reads it, and
+-- from here on every exit runs through here, os.exit in the self-test included.
+Stubs.clearCard()
+
+
 local unanswered = {}
 for cmd, n in pairs(FC.unanswered) do
   unanswered[#unanswered + 1] = string.format("%d(x%d)", cmd, n)

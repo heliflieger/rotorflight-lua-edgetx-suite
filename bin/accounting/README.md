@@ -60,6 +60,15 @@ reported as a margin to widen rather than a pass to celebrate.
 - The world is rebuilt between scenarios, so no measurement inherits another's caches,
   and the API reply index is built from a sorted file list, so two hosts resolve a
   command claimed by two modules the same way.
+- The run is given a card of its own. The suite addresses its settings by absolute card
+  path (`/SCRIPTS/TOOLS/rfsuite.user/...`), and under the stubs that path used to mean the
+  host's own `/SCRIPTS` -- so a run read whatever settings file the machine had and wrote
+  its own into the machine's card, and a local `--check` could disagree with the CI job
+  over a file outside the repository. `Stubs.install` remaps every card path onto a
+  directory in the system temp directory, emptied when the run starts and again when the
+  last measurement is done; nothing on the host can reach the measurement and nothing the
+  measurement writes survives it. A path outside the card is left alone, so `measure.lua`'s
+  own repo-relative file access is untouched.
 
 Three consecutive runs produce byte-identical reports.
 

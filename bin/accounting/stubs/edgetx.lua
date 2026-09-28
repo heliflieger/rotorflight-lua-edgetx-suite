@@ -16,6 +16,120 @@ local FUNCTION_PREFIX = "/SCRIPTS/FUNCTIONS/"
 -- repo root in.
 local repoRoot = "."
 
+-- ---------------------------------------------------------------------------
+-- The card this run is given, in place of the host's.
+--
+-- The suite opens its settings by absolute card path -- /SCRIPTS/TOOLS/rfsuite.user/...,
+-- spelled SCRIPTS:/TOOLS/rfsuite.user/... in two modules -- so under the stubs those opens
+-- went to the host's root filesystem: a run read whatever settings file the machine had,
+-- and wrote its own into the machine's card. That made a local --check and the CI job
+-- disagree over a file outside the repository, and made a run leave something behind.
+--
+-- So every card path is remapped here, the way loadScript is remapped onto the repository
+-- below: the sources still spell paths the way they spell them on a radio, and the run
+-- reads and writes a card of its own in the system temp directory, emptied when the run
+-- starts and again when it finishes. A path outside the card is left exactly as it was,
+-- so measure.lua's own file access -- which is repo-relative -- is untouched.
+-- ---------------------------------------------------------------------------
+local CARD_PREFIX = "/SCRIPTS"
+local CARD_VOLUME_PREFIX = "SCRIPTS:"
+
+local function tempRoot()
+  return os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+end
+
+--- The path a card path is answered at, or nil when the path is not on the card.
+local function cardPath(path)
+  if type(path) ~= "string" then return nil end
+  local rest
+  if string.sub(path, 1, #CARD_PREFIX) == CARD_PREFIX then
+    rest = string.sub(path, #CARD_PREFIX)
+  elseif string.sub(path, 1, #CARD_VOLUME_PREFIX) == CARD_VOLUME_PREFIX then
+    rest = "/" .. string.sub(path, #CARD_VOLUME_PREFIX + 1)
+  else
+    return nil
+  end
+  return Stubs.cardRoot .. rest
+end
+
+Stubs.cardRoot = tempRoot() .. "/rfsuite-accounting-card"
+
+-- mkdir and rmdir are the two commands this needs, and both spell the same in the two
+-- shells it runs under. A directory is made once and then remembered, so an open on a
+-- path whose parent is already there costs a table lookup rather than a process.
+local madeDirs = {}
+
+local function ensureDir(path)
+  if madeDirs[path] then return end
+  madeDirs[path] = true
+  local built = ""
+  for piece in string.gmatch(path, "[^/\\]+") do
+    built = built .. "/" .. piece
+    os.execute('mkdir "' .. built .. '" 2>NUL')
+  end
+end
+
+-- The tree walk for the cleanup uses the same `ls -1` the rest of the instrument lists
+-- with, for the same reason: one listing means two hosts enumerate in one order.
+local function listDir(path)
+  local pipe = io.popen('ls -1 "' .. path .. '" 2>/dev/null')
+  if not pipe then return {} end
+  local names = {}
+  for name in pipe:lines() do names[#names + 1] = name end
+  pipe:close()
+  table.sort(names)
+  return names
+end
+
+local function removeTree(path)
+  for _, name in ipairs(listDir(path)) do
+    local child = path .. "/" .. name
+    local first = io.open(child, "r")
+    if first then
+      first:close()
+      os.remove(child)
+    else
+      removeTree(child)
+    end
+  end
+  os.execute('rmdir "' .. path .. '" 2>NUL')
+  madeDirs[path] = nil
+end
+
+--- Empty the card this run was given.
+--
+-- Called once when the run starts and once when it ends. The startup call is the one that
+-- matters: a run that died on a control it could not satisfy leaves its card behind, and
+-- the next run must not read it. A directory that is not there is not an error -- the
+-- common case is a run that never wrote anything.
+function Stubs.clearCard()
+  removeTree(Stubs.cardRoot)
+end
+
+Stubs.cardPath = cardPath
+
+-- Installed once, at load: the remap is a property of the interpreter, not of a world, and
+-- a per-world install would wrap the wrapper again on every scenario.
+local realOpen, realRemove, realRename = io.open, os.remove, os.rename
+
+io.open = function(path, mode)
+  local card = cardPath(path)
+  if not card then return realOpen(path, mode) end
+  -- io.open does not create a missing directory, and the firmware's card layout has the
+  -- user directory below two that may not be there -- lib/preferences.lua:335 says as much.
+  if mode and string.find(mode, "[wa+]") then ensureDir(card:match("^(.*)[/\\][^/\\]*$") or card) end
+  return realOpen(card, mode)
+end
+
+os.remove = function(path)
+  local card = cardPath(path)
+  return realRemove(card or path)
+end
+
+os.rename = function(from, to)
+  return realRename(cardPath(from) or from, cardPath(to) or to)
+end
+
 -- Fixed-step clock, advanced once per PASS by the caller rather than once per call. getTime is
 -- in 10 ms units on the radio, and a widget pass is about 100 ms, so one pass is ten ticks.
 --
@@ -355,6 +469,11 @@ function Stubs.install(root)
       rel = repoRoot .. "/src/rfsuite/" .. string.sub(path, #SRC_PREFIX + 1)
     elseif string.sub(path, 1, #FUNCTION_PREFIX) == FUNCTION_PREFIX then
       rel = repoRoot .. "/src/functions/" .. string.sub(path, #FUNCTION_PREFIX + 1)
+    elseif cardPath(path) then
+      -- Under /SCRIPTS/TOOLS/ but not the suite's own: the user's directory, so the card this
+      -- run was given, not the repository. Checked before the widget prefix below, which would
+      -- otherwise read it as src/rfsuite.user/... -- a path that exists in neither.
+      rel = cardPath(path)
     elseif string.sub(path, 1, #WIDGET_PREFIX) == WIDGET_PREFIX then
       rel = repoRoot .. "/src/" .. string.sub(path, #WIDGET_PREFIX + 1)
     else
