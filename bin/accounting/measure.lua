@@ -1229,6 +1229,15 @@ end
 print("")
 for _, w in ipairs(warnings) do print("WARN: " .. w) end
 if selfTest then
+  -- The card first: a card that is written to the wrong directory, whose deepest directory
+  -- was never made, or that is not emptied leaves every row below exactly as it was, so
+  -- the report cannot see any of it. Proved on the gate, then on the card.
+  local cardFailures = Stubs.selfTest()
+  for _, f in ipairs(cardFailures) do print("(self-test) card: " .. f) end
+  if #cardFailures > 0 then
+    print("SELF-TEST FAILED: the card this run is given does not behave")
+    os.exit(1)
+  end
   local sawPoisoned, sawHidden = false, false
   for _, f in ipairs(failures) do
     if poisoned and string.find(f, poisoned, 1, true)
@@ -1249,7 +1258,7 @@ if selfTest then
     print("SELF-TEST FAILED: a row with its budget removed did not turn the check red")
     os.exit(1)
   end
-  print("SELF-TEST PASSED: both a breached target and a missing budget row turn the check red")
+  print("SELF-TEST PASSED: the card behaves, and both a breached target and a missing budget row turn the check red")
   os.exit(0)
 end
 

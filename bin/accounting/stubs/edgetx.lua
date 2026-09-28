@@ -35,23 +35,6 @@ local repoRoot = "."
 local CARD_PREFIX = "/SCRIPTS"
 local CARD_VOLUME_PREFIX = "SCRIPTS:"
 
-Stubs.cardRoot = (os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp")
-  .. "/rfsuite-accounting-card"
-
---- The path a card path is answered at, or nil when the path is not on the card.
-local function cardPath(path)
-  if type(path) ~= "string" then return nil end
-  local rest
-  if string.sub(path, 1, #CARD_PREFIX) == CARD_PREFIX then
-    rest = string.sub(path, #CARD_PREFIX)
-  elseif string.sub(path, 1, #CARD_VOLUME_PREFIX) == CARD_VOLUME_PREFIX then
-    rest = "/" .. string.sub(path, #CARD_VOLUME_PREFIX + 1)
-  else
-    return nil
-  end
-  return Stubs.cardRoot .. rest
-end
-
 -- mkdir and rmdir are the two commands this needs, and both spell the same in the two shells
 -- it runs under. A directory is made once and then remembered, so an open on a path whose
 -- parent is already there costs a table lookup rather than a process.
@@ -59,6 +42,47 @@ end
 -- The null device is named per platform on purpose: `2>NUL` under a POSIX shell is a redirect
 -- to a file called NUL, which would drop one into the working directory on every run.
 local NULL_DEVICE = package.config:sub(1, 1) == "\\" and "NUL" or "/dev/null"
+
+-- The card is taken by mkdir as the test: mkdir fails when the directory is already there, on
+-- both of the two shells this runs under, so it is a portable test-and-set. That is the only
+-- way to tell two runs apart here -- Lua 5.3 does not seed math.random at startup, os.time()
+-- resolves to a second, and nothing in stock Lua reports a process id. Naming the card after
+-- the time alone would let two runs started in the same second share one card, and the second
+-- one's startup empty would land in the middle of the first one's measurement.
+local function takeCardRoot()
+  local base = os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+  local stamp = tostring(os.time())
+  for attempt = 1, 64 do
+    local candidate = string.format("%s/rfsuite-accounting-card-%s-%d", base, stamp, attempt)
+    if os.execute(string.format('mkdir "%s" 2>%s', candidate, NULL_DEVICE)) then
+      return candidate
+    end
+  end
+  return base .. "/rfsuite-accounting-card-" .. stamp
+end
+
+Stubs.cardRoot = takeCardRoot()
+
+--- The path a card path is answered at, or nil when the path is not on the card.
+local function cardPath(path)
+  if type(path) ~= "string" then return nil end
+  local rest
+  if string.sub(path, 1, #CARD_PREFIX) == CARD_PREFIX then
+    rest = string.sub(path, #CARD_PREFIX + 1)
+  elseif string.sub(path, 1, #CARD_VOLUME_PREFIX) == CARD_VOLUME_PREFIX then
+    rest = string.sub(path, #CARD_VOLUME_PREFIX + 1)
+  else
+    return nil
+  end
+  -- Both spellings leave separators behind -- the volume one leaves the one that follows its
+  -- colon -- so the remainder is stripped to a clean relative path and rejoined with exactly
+  -- one. Cutting at #CARD_PREFIX rather than #CARD_PREFIX + 1 kept the prefix's last character
+  -- and answered the two spellings at two different directories, one of them a *sibling* of
+  -- the card root, which nothing ever emptied.
+  rest = rest:gsub("^[/\\]+", "")
+  if rest == "" then return Stubs.cardRoot end
+  return Stubs.cardRoot .. "/" .. rest
+end
 
 local madeDirs = {}
 
@@ -76,6 +100,13 @@ local function ensureDir(path)
     end
     at = e + 1
   end
+  -- The loop above can only ever issue a prefix that ends in a separator, and a directory
+  -- name is not followed by one -- so the directory the caller actually asked for was never
+  -- made. The wrapper hands this the parent of a file it is about to open, and on a fresh
+  -- card that parent is one level below where the loop stops, which is why an open of
+  -- TOOLS/rfsuite.user/<mcu>.lua made TOOLS and then failed on the one directory it is
+  -- there for. One more mkdir for the full path closes it.
+  os.execute(string.format('mkdir "%s" 2>%s', path, NULL_DEVICE))
 end
 
 -- The tree walk for the cleanup uses the same `ls -1` the rest of the instrument lists
@@ -90,18 +121,33 @@ local function listDir(path)
   return names
 end
 
+-- Remove a directory and everything under it. os.remove is asked first and the recursion is
+-- the fallback, because telling a file from a directory by opening it is a question with two
+-- answers: fopen on a directory succeeds on Linux and fails on Windows, so the same card
+-- emptied on the machine that wrote it and not on the CI runner, and a subdirectory was
+-- treated as a file there and left behind with its contents in place. os.remove fails on a
+-- directory on both platforms, which is the one answer that holds everywhere.
 local function removeTree(path)
   for _, name in ipairs(listDir(path)) do
     local child = path .. "/" .. name
-    local first = io.open(child, "r")
-    if first then
-      first:close()
-      os.remove(child)
-    else
+    if not os.remove(child) then
       removeTree(child)
     end
   end
   os.execute(string.format('rmdir "%s" 2>%s', path, NULL_DEVICE))
+  madeDirs[path] = nil
+end
+
+-- Empty a directory without removing it. Stubs.clearCard() uses this rather than
+-- removeTree() so the card root survives the call: that root is what takeCardRoot() claimed
+-- with mkdir, and handing it back would let a second run take a card this one is still using.
+local function emptyDir(path)
+  for _, name in ipairs(listDir(path)) do
+    local child = path .. "/" .. name
+    if not os.remove(child) then
+      removeTree(child)
+    end
+  end
   madeDirs[path] = nil
 end
 
@@ -112,7 +158,7 @@ end
 -- the next run must not read it. A directory that is not there is not an error -- the
 -- common case is a run that never wrote anything.
 function Stubs.clearCard()
-  removeTree(Stubs.cardRoot)
+  emptyDir(Stubs.cardRoot)
 end
 
 -- Installed once, at load: the remap is a property of the interpreter, not of a world, and
@@ -543,6 +589,84 @@ function Stubs.install(root)
     error("accounting: lib/require.lua not found under " .. tostring(repoRoot))
   end
   requireChunk()
+end
+
+--- The card's own self-test, called by measure.lua --self-test so CI runs it.
+--
+-- Each of these was a live defect in this file rather than a thought experiment, and each one
+-- is invisible in the report: a card written to the wrong directory, a card whose deepest
+-- directory was never made, and a card that is not emptied all leave the 51 rows exactly as
+-- they were. The report cannot catch them, so something here has to.
+--
+-- Returns a list of failures, empty when the card behaves.
+function Stubs.selfTest()
+  local failures = {}
+  local function expect(label, ok, detail)
+    if not ok then failures[#failures + 1] = label .. (detail and (": " .. detail) or "") end
+  end
+
+  local function write(path, text)
+    local f = io.open(path, "w")
+    if not f then return false end
+    f:write(text)
+    f:close()
+    return true
+  end
+  local function read(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local text = f:read("*a")
+    f:close()
+    return text
+  end
+
+  Stubs.clearCard()
+
+  -- 1. A write to a nested card path has to make every directory on the way, the deepest one
+  --    included. On a fresh card this is the write that used to fail, because the mkdir loop
+  --    could only ever issue a prefix ending in a separator.
+  local slash = "/SCRIPTS/TOOLS/rfsuite.user/deep.lua"
+  local volume = "SCRIPTS:/TOOLS/rfsuite.user/deep.lua"
+  expect("a nested card write succeeds", write(slash, "slash"))
+  expect("a nested card write creates the deepest directory", read(slash) == "slash",
+    "the file is not readable back: " .. tostring(read(slash)))
+
+  -- 2. The two spellings are one file. On a radio they are, and a run that wrote one and read
+  --    the other was reading nothing while its numbers said it had read something.
+  expect("the volume spelling reaches the file the slash spelling wrote", read(volume) == "slash",
+    "volume spelling read " .. tostring(read(volume)))
+  expect("the slash spelling reaches the file the volume spelling wrote",
+    write(volume, "volume") and read(slash) == "volume",
+    "slash spelling read " .. tostring(read(slash)))
+  expect("the two spellings answer at one path", cardPath(slash) == cardPath(volume),
+    tostring(cardPath(slash)) .. " vs " .. tostring(cardPath(volume)))
+
+  -- 3. Nothing may land outside the card root. The off-by-one answered the slash spelling at a
+  --    directory that is a *sibling* of the card root, which no empty ever reached.
+  local escaped = Stubs.cardRoot:gsub("(%W)", "%%%1")
+  expect("the slash spelling stays inside the card root",
+    cardPath(slash):find("^" .. escaped) == 1, tostring(cardPath(slash)))
+  expect("the volume spelling stays inside the card root",
+    cardPath(volume):find("^" .. escaped) == 1, tostring(cardPath(volume)))
+
+  -- 4. clearCard() has to empty a card holding a subdirectory, and has to keep the root: that
+  --    root is the directory takeCardRoot() claimed, and handing it back would let a second run
+  --    take a card this one is still using. The subdirectory is the case that only failed on
+  --    Linux, where fopen on a directory succeeds -- so this case is the one that needs CI to
+  --    mean anything, and it is why the empty asks os.remove first.
+  write("/SCRIPTS/TOOLS/other/vol.lua", "x")
+  Stubs.clearCard()
+  expect("clearCard() empties a nested file", read(volume) == nil,
+    "the file survived: " .. tostring(read(volume)))
+  expect("clearCard() empties a nested directory", read("/SCRIPTS/TOOLS/other/vol.lua") == nil,
+    "a file below a subdirectory survived the empty")
+  -- The root is probed by writing into it rather than by shelling out: os.execute writes to
+  -- the report's own stdout, and a self-test that prints is a self-test nobody reads past.
+  expect("clearCard() keeps the card root", write(Stubs.cardRoot .. "/.probe", "x"),
+    "the card root is gone, so a second run could claim it")
+  os.remove(Stubs.cardRoot .. "/.probe")
+
+  return failures
 end
 
 return Stubs
