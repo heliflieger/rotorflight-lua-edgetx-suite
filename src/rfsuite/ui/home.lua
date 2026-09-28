@@ -3476,100 +3476,6 @@ function M.run(event, touchState)
         if fuel > 100 then fuel = 100 end
       end
 
-      -- lib/audio.lua is shared: the dashboard widget hands it the state its own readTelemetry
-      -- builds (widgets/dashboard/runtime.lua), the tool hands it this table. An announcement is
-      -- written once against a field name, so it can only behave the same on both paths if both
-      -- callers supply the same fields under the same names and with the same normalisation --
-      -- which is what the block below mirrors, rounding included.
-      if Sensors then
-        local ts = state.telemetryState
-        local armFlagsValue = Sensors.getValue("armflags")
-
-        ts.rpm = Sensors.getValue("rpm") or ts.rpm
-        -- Only a reading is stored. `lq` above falls back to 0 for the readiness test
-        -- further down, and writing that fallback here would report a link quality of
-        -- zero as a measurement on a setup whose battery telemetry keeps this loop
-        -- running while no link sensor is present.
-        ts.lq = lqReading or ts.lq
-        -- Which sensor answered for `link`, so that a consumer can tell a quality in percent
-        -- from an RSSI in dBm: the search path in lib/sensors.lua ends in 1RSS and 2RSS.
-        -- Sensors.active_paths is filled on the telemetry path only, so this stays nil under
-        -- the simulator and a consumer has to cope with not being told.
-        ts.lqSource = (Sensors.active_paths and Sensors.active_paths.link) or ts.lqSource
-        ts.profile = roundInt(Sensors.getValue("pid_profile") or ts.profile, ts.profile or 1)
-        ts.rateProfile = roundInt(Sensors.getValue("rate_profile") or ts.rateProfile, ts.rateProfile or 1)
-        ts.batteryProfile = roundInt(Sensors.getValue("battery_profile") or ts.batteryProfile, ts.batteryProfile or 1)
-        ts.armFlags = roundInt(armFlagsValue or ts.armFlags, ts.armFlags or 0)
-        local armDisableFlagsValue = Sensors.getValue("armdisableflags")
-        if type(armDisableFlagsValue) == "number" then
-          ts.armDisableFlags = math.max(0, math.floor(armDisableFlagsValue + 0.5))
-        end
-        ts.governor = roundInt(Sensors.getValue("governor") or ts.governor, ts.governor or 0)
-        ts.mcuTemp = roundInt(Sensors.getValue("temp_mcu") or ts.mcuTemp, ts.mcuTemp or 0)
-        ts.escTemp = roundInt(Sensors.getValue("temp_esc") or ts.escTemp, ts.escTemp or 0)
-        ts.bec_voltage = Sensors.getValue("bec_voltage") or ts.bec_voltage
-        ts.throttlePercent = roundInt(Sensors.getValue("throttle_percent") or ts.throttlePercent, ts.throttlePercent or 0)
-
-        local currentValue = Sensors.getValue("current")
-        local wattsValue = Sensors.getValue("watts")
-        if type(wattsValue) ~= "number" and type(currentValue) == "number" and vbat > 0 then
-          wattsValue = vbat * currentValue
-        end
-        ts.current = currentValue or ts.current
-        ts.watts = wattsValue or ts.watts
-        ts.altitude = Sensors.getValue("altitude") or ts.altitude
-        ts.consumedMah = (smart and smart.consumption) or Sensors.getValue("smartconsumption") or ts.consumedMah
-
-        local cellCountValue = Sensors.getValue("battery_cell_count")
-        if type(cellCountValue) == "number" and cellCountValue > 0 then
-          ts.batteryCellCount = roundInt(cellCountValue, ts.batteryCellCount or 0)
-        elseif vbat > 0 then
-          -- No cell-count sensor: infer it from the pack voltage and the battery config's
-          -- maximum cell voltage, the default being a 4.2 V chemistry.
-          local session = _G.rfsuite and _G.rfsuite.session or nil
-          local batteryConfig = session and (session.batteryConfig or session.battery_config) or nil
-          local maxCellVoltage = normalizeCellVoltage(batteryConfig and batteryConfig.vbatmaxcellvoltage, 4.2)
-          local inferredCells = math.max(1, math.floor((vbat / maxCellVoltage) + 0.5))
-          local existingCells = tonumber(ts.batteryCellCount)
-          if not existingCells or existingCells <= 0 then
-            ts.batteryCellCount = inferredCells
-          else
-            local perCell = vbat / existingCells
-            -- Reconnect-safe: a cell count carried over from another pack shows up as an
-            -- implausible per-cell voltage, and is replaced rather than kept.
-            if perCell < 2.5 or perCell > 4.5 then
-              ts.batteryCellCount = inferredCells
-            end
-          end
-        end
-
-        if type(armFlagsValue) == "number" then
-          if type(bit32) == "table" and type(bit32.btest) == "function" then
-            ts.armed = bit32.btest(armFlagsValue, 1)
-          else
-            ts.armed = armFlagsValue ~= 0
-          end
-        end
-
-        ts.rss1 = readFirstSensorNumber(RSS1_SOURCES, ts.rss1)
-        ts.rss2 = readFirstSensorNumber(RSS2_SOURCES, ts.rss2)
-      end
-
-      -- The reading, and not the readiness fallback beside it -- the same rule `lq` above
-      -- follows, and for the same reason. A pack that is disconnected while the flight
-      -- controller stays alive on its BEC reads as zero volts, and storing the last positive
-      -- value instead would report the pack that is gone as still being there. The alerts that
-      -- read this field all require a voltage above zero, so writing the zero costs none of
-      -- them anything; what it buys is that the widget and the tool now describe the same
-      -- machine, which is what the field exists for.
-      state.telemetryState.voltage = (type(vbatReading) == "number") and vbatReading or state.telemetryState.voltage
-      state.telemetryState.fuel = fuel >= 0 and fuel or state.telemetryState.fuel
-      if fuel >= 0 then
-        -- The fuel alerts stay silent until a real reading has arrived, so that the seeded
-        -- default cannot be announced as a measurement.
-        state.telemetryState.fuelTelemetrySeen = true
-      end
-
       local batteryReady = (vbat > 0) or (fuel >= 0)
       local rfReady = (lq ~= 0)
       local connected = readFblConnected()
@@ -3588,6 +3494,104 @@ function M.run(event, touchState)
       local wasTelemetryReady = state.lastAudioReady == true
 
       if telemetryReady then
+        -- The reading, and not the readiness fallback beside it -- the same rule `lq` above
+        -- follows, and for the same reason. A pack that is disconnected while the flight
+        -- controller stays alive on its BEC reads as zero volts, and storing the last positive
+        -- value instead would report the pack that is gone as still being there. The alerts that
+        -- read this field all require a voltage above zero, so writing the zero costs none of
+        -- them anything; what it buys is that the widget and the tool now describe the same
+        -- machine, which is what the field exists for.
+        state.telemetryState.voltage = (type(vbatReading) == "number") and vbatReading or state.telemetryState.voltage
+        state.telemetryState.fuel = fuel >= 0 and fuel or state.telemetryState.fuel
+        if fuel >= 0 then
+          -- The fuel alerts stay silent until a real reading has arrived, so that the seeded
+          -- default cannot be announced as a measurement.
+          state.telemetryState.fuelTelemetrySeen = true
+        end
+
+        -- lib/audio.lua is shared: the dashboard widget hands it the state its own readTelemetry
+        -- builds (widgets/dashboard/runtime.lua), the tool hands it this table. An announcement is
+        -- written once against a field name, so it can only behave the same on both paths if both
+        -- callers supply the same fields under the same names and with the same normalisation --
+        -- which is what the block below mirrors, rounding included.
+        --
+        -- Polled only while telemetryReady holds. That avoids polling 18 absent sensors at 5 Hz
+        -- while disconnected, and keeps state.telemetryState clean until real values arrive
+        -- rather than seeding it with roundInt(nil, fallback) defaults on every offline tick.
+        if Sensors then
+          local ts = state.telemetryState
+          local armFlagsValue = Sensors.getValue("armflags")
+
+          ts.rpm = Sensors.getValue("rpm") or ts.rpm
+          -- Only a reading is stored. `lq` above falls back to 0 for the readiness test
+          -- further down, and writing that fallback here would report a link quality of
+          -- zero as a measurement on a setup whose battery telemetry keeps this loop
+          -- running while no link sensor is present.
+          ts.lq = lqReading or ts.lq
+          -- Which sensor answered for `link`, so that a consumer can tell a quality in percent
+          -- from an RSSI in dBm: the search path in lib/sensors.lua ends in 1RSS and 2RSS.
+          -- Sensors.active_paths is filled on the telemetry path only, so this stays nil under
+          -- the simulator and a consumer has to cope with not being told.
+          ts.lqSource = (Sensors.active_paths and Sensors.active_paths.link) or ts.lqSource
+          ts.profile = roundInt(Sensors.getValue("pid_profile") or ts.profile, ts.profile or 1)
+          ts.rateProfile = roundInt(Sensors.getValue("rate_profile") or ts.rateProfile, ts.rateProfile or 1)
+          ts.batteryProfile = roundInt(Sensors.getValue("battery_profile") or ts.batteryProfile, ts.batteryProfile or 1)
+          ts.armFlags = roundInt(armFlagsValue or ts.armFlags, ts.armFlags or 0)
+          local armDisableFlagsValue = Sensors.getValue("armdisableflags")
+          if type(armDisableFlagsValue) == "number" then
+            ts.armDisableFlags = math.max(0, math.floor(armDisableFlagsValue + 0.5))
+          end
+          ts.governor = roundInt(Sensors.getValue("governor") or ts.governor, ts.governor or 0)
+          ts.mcuTemp = roundInt(Sensors.getValue("temp_mcu") or ts.mcuTemp, ts.mcuTemp or 0)
+          ts.escTemp = roundInt(Sensors.getValue("temp_esc") or ts.escTemp, ts.escTemp or 0)
+          ts.bec_voltage = Sensors.getValue("bec_voltage") or ts.bec_voltage
+          ts.throttlePercent = roundInt(Sensors.getValue("throttle_percent") or ts.throttlePercent, ts.throttlePercent or 0)
+
+          local currentValue = Sensors.getValue("current")
+          local wattsValue = Sensors.getValue("watts")
+          if type(wattsValue) ~= "number" and type(currentValue) == "number" and vbat > 0 then
+            wattsValue = vbat * currentValue
+          end
+          ts.current = currentValue or ts.current
+          ts.watts = wattsValue or ts.watts
+          ts.altitude = Sensors.getValue("altitude") or ts.altitude
+          ts.consumedMah = (smart and smart.consumption) or Sensors.getValue("smartconsumption") or ts.consumedMah
+
+          local cellCountValue = Sensors.getValue("battery_cell_count")
+          if type(cellCountValue) == "number" and cellCountValue > 0 then
+            ts.batteryCellCount = roundInt(cellCountValue, ts.batteryCellCount or 0)
+          elseif vbat > 0 then
+            -- No cell-count sensor: infer it from the pack voltage and the battery config's
+            -- maximum cell voltage, the default being a 4.2 V chemistry.
+            local session = _G.rfsuite and _G.rfsuite.session or nil
+            local batteryConfig = session and (session.batteryConfig or session.battery_config) or nil
+            local maxCellVoltage = normalizeCellVoltage(batteryConfig and batteryConfig.vbatmaxcellvoltage, 4.2)
+            local inferredCells = math.max(1, math.floor((vbat / maxCellVoltage) + 0.5))
+            local existingCells = tonumber(ts.batteryCellCount)
+            if not existingCells or existingCells <= 0 then
+              ts.batteryCellCount = inferredCells
+            else
+              local perCell = vbat / existingCells
+              -- Reconnect-safe: a cell count carried over from another pack shows up as an
+              -- implausible per-cell voltage, and is replaced rather than kept.
+              if perCell < 2.5 or perCell > 4.5 then
+                ts.batteryCellCount = inferredCells
+              end
+            end
+          end
+
+          if type(armFlagsValue) == "number" then
+            if type(bit32) == "table" and type(bit32.btest) == "function" then
+              ts.armed = bit32.btest(armFlagsValue, 1)
+            else
+              ts.armed = armFlagsValue ~= 0
+            end
+          end
+
+          ts.rss1 = readFirstSensorNumber(RSS1_SOURCES, ts.rss1)
+          ts.rss2 = readFirstSensorNumber(RSS2_SOURCES, ts.rss2)
+        end
+
         local modelName = nil
         if _G.rfsuite and _G.rfsuite.session then
           modelName = _G.rfsuite.session.modelName
