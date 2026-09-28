@@ -66,20 +66,20 @@ return {
     -- The service widget's background pass: the same two runtimes, with no scene
     -- build and no sweep of a theme mixed into it.
     --
-    -- Its worst pass is the one that also carries the 30 s look at the settings store
-    -- (widgets/service/runtime.lua, PREFERENCES_INTERVAL_SECONDS): the settings path is
-    -- resolved and three fstat calls are made, and the store is parsed only where one of
-    -- them has moved or fstat is missing altogether. Raised from 1600 when the measured
-    -- window was widened to contain that pass -- until then it ended at 20 s and the row had
-    -- never seen it.
+    -- With the connect sequence through, every pass runs the events wakeup and with it the
+    -- custom-telemetry drain on a pass's worth of frames, and that is most of what the row
+    -- prices; the dearest pass is a one-off early in the window. The window is 60 s so that
+    -- it also holds the 30 s look at the settings store (widgets/service/runtime.lua,
+    -- PREFERENCES_INTERVAL_SECONDS), which adds a few hundred instructions to its pass and
+    -- is no longer the worst one. Raised from 2200 when the world rebuild stopped handing
+    -- this block the previous scenario's runtimes, whose connect sequence never finished and
+    -- so never let the drain run here.
     --
-    -- The target had room left in it for "a save inside the window that makes the look parse
-    -- the store", a dearer form of the look this block does not drive. The run now has a card
-    -- of its own (stubs/edgetx.lua), so the store is written and the look finds one to parse,
-    -- and the row spends that room: 2305 against the 1735 the same pass cost while the save
-    -- failed on a host with no /SCRIPTS. The worst pass is still the one at 30 s -- pass 300
-    -- of 600 -- so the whole move is on that pass. Raised again from 2200 for it.
-    ["pass.service"] = { target = 2900, measured = 2305, proposed = 2200 },
+    -- The card the run is given (stubs/edgetx.lua) does not move this row again: the store
+    -- is now written and the 30 s look parses one, which is worth a few hundred instructions
+    -- on pass 300 -- and the dearest pass is an early one-off, so the row is set from the
+    -- figure above on either side of that change.
+    ["pass.service"] = { target = 6000, measured = 5314, proposed = 2200 },
 
     -- One run() of SCRIPTS/FUNCTIONS/rfsbg.lua with a full frame backlog waiting,
     -- every frame of it decoded. This row is NOT a share of the widget ceiling

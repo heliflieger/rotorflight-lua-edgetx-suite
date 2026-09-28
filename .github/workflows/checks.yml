@@ -1,0 +1,106 @@
+name: Gates
+
+# The checks that decide whether a build may ship. Called by the workflows that
+# publish, so a release tag or a direct push to master runs the same gates a pull
+# request does instead of going straight from checkout to artefact.
+#
+# pr.yml still carries its own copy of these jobs. It is the gate that has been
+# protecting master so far, and rewriting it belongs in its own change -- but that
+# does mean a check added here has to be added there too, which is the same
+# "keep in sync" convention that let an untranslated artefact through in the first
+# place. Worth collapsing; not worth doing in the same commit as a fix.
+#
+# No inputs: every gate below measures the tree it is given, so a caller that
+# passes a base and a body was carrying two arguments nothing read. The
+# documentation rule that did read a body moved to pr.yml, and the reason is on
+# the comment where its job used to be.
+
+on:
+  workflow_call:
+
+jobs:
+  instruction-budget:
+    name: Instruction budget
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.3
+        run: sudo apt-get update && sudo apt-get install -y lua5.3
+
+      - name: Prove the gate can go red
+        run: lua5.3 bin/accounting/measure.lua --self-test
+
+      - name: Account instructions per pass
+        run: lua5.3 bin/accounting/measure.lua --check
+
+  i18n-precompiler:
+    name: i18n precompiler
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the checks can go red
+        run: python .vscode/scripts/test_precompile_i18n.py --self-test
+
+      - name: Precompile one page and compare
+        run: python .vscode/scripts/test_precompile_i18n.py
+
+  i18n-resolver:
+    name: i18n resolver exit status
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The packager runs the resolver with check=True, so an exit status that
+      # cannot report a failure means a failed i18n stage ships quietly.
+      - name: Prove the exit status can go red
+        run: python .vscode/scripts/resolve_i18n_tags.py --self-test
+
+  # The documentation rule is deliberately NOT a job here, though this file
+  # used to carry it. That rule can be satisfied by a "Documentation:" line in
+  # the *pull request* body, and a push or a tag has no such body: push.yml
+  # passes only `base`, release.yml and snapshot.yml pass nothing, so the body
+  # input arrives empty and the rule falls back to demanding a file under
+  # docs/. Measured over the last 15 commits on master, that fails 7 of them --
+  # and all three of snapshot/0.1.4, 0.1.5 and 0.1.6 are among the shape that
+  # fails, each changing src/ and no docs/. So keeping the job here meant the
+  # merge that introduced it would have stopped a release tag on any such
+  # commit. The rule belongs to pr.yml, which is the only place that has a body
+  # to offer; it is a rule about what a change claims, not about what a tree
+  # looks like.
+
+  translation-coverage:
+    name: Translation coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prove the check can go red
+        run: python bin/i18n/check_translations.py --self-test
+
+      - name: Report the strings a locale build cannot translate
+        run: python bin/i18n/check_translations.py

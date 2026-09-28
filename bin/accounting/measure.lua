@@ -1084,6 +1084,10 @@ end
 -- The block counts the looks it drove and refuses a window that held fewer than two: moving
 -- the stub clock's step, the warm-up or the interval would otherwise shorten the window again
 -- and leave the row measuring a cheaper pass with --check still green.
+--
+-- Every pass starts from one pass's worth of frames, as the other blocks that run the drain
+-- do: over 600 passes feedLink alone piles up thousands, and the drain would be priced on
+-- running down a backlog a radio's queue never holds.
 ------------------------------------------------------------------------------
 World.reset()
 do
@@ -1093,6 +1097,7 @@ do
   local worst, worstAt = 0, 0
   local lastLoad, looks = widget._lastPreferencesLoad, 0
   for i = 1, SERVICE_PASSES do
+    holdLinkBacklog()
     feedLink(World.sensorIds, i)
     local n = count(widget.background, widget)
     if widget._lastPreferencesLoad ~= lastLoad then

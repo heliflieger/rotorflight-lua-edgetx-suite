@@ -57,18 +57,22 @@ reported as a margin to widen rather than a pass to celebrate.
   reactive ref and the runner calls them in a plain loop. The loop's own overhead is
   measured once against an empty closure and printed as the control; a run whose control
   drifts from the value in `budgets.lua` fails itself.
-- The world is rebuilt between scenarios, so no measurement inherits another's caches,
-  and the API reply index is built from a sorted file list, so two hosts resolve a
-  command claimed by two modules the same way.
+- The world is rebuilt between scenarios, and the rebuild reaches the module singletons the
+  suite parks in globals (`__rfsuite*`) as well as the stubs' own state, so no measurement
+  inherits another's caches, another's connect state or another's link. Without that, every
+  scenario after the first ran on the previous one's runtimes, and its connect chain stopped
+  on the `telemetry` task with the telemetry drain never started. The API reply index is
+  built from a sorted file list, so two hosts resolve a command claimed by two modules the
+  same way.
 - The run is given a card of its own. The suite addresses its settings by absolute card
   path (`/SCRIPTS/TOOLS/rfsuite.user/...`), and under the stubs that path used to mean the
   host's own `/SCRIPTS` -- so a run read whatever settings file the machine had and wrote
   its own into the machine's card, and a local `--check` could disagree with the CI job
-  over a file outside the repository. `Stubs.install` remaps every card path onto a
-  directory in the system temp directory, emptied when the run starts and again when the
-  last measurement is done; nothing on the host can reach the measurement and nothing the
-  measurement writes survives it. A path outside the card is left alone, so `measure.lua`'s
-  own repo-relative file access is untouched.
+  over a file outside the repository. Every card path is remapped onto a directory in the
+  system temp directory, emptied when the run starts and again when the last measurement
+  is done; nothing on the host can reach the measurement and nothing the measurement writes
+  survives it. A path outside the card is left alone, so `measure.lua`'s own repo-relative
+  file access is untouched.
 
 Three consecutive runs produce byte-identical reports.
 

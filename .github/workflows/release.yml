@@ -9,8 +9,13 @@ permissions:
   contents: write
 
 jobs:
+  gates:
+    name: Gates
+    uses: ./.github/workflows/checks.yml
+
   build-zips:
     name: Build per-locale ZIPs
+    needs: gates
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -63,7 +68,9 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-zips]
+    # gates is listed as well as build-zips so the dependency on a green gate is
+    # readable here rather than only implied through the job above.
+    needs: [gates, build-zips]
     steps:
       - name: Checkout repo (for release notes script)
         uses: actions/checkout@v4

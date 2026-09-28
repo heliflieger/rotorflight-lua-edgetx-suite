@@ -146,9 +146,15 @@ Two scripts turn the markers into text at package and deploy time:
 - `.vscode/scripts/precompile_i18n.py` collects the strings a page builds dynamically
 - `.vscode/scripts/resolve_i18n_tags.py` substitutes the markers from one locale bundle
 
-A key that has no entry in the chosen bundle survives into the package as a literal
-`@i18n(...)@` marker and shows up that way on the radio, so check the resolver's output when
-adding strings.
+A key that has no entry in the chosen bundle used to survive into the package as a literal
+`@i18n(...)@` marker and show up that way on the radio. Since #286 the build stops instead: the
+resolver exits 1 on an unresolved key and the packager refuses to write an archive, so a run
+that reaches an unresolved key produces no artefact rather than a card full of markers. The
+same applies to a file that needed a change and could not be written.
+
+The precompiler is the step *before* the resolver and is a separate tool: it adds
+`@i18n(...)@` markers to source files in place, and it still reports a failed read or write
+without failing. Run it on a copy, not on your checkout.
 
 The call forms this covers — the page-local family and the full-key forms beside it — are written
 down in [docs/developer/i18n.md](docs/developer/i18n.md).
@@ -211,11 +217,12 @@ whitespace-only diff buries the change a reviewer is looking for.
 
 | Workflow | Trigger | What it produces |
 | --- | --- | --- |
-| `pr.yml` | pull request | The per-locale installation archives as a build check, plus the instruction-budget gate (`bin/accounting/measure.lua --check`), the i18n precompiler test, the documentation-rule check (`bin/docs/verify_documentation_rule.py`) and the translation-coverage report (`bin/i18n/check_translations.py`) |
-| `push.yml` | push | The per-locale installation archives |
-| `snapshot.yml` | tag `snapshot/*` | A snapshot release with the per-locale archives |
-| `release.yml` | tag `release/*` | A GitHub release, with notes extracted from `Releases.md` |
-| `testing.yml` | tag `testing/*` | A raw `src` artifact, then deletes the tag again |
+| `pr.yml` | pull request | The per-locale installation archives as a build check, plus the instruction-budget gate (`bin/accounting/measure.lua --check`), the i18n precompiler test, the documentation-rule check (`bin/docs/verify_documentation_rule.py`), the translation-coverage report (`bin/i18n/check_translations.py`) and the resolver self-test (`.vscode/scripts/resolve_i18n_tags.py --self-test`) |
+| `checks.yml` | called by the workflows below | Four gates, reusable: the instruction budget, the i18n precompiler test, the resolver self-test and the translation-coverage report. The **documentation rule is deliberately not one of them** — it can be satisfied by a `Documentation:` line in the pull request body, and a push or a tag has no such body, so running it here would have demanded a `docs/` change from a release tag. It lives in `pr.yml`, the only caller that has a body to offer. `push.yml`, `snapshot.yml` and `release.yml` run this as a `needs:` of the job that builds or publishes, so a red gate stops the release. `pr.yml` does not use it — rewriting the workflow that has been protecting master belongs in its own change — so a gate added to `checks.yml` has to be added to `pr.yml` as well |
+| `push.yml` | push | The per-locale installation archives, behind the gates in `checks.yml` |
+| `snapshot.yml` | tag `snapshot/*` | A snapshot release with the per-locale archives, behind the gates |
+| `release.yml` | tag `release/*` | A GitHub release, with notes extracted from `Releases.md`, behind the gates |
+| `testing.yml` | tag `testing/*` | A raw `src` artifact, then deletes the tag again. Ships no archive and runs no gate |
 
 A release tag of the form `release/<x>.<y>.<z>-<suffix>` is published as a Release Candidate;
 without the suffix it is published as a Release. The version baked into the package itself

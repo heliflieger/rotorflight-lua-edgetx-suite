@@ -41,6 +41,42 @@ def get_available_languages():
     return langs if langs else ["en"]
 
 
+# The same extensions resolve_i18n_tags.py walks, so a marker count taken here is
+# comparable with what the resolver was able to reach.
+I18N_MARKER_EXTS = ('.lua', '.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.txt')
+I18N_MARKER = "@i18n("
+
+
+def count_i18n_markers(roots):
+    """Count the literal @i18n( markers standing in the staged tree.
+
+    The *resolver* only ever takes markers away; the precompiler is what adds
+    them, and it runs before this. So the count to compare is "markers the
+    resolver left standing" against "markers the resolver was able to reach",
+    and it is the second that the resolver's own refusal message quotes (2863 of
+    551). Taking it on both sides of the stage is what catches a run in which
+    every write failed: from out here that looks exactly like a stage that
+    resolved nothing.
+    """
+    total = 0
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _, files in os.walk(root):
+            for name in files:
+                if not name.lower().endswith(I18N_MARKER_EXTS):
+                    continue
+                try:
+                    with open(os.path.join(dirpath, name), "r",
+                              encoding="utf-8", errors="replace") as fh:
+                        total += fh.read().count(I18N_MARKER)
+                except OSError as e:
+                    raise RuntimeError(
+                        f"cannot read staged file while counting i18n markers: {dirpath}/{name}: {e}"
+                    ) from e
+    return total
+
+
 PAGE_ID_RE = re.compile(r"^[a-z0-9_]+$")
 PAGE_ENTRY_RE = re.compile(r"\{([^{}]*)\}")
 
@@ -302,20 +338,43 @@ def build_package_for_language(lang, version, output_dir, artifact_name=None):
         py_resolve = os.path.join(WORKSPACE_ROOT, ".vscode", "scripts", "resolve_i18n_tags.py")
         lang_file = os.path.join(src_core, "i18n", f"{lang}.lua")
 
-        if os.path.isfile(py_precompile) and os.path.isfile(py_resolve) and os.path.isfile(lang_file):
-            python_exe = sys.executable if (sys.executable and os.path.isfile(sys.executable)) else (shutil.which("python3") or shutil.which("python") or shutil.which("py") or "python")
-            subprocess.run([python_exe, py_precompile, "--root", staging_tools], check=True)
-            subprocess.run([python_exe, py_precompile, "--root", staging_widgets], check=True)
-            subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_tools], check=True)
-            subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_widgets], check=True)
-            if os.path.isdir(staging_functions):
-                subprocess.run([python_exe, py_precompile, "--root", staging_functions], check=True)
-                subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_functions], check=True)
-            # The templates carry markers too -- their lua and the txt files EdgeTX shows in
-            # the template picker -- so each locale's ZIP ships them in its own language.
-            staging_templates = os.path.join(temp_dir, "TEMPLATES")
-            if os.path.isdir(staging_templates):
-                subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_templates], check=True)
+        # The templates carry markers too -- their lua and the txt files EdgeTX shows in
+        # the template picker -- so each locale's ZIP ships them in its own language.
+        staging_templates = os.path.join(temp_dir, "TEMPLATES")
+
+        i18n_roots = [staging_tools, staging_widgets, staging_functions, staging_templates]
+
+        # Every reason this guard can be false is now a refusal rather than a quiet
+        # skip. An unknown locale is stopped earlier, in main(); a missing bundle for a
+        # known locale, or a missing script, is a broken checkout, and shipping that as
+        # a ZIP means the artefact reaches a pilot with no translation done at all.
+        missing = [p for p in (py_precompile, py_resolve, lang_file) if not os.path.isfile(p)]
+        if missing:
+            raise RuntimeError(
+                "refusing to package: the i18n stage cannot run, so the ZIP would ship "
+                "untranslated. Missing: " + ", ".join(os.path.relpath(p, WORKSPACE_ROOT) for p in missing)
+            )
+
+        python_exe = sys.executable if (sys.executable and os.path.isfile(sys.executable)) else (shutil.which("python3") or shutil.which("python") or shutil.which("py") or "python")
+        markers_before = count_i18n_markers(i18n_roots)
+        subprocess.run([python_exe, py_precompile, "--root", staging_tools], check=True)
+        subprocess.run([python_exe, py_precompile, "--root", staging_widgets], check=True)
+        subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_tools], check=True)
+        subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_widgets], check=True)
+        if os.path.isdir(staging_functions):
+            subprocess.run([python_exe, py_precompile, "--root", staging_functions], check=True)
+            subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_functions], check=True)
+        if os.path.isdir(staging_templates):
+            subprocess.run([python_exe, py_resolve, "--json", lang_file, "--root", staging_templates], check=True)
+
+        markers_after = count_i18n_markers(i18n_roots)
+        print(f"[package] i18n markers: {markers_before} before the stage, {markers_after} after")
+        if markers_before > 0 and markers_after >= markers_before:
+            raise RuntimeError(
+                f"refusing to package: the i18n stage ran but left {markers_after} of "
+                f"{markers_before} markers standing, so nothing was translated. "
+                "The most likely cause is that every write failed."
+            )
 
         # Record the build identity, after the sources are final and before they are packed
         identity = write_build_identity(temp_dir, staging_core, version)
@@ -444,7 +503,13 @@ def main():
 
     available = get_available_languages()
     if lang not in available:
-        print(f"[package] WARNING: '{lang}' not found under src/rfsuite/i18n (available: {', '.join(available)}); continuing anyway.")
+        # A locale that is not a bundle is not a locale. Carrying on used to skip the
+        # whole i18n stage and still exit 0, so the ZIP shipped with every marker still
+        # standing and nothing said so.
+        print(f"[package] REFUSED: '{lang}' is not a locale under src/rfsuite/i18n "
+              f"(available: {', '.join(available)}). Refusing rather than shipping an "
+              f"artefact with no translation done at all.")
+        sys.exit(2)
 
     print(f"Building RFSuite Radio ZIP package for version v{version}, locale '{lang}'")
     build_package_for_language(lang, version, output_dir, artifact_name=args.artifact_name)

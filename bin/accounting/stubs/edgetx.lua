@@ -516,6 +516,21 @@ function Stubs.install(root)
     realPrint(line)
   end
 
+  -- Module singletons parked in _G, cleared so every world starts where a cold boot does.
+  --
+  -- Several modules survive a reload by keeping themselves in a global: tasks/msp/runtime.lua and
+  -- tasks/events/runtime.lua hand back _G.__rfsuite_msp_runtime_module and _G.__rfsuite_events_module
+  -- when those are set, and the config store, the MSP service, the environment, the locale, the
+  -- model name store and the object and theme commons do the same. Replacing the rfsuite root below
+  -- does not reach them, so without this the second world's require answers with the first world's
+  -- runtimes: the new session is never told the link is up, the connect chain stops on the
+  -- telemetry task, the telemetry drain never starts, and every scenario after the first is
+  -- measured on a widget that never finished connecting. Matched by prefix rather than listed:
+  -- a list here would go stale, silently, the next time a module parks itself in a global.
+  for key in pairs(_G) do
+    if type(key) == "string" and string.find(key, "^__rfsuite") then _G[key] = nil end
+  end
+
   _G.rfsuite = { session = {}, preferences = {} }
   -- tasks/msp/cache.lua hangs its store off this root and creates it in its own top-level, which
   -- runs ONCE per interpreter: this file replaces the root on every world, and a chunk that was
