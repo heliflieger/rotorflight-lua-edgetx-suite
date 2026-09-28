@@ -3674,12 +3674,16 @@ function M.run(event, touchState)
         -- (widgets/dashboard/runtime.lua:346). Gating the whole pass on the edge had left the
         -- variable written once per loss and then not again at all.
         --
-        -- It also settles on a different level than it used to, and that is the point of passing
-        -- the tool's own state: `resetConnectionState` refreshes the volume with no `self`
-        -- (lib/audio.lua:1263), so `is_rf_connected` could not see the tool's link and fell
-        -- through to `_G.rfsuite.session.rfConnected` -- a field nothing in the suite writes,
-        -- so it read as down and the level went to off once the recovery window had passed.
-        -- Here it is the same answer the widget gives.
+        -- It settles on the same level it always did, and that is worth saying plainly rather
+        -- than claiming a difference. `resetConnectionState` refreshes the volume with no
+        -- `self` (lib/audio.lua:1263), so `is_rf_connected` reads
+        -- `_G.rfsuite.session.rfConnected`; `publishConnected` writes that field from the same
+        -- `session.isConnected` this tool copies into `state.rfConnected` at
+        -- ui/home.lua:1384 (tasks/events/runtime.lua:125-126), and both of those come from the
+        -- one RSSI reading behind `mspState.lastConnected` (tasks/msp/runtime.lua:425, :832).
+        -- The two agree today. Passing the state says which of them the tool means instead of
+        -- leaving it to a field another module happens to write, and it is the call the widget
+        -- already makes.
         if Audio and type(Audio.refreshConnectionVolume) == "function" then
           local audioContext = state.audioContext
           audioContext.audioState = state.audioState
