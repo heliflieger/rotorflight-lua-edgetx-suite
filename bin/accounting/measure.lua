@@ -1116,9 +1116,24 @@ end
 ------------------------------------------------------------------------------
 -- Check and report.
 ------------------------------------------------------------------------------
--- The card is emptied here rather than at the end of the file: nothing below reads it, and
--- from here on every exit runs through here, os.exit in the self-test included.
+-- The card is emptied and then handed back here rather than at the end of the file: nothing
+-- below reads it, and from here on every exit runs through here, os.exit in the self-test
+-- included. Emptied rather than removed, because the self-test below writes to the card after
+-- this point; the release that gives the name back happens on the way out of every exit below.
 Stubs.clearCard()
+
+-- The card is handed back on every exit from here on, which is why the release is installed
+-- here rather than written before each os.exit: there are five exits in the tail, and the next
+-- one added would otherwise leave a card behind in the temp folder. Nothing the measured tree
+-- loads calls os.exit, so the wrapper is invisible to the measurement -- if that ever changes,
+-- this is the line to look at.
+do
+  local realExit = os.exit
+  os.exit = function(code)
+    Stubs.releaseCard()
+    realExit(code)
+  end
+end
 
 
 local unanswered = {}
@@ -1269,3 +1284,8 @@ if #failures > 0 then
 else
   print(string.format("%d rows, 0 failures", #rows))
 end
+
+-- The green path ends the file rather than exiting, so the wrapper above never sees it. A
+-- --check that passes is the common case, and leaving a card behind on every one of them is
+-- how a temp directory fills up.
+Stubs.releaseCard()

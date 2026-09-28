@@ -73,6 +73,27 @@ reported as a margin to widen rather than a pass to celebrate.
   is done; nothing on the host can reach the measurement and nothing the measurement writes
   survives it. A path outside the card is left alone, so `measure.lua`'s own repo-relative
   file access is untouched.
+- **The remap costs what a remap costs, and it is in the figures.** `io.open` is a Lua
+  function now, so every open the measured sources make goes through a wrapper that is
+  counted under the hook and billed to the suite. Four rows carry it -- `pass.startup.worst`
+  +612, `pass.tuning.prime` and `unit.telemetry.drain` and `unit.telemetry.handoff` +34 each
+  on Lua 5.3.6, all four inside their targets. Removing the `io.open` wrapper alone puts all
+  four back on master's figures and the report becomes identical to master's line for line,
+  which is how the cost was attributed to the wrapper rather than to a settings write: no
+  card path is written at all in a traced `--check` run. Read the rows as
+  *suite + instrument*, and the way to take the instrument out is the third report in the
+  pull request.
+- **One card per run, not one per machine.** The card is claimed with `mkdir` as the test,
+  so two runs on one machine cannot share it -- running master and a branch side by side is
+  the case that would otherwise have one run's startup empty land in the middle of the
+  other's measurement. A run killed outright leaves its card in the temp directory, where a
+  fixed name would at least have been collected by the next run: a stale directory in TEMP
+  is cheaper than a corrupt measurement.
+- The card has a self-test, run from `measure.lua --self-test` so both CI jobs exercise it.
+  Every defect the card can have -- a nested write that does not make its deepest directory,
+  the two spellings of a card path answering at two different directories, a write landing
+  outside the card, a card that is not emptied -- leaves all 51 rows exactly as they were.
+  The report cannot see any of it, so something has to.
 
 Three consecutive runs produce byte-identical reports.
 

@@ -161,6 +161,20 @@ function Stubs.clearCard()
   emptyDir(Stubs.cardRoot)
 end
 
+--- Empty the card and hand the directory itself back.
+--
+-- The last thing a run that got all the way through does. takeCardRoot() claims the name so
+-- no second run can take a card this one is measuring with, and a name nobody reclaims is
+-- litter: every run of the instrument would leave an empty directory in the temp folder,
+-- forever. measure.lua calls this from the same point its old clearCard() stood, so it runs
+-- on every exit from there on, os.exit in the self-test included. A run killed outright
+-- still leaks its card, which is the price of not letting a second run step on the first.
+function Stubs.releaseCard()
+  emptyDir(Stubs.cardRoot)
+  os.execute(string.format('rmdir "%s" 2>%s', Stubs.cardRoot, NULL_DEVICE))
+  madeDirs[Stubs.cardRoot] = nil
+end
+
 -- Installed once, at load: the remap is a property of the interpreter, not of a world, and
 -- a per-world install would wrap the wrapper again on every scenario.
 local realOpen, realRemove, realRename = io.open, os.remove, os.rename
