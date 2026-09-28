@@ -106,7 +106,7 @@ Monitors main pack voltage, cell thresholds, and pre-flight pack charge level.
 #### What Telemetry Lost Covers, and What It Leaves to the Radio
 Only a flight controller that stops answering while the radio link is still up is announced. A lost RF link is what the radio itself announces, and hearing the same event twice is worse than hearing it once. A drop while the model is disarmed is a normal power-off and stays silent. Both announcements need sound files a pack may not carry yet -- see *Sound Pack Files* below.
 
-The loss is announced **once**. A model that stays silent keeps the announcement's recovery window open, and it is the return that speaks again -- not the silence, however long it lasts. In the tool this was not what happened: its home loop checked the connection every fifth of a second and re-armed the announcement on the way past, so a model that stayed silent while the radio link was up was told about it again every two minutes. The tool now announces on the edge, the way the dashboard widget has always done it.
+The loss is announced **once**. A model that stays silent keeps the announcement's recovery window open, and it is the return that speaks again -- not the silence, however long it lasts.
 
 ### 9. Adjustments
 

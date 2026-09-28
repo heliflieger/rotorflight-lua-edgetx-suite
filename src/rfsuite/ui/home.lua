@@ -3483,14 +3483,15 @@ function M.run(event, touchState)
       -- The test is a reading and not a latch, and this branch used to run on every audio tick
       -- for as long as it failed: five times a second, with no model powered up, while the
       -- connect chain had not finished, or with the link up and no battery reading arrived. The
-      -- reads above stay per tick -- they are what decides the edge -- but the clean-up belongs
-      -- to the transition, the way the dashboard widget has it already
-      -- (widgets/dashboard/runtime.lua:2807-2831), and on both sides that is what the calls
-      -- mean. `Sensors.reset()` empties every matched path, every miss record, every back-off
-      -- and the field-info cache (lib/sensors.lua:646-680), so on each of those ticks it threw
-      -- away what the tick before had learned and sent the next one back to the top of each
-      -- source's list. The back-off lib/sensors.lua keeps for a source this radio does not carry
-      -- (#260) had no chance to act in between: it was cleared before the next tick read.
+      -- three reads that decide the test stay per tick -- they are the edge -- and so does the
+      -- master volume in the last branch below. The clean-up belongs to the transition, the way
+      -- the dashboard widget has it already (widgets/dashboard/runtime.lua:2807-2831), and on
+      -- both sides that is what the calls mean. `Sensors.reset()` empties every matched path,
+      -- every miss record, every back-off and the field-info cache
+      -- (lib/sensors.lua:646-680), so on each of those ticks it threw away what the tick
+      -- before had learned and sent the next one back to the top of each source's list. The
+      -- back-off lib/sensors.lua keeps for a source this radio does not carry (#260) had no
+      -- chance to act in between: it was cleared before the next tick read.
       local wasTelemetryReady = state.lastAudioReady == true
 
       if telemetryReady then
@@ -3663,6 +3664,30 @@ function M.run(event, touchState)
         state.telemetryState.batteryCellCount = nil
         state.telemetryState.rss1 = nil
         state.telemetryState.rss2 = nil
+      else
+        -- Still not ready, and not the edge either -- the stretch in between. Nothing here is
+        -- connection state, so there is nothing to announce and nothing to clear, but the
+        -- master volume is a radio-side effect and has to keep following the pilot's setting
+        -- while the tool waits. `Audio.process` drives it while the connection is up and the
+        -- reset above drives it on the edge, which is what the dashboard widget relies on: it
+        -- runs `process` whether or not the link is up, and passes itself in
+        -- (widgets/dashboard/runtime.lua:346). Gating the whole pass on the edge had left the
+        -- variable written once per loss and then not again at all.
+        --
+        -- It also settles on a different level than it used to, and that is the point of passing
+        -- the tool's own state: `resetConnectionState` refreshes the volume with no `self`
+        -- (lib/audio.lua:1263), so `is_rf_connected` could not see the tool's link and fell
+        -- through to `_G.rfsuite.session.rfConnected` -- a field nothing in the suite writes,
+        -- so it read as down and the level went to off once the recovery window had passed.
+        -- Here it is the same answer the widget gives.
+        if Audio and type(Audio.refreshConnectionVolume) == "function" then
+          local audioContext = state.audioContext
+          audioContext.audioState = state.audioState
+          audioContext.preferences = state.preferences
+          state.telemetryState.rfConnected = state.rfConnected
+          audioContext.state = state.telemetryState
+          Audio.refreshConnectionVolume(audioContext)
+        end
       end
 
       -- Read at the end of the block, so both sides of the test have been through it once

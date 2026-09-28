@@ -1330,6 +1330,27 @@ function Audio.resetConnectionState(audioState)
   end
 end
 
+--- Drive the master volume, and nothing else.
+--
+-- The master volume is a radio-side effect rather than audio state: it has to keep following
+-- the pilot's setting and the alert level whether or not the connection is up. Both callers of
+-- this module reach it through the two functions above -- `Audio.process` while the
+-- connection is ready, `resetConnectionState` on the edge where it goes -- and a third door
+-- is what a caller that is waiting for a connection needs. The tool's audio block is that
+-- caller: gating its whole pass on the edge left the variable written once per loss and then
+-- not again, so a pilot who set a global variable as the master volume sat at the alert level
+-- until the next connect.
+--
+-- `isCritical` is not asked for. It is taken from the pending loss with the same predicate
+-- `resetConnectionState` uses, so a caller that waits settles at the level the reset settles
+-- it at -- alert level for the recovery window, the pilot's own level after it.
+function Audio.refreshConnectionVolume(self)
+  if type(self) ~= "table" or type(self.audioState) ~= "table" then
+    return
+  end
+  refresh_volume_state(self, is_telemetry_lost_active(self, nowSeconds()))
+end
+
 function Audio.process(self, opts)
   if type(self) ~= "table" or type(self.audioState) ~= "table" then
     return
