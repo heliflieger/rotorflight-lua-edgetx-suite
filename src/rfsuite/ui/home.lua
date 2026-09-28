@@ -602,6 +602,11 @@ state = {
   connStatusNoticeTitle = nil,
   connStatusNoticeMessage = nil,
   lastAudioTick = 0,
+  -- Whether the audio block's readiness test held on the previous audio tick. The clean-up on
+  -- the other side of that test runs on the ready-to-not-ready edge, and this is what remembers
+  -- the edge. It belongs to the audio block alone and is read and written on no other tick, so
+  -- the per-frame work above cannot move it behind the block's back.
+  lastAudioReady = false,
   audioState = {
     initialized = false,
     nextAllowedAt = 0,
@@ -3568,8 +3573,21 @@ function M.run(event, touchState)
       local batteryReady = (vbat > 0) or (fuel >= 0)
       local rfReady = (lq ~= 0)
       local connected = readFblConnected()
+      local telemetryReady = connected and batteryReady and rfReady
+      -- The test is a reading and not a latch, and this branch used to run on every audio tick
+      -- for as long as it failed: five times a second, with no model powered up, while the
+      -- connect chain had not finished, or with the link up and no battery reading arrived. The
+      -- reads above stay per tick -- they are what decides the edge -- but the clean-up belongs
+      -- to the transition, the way the dashboard widget has it already
+      -- (widgets/dashboard/runtime.lua:2807-2831), and on both sides that is what the calls
+      -- mean. `Sensors.reset()` empties every matched path, every miss record, every back-off
+      -- and the field-info cache (lib/sensors.lua:646-680), so on each of those ticks it threw
+      -- away what the tick before had learned and sent the next one back to the top of each
+      -- source's list. The back-off lib/sensors.lua keeps for a source this radio does not carry
+      -- (#260) had no chance to act in between: it was cleared before the next tick read.
+      local wasTelemetryReady = state.lastAudioReady == true
 
-      if connected and batteryReady and rfReady then
+      if telemetryReady then
         local modelName = nil
         if _G.rfsuite and _G.rfsuite.session then
           modelName = _G.rfsuite.session.modelName
@@ -3581,12 +3599,20 @@ function M.run(event, touchState)
         audioContext.state = state.telemetryState
         audioContext.modelName = modelName
         Audio.process(audioContext, { log = function(msg, level) if Log then pcall(Log.emit, "rfsuite.audio", msg, level, false) end end })
-      else
-        -- The connection is gone. `rfReady` is an instantaneous reading rather than a latch, so
+      elseif wasTelemetryReady then
+        -- The connection is gone, and it was there a moment ago -- the edge, not the state.
+        -- `rfReady` is an instantaneous reading rather than a latch, so
         -- it says WHICH half went away, and the announcement is only made for the half the
         -- radio's own telemetry alert cannot see: the link is still there and the flight
         -- controller has stopped answering. The call is made before the reset below, which
         -- clears the state it reads.
+        --
+        -- Once per loss is also what the announcement itself is written for. It latches on
+        -- `connectionLostPending` (lib/audio.lua:1197-1199), but `Audio.resetConnectionState`
+        -- drops that latch again once the recovery window has passed
+        -- (lib/audio.lua:1254-1261), so on every tick this branch used to run it was set and
+        -- then taken away again -- which is to say the sound came back once per
+        -- CONNECTION_RECOVERY_WINDOW for as long as the tool sat in this state.
         if Audio and type(Audio.announceConnectionLost) == "function" then
           local audioContext = state.audioContext
           audioContext.audioState = state.audioState
@@ -3634,6 +3660,10 @@ function M.run(event, touchState)
         state.telemetryState.rss1 = nil
         state.telemetryState.rss2 = nil
       end
+
+      -- Read at the end of the block, so both sides of the test have been through it once
+      -- before the next audio tick compares against it.
+      state.lastAudioReady = telemetryReady
     end
 
     if not transitionedMenuThisTick then
