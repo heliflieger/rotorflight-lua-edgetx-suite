@@ -29,17 +29,13 @@ Api.fields = FIELD_SPEC
 Api.simulatorResponse = SIM_RESPONSE
 
 function Api.parse(buf)
-  if type(buf) == "table" then
-    local parsed = {}
-    parsed.smartfuel_mode = tonumber(buf[1]) or 0
-    parsed.voltage_drop_rate = tonumber(buf[2]) or 0
-    parsed.charge_drop_rate = tonumber(buf[3]) or 0
-    parsed.sag_gain = tonumber(buf[4]) or 0
-    return parsed
-  end
-  local def = {}
-  for _, e in ipairs(FIELD_SPEC) do def[e[1]] = e[5] or 0 end
-  return def
+  if type(buf) ~= "table" or #buf < 4 then return nil end
+  local parsed = {}
+  parsed.smartfuel_mode = tonumber(buf[1]) or 0
+  parsed.voltage_drop_rate = tonumber(buf[2]) or 0
+  parsed.charge_drop_rate = tonumber(buf[3]) or 0
+  parsed.sag_gain = tonumber(buf[4]) or 0
+  return parsed
 end
 
 function Api.buildWritePayload(data)
