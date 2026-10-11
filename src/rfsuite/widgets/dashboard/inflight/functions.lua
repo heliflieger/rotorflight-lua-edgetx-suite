@@ -152,7 +152,7 @@ M.FUNCTIONS = {
     cmd = 112, api = "pid_tuning", field = "pid_0_O" },
   { id = 61, name = t("widgets.dashboard.fn_cross_coupling_gain", "Cross Coupling Gain"), min = 0, max = 250,
     cmd = 94, api = "pid_profile", field = "cyclic_cross_coupling_gain" },
-  { id = 62, name = t("widgets.dashboard.fn_cross_coupling_ratio", "Cross Coupling Ratio"), min = 0, max = 250,
+  { id = 62, name = t("widgets.dashboard.fn_cross_coupling_ratio", "Cross Coupling Ratio"), min = 0, max = 200,
     cmd = 94, api = "pid_profile", field = "cyclic_cross_coupling_ratio" },
   { id = 63, name = t("widgets.dashboard.fn_cross_coupling_cutoff", "Cross Coupling Cutoff"), min = 0, max = 250,
     cmd = 94, api = "pid_profile", field = "cyclic_cross_coupling_cutoff" },
