@@ -226,12 +226,14 @@ local function requestData()
       command = sfApi.command,
       simulatorResponse = sfApi.simulatorResponse,
       processReply = function(_, buf)
-        widgetLog("requestData: smartfuel_config received")
         local res = sfApi.parse(buf)
         if res then
+          widgetLog("requestData: smartfuel_config received")
           state.firmwareConfig = res
           local session = getSession()
           if session then session.smartfuel_config = res end
+        else
+          widgetLog("requestData: smartfuel_config reply rejected by parser", "warn")
         end
         onTaskDone()
       end,
