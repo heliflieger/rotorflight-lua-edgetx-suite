@@ -404,7 +404,7 @@ local function normalizeCellVoltage(rawValue, fallback)
   end
 
   -- FC config often stores per-cell voltage in centi-volts (e.g. 350 => 3.50V).
-  if value > 1000 then
+  if value >= 1000 then
     value = value / 1000
   elseif value >= 100 then
     value = value / 100

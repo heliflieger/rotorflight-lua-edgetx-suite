@@ -1949,7 +1949,7 @@ local function normalizeCellVoltage(value, fallback)
   end
   -- Accept common storage encodings:
   -- volts (4.2), decivolts (42), centivolts (420), millivolts (4200).
-  if v > 1000 then
+  if v >= 1000 then
     v = v / 1000
   elseif v >= 100 then
     v = v / 100
