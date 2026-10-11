@@ -97,7 +97,7 @@ local ADJUST_FUNCTIONS = {
   {id = 59, labelKey = "fn_pitch_o", labelFallback = "Pitch O", min = 0, max = 250},
   {id = 60, labelKey = "fn_roll_o", labelFallback = "Roll O", min = 0, max = 250},
   {id = 61, labelKey = "fn_cross_coupling_gain", labelFallback = "Cross Coupling Gain", min = 0, max = 250},
-  {id = 62, labelKey = "fn_cross_coupling_ratio", labelFallback = "Cross Coupling Ratio", min = 0, max = 250},
+  {id = 62, labelKey = "fn_cross_coupling_ratio", labelFallback = "Cross Coupling Ratio", min = 0, max = 200},
   {id = 63, labelKey = "fn_cross_coupling_cutoff", labelFallback = "Cross Coupling Cutoff", min = 0, max = 250},
   {id = 64, labelKey = "fn_acc_trim_pitch", labelFallback = "Acc Trim Pitch", min = -300, max = 300},
   {id = 65, labelKey = "fn_acc_trim_roll", labelFallback = "Acc Trim Roll", min = -300, max = 300},
