@@ -881,10 +881,11 @@ function M.build(ctx)
   local apiVersion = session and session.apiVersion
   local isAtLeast1209 = ApiVersion and ApiVersion.isAtLeast and ApiVersion.isAtLeast(apiVersion, {12, 0, 9})
 
-  if ui.servoBusEnabled == true and isAtLeast1209 and not (system and system.getVersion and system.getVersion().simulation) and totalServoCount > 18 then
+  if ui.servoBusEnabled == true and isAtLeast1209 and not (system and system.getVersion and system.getVersion().simulation) and totalServoCount >= 18 then
     pwmServoCount = totalServoCount - 18
   end
-  if pwmServoCount < 1 then pwmServoCount = 4 end
+  -- No fallback to 4 here: with bus servos on and no PWM servo the count is 0 and the selector
+  -- stays empty. An unknown count is already covered above.
 
   -- Build Active Servo Combo Selector Options
   local servoOptions = {}
@@ -942,7 +943,7 @@ function M.build(ctx)
 
   -- Everything below is the selected servo's own record, so it is drawn only once that
   -- record has been read. Editing what an unfinished read left behind would write it back.
-  if not ui.servoLoaded[ui.selectedServoIndex] then return end
+  if pwmServoCount < 1 or not ui.servoLoaded[ui.selectedServoIndex] then return end
 
   local idx = ui.selectedServoIndex
   local s = ui.config.servos[idx]
