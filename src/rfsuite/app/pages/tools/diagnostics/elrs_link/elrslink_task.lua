@@ -474,6 +474,7 @@ local function syncElrsToRotorflight(fcConfig, moduleRate, moduleRatioLabel, rat
 
     logMsg("syncElrsToRotorflight: writing to RF mode=1 rate=" .. tostring(moduleRate) .. " ratio=" .. tostring(effectiveRatio))
     setStatus("status_writing_rotorflight")
+    state = "write_rf"
     
     local msp = loadModule("tasks/msp/runtime.lua")
     local mspState = msp and type(msp.getState) == "function" and msp.getState()
@@ -756,9 +757,9 @@ function M.wakeup()
     local now = nowSeconds()
     local session = getSession()
 
-    -- `state == "write"` covers the single-option write, which runs with no sync mode set; the
-    -- mode covers a sync from the moment it is started, before the walk has reached its writes.
-    local refusal = (state == "write" or manualSyncMode ~= SYNC_MODE_OFF) and writeRefusal() or nil
+    -- `state == "write"` and `"write_rf"` cover active writes; the mode covers a sync from the moment
+    -- it is started, before the walk has reached its writes.
+    local refusal = (state == "write" or state == "write_rf" or manualSyncMode ~= SYNC_MODE_OFF) and writeRefusal() or nil
     if refusal then
         logMsg("sync abandoned: " .. refusal, "warn")
         setStatus(refusal)

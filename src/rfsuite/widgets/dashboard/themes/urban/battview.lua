@@ -71,8 +71,8 @@ end
 local function cellVolts(cfg, key)
   local v = tonumber(cfg and cfg[key])
   if v == nil or v <= 0 then return nil end
-  if v > 1000 then v = v / 1000
-  elseif v > 100 then v = v / 100
+  if v >= 1000 then v = v / 1000
+  elseif v >= 100 then v = v / 100
   elseif v > 10 then v = v / 10 end
   return v
 end

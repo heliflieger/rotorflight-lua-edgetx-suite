@@ -487,7 +487,7 @@ function M.build(ctx)
           ui.dirty = true
         end
       end,
-      display = function(v) return string.format("%.1f" .. trimSuffix, (tonumber(v) or 0) / 10) end,
+      display = function(v) return string.format("%.1f", (tonumber(v) or 0) / 10) .. trimSuffix end,
       suffix = trimSuffix
     }
   )
@@ -527,7 +527,7 @@ function M.build(ctx)
           ui.dirty = true
         end
       end,
-      display = function(v) return string.format("%.1f" .. limitSuffix, (tonumber(v) or 0) / 10) end,
+      display = function(v) return string.format("%.1f", (tonumber(v) or 0) / 10) .. limitSuffix end,
       suffix = limitSuffix
     }
   )
@@ -546,7 +546,7 @@ function M.build(ctx)
           ui.dirty = true
         end
       end,
-      display = function(v) return string.format("%.1f" .. limitSuffix, (tonumber(v) or 0) / 10) end,
+      display = function(v) return string.format("%.1f", (tonumber(v) or 0) / 10) .. limitSuffix end,
       suffix = limitSuffix
     }
   )
