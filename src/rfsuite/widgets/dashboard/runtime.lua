@@ -3555,9 +3555,8 @@ function Runtime.new(zone, options)
       if type(_G.rfsuite.session.dataflash) == "table" then
         self.state.dataflash = _G.rfsuite.session.dataflash
       end
-      if type(_G.rfsuite.session.battery_config) == "table" then
-        self.state.battery_config = _G.rfsuite.session.battery_config
-      end
+      -- Copied even when nil, so a cleared configuration does not survive on the dashboard.
+      self.state.battery_config = _G.rfsuite.session.battery_config
       if type(_G.rfsuite.session.modelPreferences) == "table" then
         self.modelPreferences = _G.rfsuite.session.modelPreferences
       end

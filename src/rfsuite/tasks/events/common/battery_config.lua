@@ -45,6 +45,8 @@ function M.wakeup(args)
   -- task is complete. It goes as this board's read starts, so a read that fails leaves no stale
   -- battery configuration behind.
   session.battery_config = nil
+  -- Battery and Sources keep the same table under this second name, and readers take it first.
+  session.batteryConfig = nil
 
   -- MSP battery_config API laden
   if not batteryConfigApi then
@@ -112,6 +114,7 @@ function M.reset()
   local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
   if type(session) == "table" then
     session.battery_config = nil
+    session.batteryConfig = nil
   end
 end
 
