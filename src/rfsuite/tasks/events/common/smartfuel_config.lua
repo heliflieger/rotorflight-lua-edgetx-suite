@@ -108,7 +108,11 @@ function M.wakeup()
       end
       done = true
       if type(Log) == "table" and type(Log.emit) == "function" then
-        pcall(Log.emit, "rfsuite.tasks.smartfuel", "smartfuel_config received", "debug")
+        if type(data) == "table" then
+          pcall(Log.emit, "rfsuite.tasks.smartfuel", "smartfuel_config received", "debug")
+        else
+          pcall(Log.emit, "rfsuite.tasks.smartfuel", "smartfuel_config reply rejected by parser", "warn")
+        end
       end
     end,
     errorHandler = function(msg, reason)
