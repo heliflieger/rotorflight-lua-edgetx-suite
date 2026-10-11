@@ -829,7 +829,9 @@ end
 -- so it says that the selected servo's record came from this visit: picking another servo reads
 -- that one outside the chain, and Save writes the selected servo's record.
 function M.canSave()
-  return ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
+  -- With no PWM servo, servo 0 is a bus servo's record: refuse the write rather than send it.
+  return (ui.pwmServoCount or 1) >= 1
+    and ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
     and type(ui.servoLoaded) == "table" and ui.servoLoaded[ui.selectedServoIndex] == true
 end
 
@@ -886,6 +888,7 @@ function M.build(ctx)
   end
   -- No fallback to 4 here: with bus servos on and no PWM servo the count is 0 and the selector
   -- stays empty. An unknown count is already covered above.
+  ui.pwmServoCount = pwmServoCount
 
   -- Build Active Servo Combo Selector Options
   local servoOptions = {}
