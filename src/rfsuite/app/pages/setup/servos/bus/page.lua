@@ -229,7 +229,7 @@ local BUS_SERVO_OFFSET = 8
 --- the difference.
 local function pwmServoCount()
   local total = tonumber(ui.servoCount) or 0
-  if ui.servoBusEnabled == true and total > BUS_SERVO_CHANNELS then
+  if ui.servoBusEnabled == true and total >= BUS_SERVO_CHANNELS then
     return total - BUS_SERVO_CHANNELS
   end
   return total
