@@ -40,6 +40,12 @@ function M.wakeup(args)
 
   if requestSent then return end
 
+  -- The configuration in the session is the previous board's until this read answers, and nothing
+  -- else clears it between two boards: the runner drops this module without its reset() once the
+  -- task is complete. It goes as this board's read starts, so a read that fails leaves no stale
+  -- battery configuration behind.
+  session.battery_config = nil
+
   -- MSP battery_config API laden
   if not batteryConfigApi then
     batteryConfigApi = loadModule("tasks/msp/api/battery_config.lua")
@@ -103,6 +109,10 @@ end
 function M.reset()
   done = false
   requestSent = false
+  local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
+  if type(session) == "table" then
+    session.battery_config = nil
+  end
 end
 
 return M
