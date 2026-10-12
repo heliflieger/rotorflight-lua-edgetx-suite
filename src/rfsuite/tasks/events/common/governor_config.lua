@@ -40,6 +40,13 @@ function M.wakeup(args)
 
   if requestSent then return end
 
+  -- The configuration in the session is the previous board's until this read answers, and nothing
+  -- else clears it between two boards: the runner drops this module without its reset() once the
+  -- task is complete. It goes as this board's read starts, so a read that fails leaves no stale
+  -- governor configuration or mode behind.
+  session.governor_config = nil
+  session.governorMode = nil
+
   -- MSP governor_config API laden
   if not governorConfigApi then
     governorConfigApi = loadModule("tasks/msp/api/governor_config.lua")
@@ -104,6 +111,11 @@ end
 function M.reset()
   done = false
   requestSent = false
+  local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
+  if type(session) == "table" then
+    session.governor_config = nil
+    session.governorMode = nil
+  end
 end
 
 return M

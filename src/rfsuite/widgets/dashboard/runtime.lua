@@ -2787,8 +2787,18 @@ local function readTelemetry(state, audioState)
   -- carried onto the state here so that an object needing it reads precomputed state, which is
   -- what the reactive sweep is allowed to do; reaching into the session from a render closure is
   -- not. Nil until the chain has answered, and a consumer has to cope with that.
+  --
+  -- Assigned even when nil, unlike every setField above, because the mode goes back to nil when a
+  -- new board's read starts and setField never clears: without this the previous board's mode
+  -- would stand for the rest of the session. The governor text objects and the urban theme decide
+  -- on this field ahead of the live value, so a stale mode has them say a governor state the model
+  -- is not in -- the same treatment the battery configuration gets below.
   local rfRoot = type(_G) == "table" and _G.rfsuite or nil
-  setField("governorMode", rfRoot and rfRoot.session and rfRoot.session.governorMode)
+  local governorMode = rfRoot and rfRoot.session and rfRoot.session.governorMode
+  if governorMode ~= state.governorMode then
+    state.governorMode = governorMode
+    telemetryChanged = true
+  end
   setField("mcuTemp", roundInt(getSensor("temp_mcu") or state.mcuTemp, state.mcuTemp or 0))
   setField("escTemp", roundInt(getSensor("temp_esc") or state.escTemp, state.escTemp or 0))
   setField("bec_voltage", getSensor("bec_voltage") or state.bec_voltage)
@@ -3555,9 +3565,8 @@ function Runtime.new(zone, options)
       if type(_G.rfsuite.session.dataflash) == "table" then
         self.state.dataflash = _G.rfsuite.session.dataflash
       end
-      if type(_G.rfsuite.session.battery_config) == "table" then
-        self.state.battery_config = _G.rfsuite.session.battery_config
-      end
+      -- Copied even when nil, so a cleared configuration does not survive on the dashboard.
+      self.state.battery_config = _G.rfsuite.session.battery_config
       if type(_G.rfsuite.session.modelPreferences) == "table" then
         self.modelPreferences = _G.rfsuite.session.modelPreferences
       end

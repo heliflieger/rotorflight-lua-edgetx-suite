@@ -56,6 +56,12 @@ local ui = {
   baseTitle = nil,
   inOverride = false,
   selectedServoIndex = 0, -- 0-indexed for editing (0 to 15), defaults to 0
+  -- Per raw servo index: what the board holds as far as this page knows -- this visit's read, or
+  -- the last save that reached EEPROM. A centre sent live under the override is a trial until
+  -- Save, and this is what leaving without Save, Reload and Discard put back.
+  originalServos = nil,
+  -- Per raw servo index: the centre last sent live since its snapshot.
+  liveSent = nil,
   config = {
     servos = {}
   },
@@ -136,6 +142,35 @@ local function loadFromSession()
   if type(rcConfig.apiData) == "table" then
     ui.apiData = rcConfig.apiData
   end
+end
+
+--- Snapshot one servo's values, once per visit, so leaving without Save can put them back. Per
+--- servo, because the paged read brings them one at a time. Dropped when a read starts, renewed
+--- when a save has reached EEPROM.
+local function backupOriginalServo(raw)
+  local s = ui.config.servos and ui.config.servos[raw]
+  if not s then return end
+  ui.originalServos = ui.originalServos or {}
+  if ui.originalServos[raw] ~= nil then return end
+  ui.originalServos[raw] = {
+    mid = s.mid,
+    min = s.min,
+    max = s.max,
+    scaleNeg = s.scaleNeg,
+    scalePos = s.scalePos,
+    rate = s.rate,
+    speed = s.speed,
+    flags = s.flags,
+    reverse = s.reverse,
+    geometry = s.geometry
+  }
+end
+
+--- After a save has reached EEPROM the board holds the saved values, so those are put back later.
+local function renewOriginalServo(raw)
+  if ui.originalServos then ui.originalServos[raw] = nil end
+  if ui.liveSent then ui.liveSent[raw] = nil end
+  backupOriginalServo(raw)
 end
 
 local function saveToSession()
@@ -245,13 +280,13 @@ local function packedServoIndex(busIdx)
   return pwmServoCount() + busIdx
 end
 
-local function triggerLiveWrite()
+local function triggerLiveWrite(explicitIdx)
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then return end
   local mspState = MspRuntime.getState()
   local queue = mspState and mspState.queue
   if not queue or type(queue.add) ~= "function" then return end
 
-  local servoIdx = ui.selectedServoIndex
+  local servoIdx = explicitIdx or ui.selectedServoIndex
   if not servoIdx then return end
 
   local config = ui.config.servos and ui.config.servos[rawServoIndex(servoIdx)]
@@ -307,6 +342,43 @@ local function triggerLiveWrite()
       processReply = function() end
     })
   end
+  ui.liveSent = ui.liveSent or {}
+  ui.liveSent[writeIndex] = mid
+end
+
+--- Puts servo `raw`'s snapshot back on the screen and in the session copy, and, where a live write
+--- went out for it since the snapshot, sends it to the board the way the live write does. Returns
+--- whether anything was put back.
+local function rollbackServo(raw)
+  local orig = ui.originalServos and ui.originalServos[raw]
+  local current = ui.config.servos and ui.config.servos[raw]
+  if not orig or not current then return false end
+  -- The centre last sent live. From API 12.09, the oldest the suite connects to, the live write
+  -- sends the centre alone, so that is what has to match the snapshot.
+  local sent = ui.liveSent and ui.liveSent[raw]
+  local changed = false
+  for k, v in pairs(orig) do
+    if current[k] ~= v then
+      current[k] = v
+      changed = true
+    end
+  end
+  if sent ~= nil and sent ~= math.floor(orig.mid or 1500) then
+    triggerLiveWrite(raw - BUS_SERVO_OFFSET)
+    changed = true
+  end
+  -- Cleared after the write, which marks the servo as sent again.
+  if ui.liveSent then ui.liveSent[raw] = nil end
+  return changed
+end
+
+local function rollbackChanges()
+  if not ui.originalServos then return end
+  local changed = false
+  for raw in pairs(ui.originalServos) do
+    if rollbackServo(raw) then changed = true end
+  end
+  if changed then saveToSession() end
 end
 
 --- Whether this firmware has the per-servo read.
@@ -391,6 +463,7 @@ local function queueServoRead(busIdx, onDone)
         ui.config.servos = ui.config.servos or {}
         ui.config.servos[raw] = cfg
         ui.servoLoaded[busIdx] = true
+        backupOriginalServo(raw)
       end
       done(rec ~= nil)
     end,
@@ -423,6 +496,9 @@ local function queueServosRead(isAutoReload)
   ui.runtime.readComplete = false
   ui.servoLoaded = {}
   if ui.runtime.readPending then return false, "read_pending" end
+  -- Dropped only when a read is really queued: the one already running keeps its snapshot.
+  ui.originalServos = nil
+  ui.liveSent = nil
   if not MspRuntime or type(MspRuntime.getState) ~= "function" then
     return false, "msp_runtime_unavailable"
   end
@@ -553,6 +629,7 @@ local function queueServosRead(isAutoReload)
                       else
                         ui.config.servos[BUS_SERVO_OFFSET + (i - pwm)] = s
                         ui.servoLoaded[i - pwm] = true
+                        backupOriginalServo(BUS_SERVO_OFFSET + (i - pwm))
                       end
                     end
                   else
@@ -682,6 +759,7 @@ local function queueServoWrite(servoIdx, onDone)
           processReply = function()
             ui.loading = false
             ui.dirty = false
+            renewOriginalServo(rawServoIndex(servoIdx))
             saveToSession()
             if type(ui.runtime.requestRebuild) == "function" then
               ui.runtime.requestRebuild()
@@ -699,6 +777,7 @@ local function queueServoWrite(servoIdx, onDone)
       else
         ui.loading = false
         ui.dirty = false
+        renewOriginalServo(rawServoIndex(servoIdx))
         saveToSession()
         if type(ui.runtime.requestRebuild) == "function" then
           ui.runtime.requestRebuild()
@@ -736,12 +815,18 @@ local function selectServo(val)
   end
 end
 
---- Discard on the unsaved-changes question put before another servo is picked. This page keeps
---- no snapshot, so the servo is read from the board again: on the paged route it counts as unread
---- and is read the next time it is picked (selectServo); the whole-table route reads the table.
---- A centre sent live under the override is in the board's RAM, so that is what the read shows.
+--- Discard on the unsaved-changes question put before another servo is picked: the servo goes
+--- back to its snapshot, and a centre sent live under the override goes back to the board. Reading
+--- the servo again instead would show the trial centre, which is what the board's RAM holds then.
+--- A servo with no snapshot is read again, on the paged route the next time it is picked
+--- (selectServo), on the whole-table route at once.
 local function discardServo(busIdx)
   ui.dirty = false
+  if rollbackServo(rawServoIndex(busIdx)) then
+    saveToSession()
+    return
+  end
+  if ui.originalServos and ui.originalServos[rawServoIndex(busIdx)] then return end
   if hasPagedServoReads() then
     ui.servoLoaded[busIdx] = nil
   else
@@ -1112,6 +1197,8 @@ end
 function M.onReload(ctx)
   local session = getSession()
   if session then
+    -- Before the read, so the read is queued behind the rollback and shows the board's centre.
+    if ui.dirty then rollbackChanges() end
     loadFromSession()
     ui.dirty = false
     queueServosRead(false)
@@ -1159,6 +1246,11 @@ end
 
 
 function M.onClose()
+  -- An unsaved centre sent live is taken back first, while the override still holds the servos.
+  -- Queued ahead of the override write on purpose: should the close end before every write is out,
+  -- a lost override write leaves a board that refuses to arm, a lost rollback a trial centre the
+  -- model would fly with. Save clears dirty, so a save still on its way is not undone here.
+  if ui.dirty then rollbackChanges() end
   if ui.inOverride then
     setOverride(false)
     ui.inOverride = false

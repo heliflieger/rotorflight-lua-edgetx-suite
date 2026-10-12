@@ -63,7 +63,8 @@ when the page goes without a Back on it -- the link to the flight controller is 
 opened from the dashboard closes because full screen was left or the model armed; the changes are
 discarded then as before. Trims, Swash Geometry and both Servos pages are not on the list: with
 their override on they send a change to the flight controller while it is being edited, before
-Save, and what leaving them should do with such a change is a question of its own.
+Save, and leaving them takes such a change back instead (see *A change sent live under an
+override* below).
 
 The page decides what counts as a change through `hasUnsavedChanges()`, an optional hook the
 tool asks before it leaves; on the pages below it is the same state that draws their *Unsaved
@@ -97,14 +98,33 @@ the page:
   the flight controller has stored it. If the save is refused or fails, nothing is picked and the
   change stays on screen, still unsaved. (The *Saved* notice of these pages comes up when the write
   is sent, not when it is stored.)
-- **Discard** drops the change and picks the other servo. On PWM Output the servo goes back to the
-  values the page read from the flight controller (or last saved there), and its centre is sent to
-  the flight controller again where it differs, as Reload does. BUS Output reads the servo from the
-  flight controller again the next time it is picked; a centre sent under the servo override earlier
-  is still on the flight controller then, and the read shows it.
+- **Discard** drops the change and picks the other servo. The servo goes back to the values the
+  page read from the flight controller (or last saved there). PWM Output sends its centre to the
+  flight controller again where it differs, as Reload does; BUS Output does so where a centre was
+  sent under the servo override since, so the flight controller is back on its own centre too.
 
 The selector is locked while the servo override is on, as before. Back on either page still leaves
 without asking, for the reason given above.
+
+### A change sent live under an override
+
+Trims with the swash override on, Swash Geometry in setup mode and Servos > BUS Output with the
+servo override on send a changed value to the flight controller while it is being edited, so the
+servos show it at once. That value is a trial: it is in the flight controller's working memory
+only, and the page keeps it marked as not saved until Save writes it to EEPROM.
+
+Leaving such a page without Save -- Back, the tool closing, or the tool opened from the dashboard
+closing -- puts the values the page read from the flight controller on this visit (or the values
+of the last save that reached EEPROM) back on the flight controller, and only then switches the
+override or setup mode off. Reload does the same before it reads again, and so does **Discard**
+on BUS Output's question before another servo is picked. Only what was sent is taken back: a visit
+that never sent a value live writes nothing when it is left, and on Swash Geometry only the
+records that differ are written again. PWM Output already puts its servo back on Reload and when
+it is left with a change that is not saved.
+
+Without the rollback, a trial value stayed in the flight controller's memory: the model flew with
+it until the next restart, and the next save from any page stored it, because a save writes the
+whole configuration from that memory.
 
 ## A save that restarts the flight controller
 

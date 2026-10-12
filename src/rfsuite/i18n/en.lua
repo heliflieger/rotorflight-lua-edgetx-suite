@@ -874,6 +874,10 @@ return {
         governor_state_bypass = "Bypass",
         voltage_alert = "Voltage",
         voltage_hold = "Hold (s)",
+        voltage_reset = "Reset (mV/cell)",
+        voltage_announce = "Announce as",
+        voltage_announce_pack = "Pack",
+        voltage_announce_cell = "Cell",
         section_main_power = "Main Power",
         main_power_lost = "Main Power Lost",
         pack_not_full = "Pack Not Full",
@@ -904,16 +908,18 @@ return {
         model_announcement = "Model Name",
         help_model_announcement = "Plays the sound file named after the model, SOUNDS/<name>.wav, once when the model connects. Nothing is said if the card has no such file. Off by default.",
         help_battery_profile = "Speaks the active battery profile's capacity in mAh when the model connects and whenever the profile changes; the profile number if no capacity is set. On by default.",
-        help_pack_not_full = "Once when the model connects: warns with the voltage per cell if it is below Max cell voltage (Setup > Power > Battery) less the margin below. Off by default.",
+        help_pack_not_full = "Once when the model connects: warns if the voltage per cell is below Max cell voltage (Setup > Power > Battery) less the margin below, spoken as set under Voltage > Announce as. Off by default.",
         help_pack_not_full_margin = "How far below Max cell voltage a cell may be and still count as full, in millivolts per cell (10 to 500). Default 100 mV.",
         help_initial_fuel = "Speaks the SmartFuel level once after connecting: on the first fresh reading above 0, else after a few seconds with the value then. Independent of the SmartFuel page's switch. On by default.",
         help_arming_flags = "Speaks when the model is armed and when it is disarmed. On by default.",
         help_governor_state = "Speaks the governor's state when it changes, once the new state has held for a moment. Choose below which states are spoken. On by default.",
         help_governor_state_row = "Whether this state is spoken when the governor enters it. Shown only while Governor State is on. On by default.",
-        help_voltage_alert = "Speaks the pack voltage when it falls below Warn cell voltage (Setup > Power > Battery) times the cell count. On by default.",
+        help_voltage_alert = "Speaks when the pack voltage falls below Warn cell voltage (Setup > Power > Battery) times the cell count, with the voltage spoken as set under Announce as. On by default.",
         help_voltage_hold = "How long the voltage has to stay below that line before it is spoken, so a short sag under load stays quiet. 0 speaks at once. Default 2 s.",
-        help_main_power_lost = "Speaks when the main pack is gone while the flight controller still runs on a BEC or backup battery, with the BEC voltage, and again when the pack is back. Off by default.",
-        help_voltage_repeat = "How often a voltage alert speaks while its condition lasts, 10 s apart: until cleared, or 1 to 10 times.\nApplies to Voltage, Main Power Lost and the BEC/RX alert of Setup > Power > Alerts.",
+        help_voltage_reset = "How far above that line the voltage has to come back, in millivolts per cell, before the alert counts as cleared and Repeat starts over (50 to 500). Default 100 mV.",
+        help_main_power_lost = "Speaks when the main pack is gone while the flight controller still runs on a BEC or backup battery, with the BEC voltage, and again with the pack voltage when the pack is back. Off by default.",
+        help_voltage_announce = "Pack speaks the pack voltage, Cell the voltage per cell with two decimals. For Voltage, the pack coming back and Pack Not Full (On Connect), not for a BEC voltage. Default Pack.",
+        help_voltage_repeat = "How often a voltage alert speaks while its condition lasts, 10 s apart: until cleared, or 1 to 10 times. Voltage is cleared once it is back above the line plus Reset.\nApplies to Voltage, Main Power Lost and the BEC/RX alert of Setup > Power > Alerts.",
         help_voltage_haptic = "Whether the transmitter vibrates with Voltage, Main Power Lost and the BEC/RX alert. On by default.",
         help_pid_profile = "Speaks the PID profile's number when it changes. On by default.",
         help_rate_profile = "Speaks the rate profile's number when it changes. On by default.",
@@ -950,7 +956,7 @@ return {
         help_message = "Announces the governor's state as it changes."
       },
       settings_audio_events_voltage = {
-        help_message = "Alerts about the flight pack's voltage and the model's power supply."
+        help_message = "Alerts about the flight pack's voltage and the model's power supply.\nVoltage: speaks below Warn cell voltage times the cell count.\nHold (s): how long it has to stay below first; 0 speaks at once.\nReset (mV/cell): how far per cell it must recover above the line.\nMain Power Lost: the pack is gone while a BEC keeps the model running.\nAnnounce as: the pack voltage, or the voltage per cell.\nRepeat: how often an alert speaks until cleared, 10 s apart.\nHaptic: vibrates with these alerts."
       },
       settings_audio_events_profiles = {
         help_message = "Announces a change of PID or rate profile."

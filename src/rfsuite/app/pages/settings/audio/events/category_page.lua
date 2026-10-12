@@ -40,7 +40,14 @@ local CONFIG_SCHEMA = {
   -- Seconds the pack voltage has to stay below the warning line before the alert speaks. 0 is
   -- the behaviour this setting was added to, where the first sample under the line announces.
   { key = "voltage_hold",      type = "number", default = 2, min = 0, max = 10, section = "voltage" },
+  -- Millivolts per cell above the warning line that the pack has to come back to before the
+  -- alert counts as cleared, so the number means the same on every pack, as the line does.
+  { key = "voltage_reset",     type = "number", default = 100, min = 50, max = 500, section = "voltage" },
   { key = "main_power_lost",   type = "bool", default = false, section = "voltage" },
+  -- How every flight-pack voltage is spoken: 0 the pack's voltage, 1 the voltage per cell.
+  -- It covers the low-voltage alert, the main pack coming back and the pack check on connect;
+  -- not the BEC voltage spoken with Main Power Lost, which is not the flight pack's.
+  { key = "voltage_announce",  type = "number", default = 0, min = 0, max = 1, section = "voltage" },
   -- Whether an alert repeats and whether it buzzes belong to a CATEGORY rather than to one
   -- alert: this page is where the pilot switches its alerts on, so it is where they say how
   -- those alerts behave. A repeat of 0 is "for as long as the condition holds", which is what
@@ -108,6 +115,20 @@ for i = 1, #CONFIG_SCHEMA do
   SCHEMA_BY_KEY[CONFIG_SCHEMA[i].key] = CONFIG_SCHEMA[i]
 end
 
+-- The schema split by the page that owns each entry, built once when this file is loaded. A
+-- page loads its settings while it is first built, and walking only its own entries keeps that
+-- build from paying for every setting another page adds to the schema.
+local SECTION_FIELDS = {}
+for i = 1, #CONFIG_SCHEMA do
+  local field = CONFIG_SCHEMA[i]
+  local fields = SECTION_FIELDS[field.section]
+  if not fields then
+    fields = {}
+    SECTION_FIELDS[field.section] = fields
+  end
+  fields[#fields + 1] = field
+end
+
 -- ─── Sections ────────────────────────────────────────────────────────────────
 -- One entry per page. An item with `requires` is drawn only while that switch is on: the
 -- per-state rows qualify the governor master switch, and ten greyed-out rows under a switch
@@ -138,11 +159,16 @@ local SECTIONS = {
       { key = "voltage_alert", labelKey = "voltage_alert", labelFallback = "Voltage" },
       { kind = "number", key = "voltage_hold", labelKey = "voltage_hold", labelFallback = "Hold (s)",
         suffix = " s", enabledBy = "voltage_alert" },
+      { kind = "number", key = "voltage_reset", labelKey = "voltage_reset", labelFallback = "Reset (mV/cell)",
+        suffix = " mV", step = 50, enabledBy = "voltage_alert" },
       -- Its own subheader, because it is not a threshold on the pack voltage above but a
       -- different event that happens to be read off the same sensor.
       { kind = "subheader", labelKey = "section_main_power", labelFallback = "Main Power" },
       { kind = "bool", key = "main_power_lost", labelKey = "main_power_lost", labelFallback = "Main Power Lost" },
       { kind = "subheader", labelKey = "section_alert_behaviour", labelFallback = "Alert Behaviour" },
+      -- No enabledBy: besides the alert above it governs the main pack coming back and the pack
+      -- check on connect, which do not depend on the Voltage switch.
+      { kind = "choice", key = "voltage_announce", labelKey = "voltage_announce", labelFallback = "Announce as" },
       { kind = "choice", key = "voltage_repeat", labelKey = "alert_repeat", labelFallback = "Repeat" },
       { kind = "bool", key = "voltage_haptic", labelKey = "alert_haptic", labelFallback = "Haptic" },
     },
@@ -275,7 +301,9 @@ local ROW_HELP = {
     return {
       voltage_alert = t(i18n, "help_voltage_alert"),
       voltage_hold = t(i18n, "help_voltage_hold"),
+      voltage_reset = t(i18n, "help_voltage_reset"),
       main_power_lost = t(i18n, "help_main_power_lost"),
+      voltage_announce = t(i18n, "help_voltage_announce"),
       voltage_repeat = t(i18n, "help_voltage_repeat"),
       voltage_haptic = t(i18n, "help_voltage_haptic"),
     }
@@ -404,7 +432,9 @@ function M.new(sectionKey)
       fuelCalloutGet = nil,
       fuelCalloutSet = nil,
       fuelHapticGet = nil,
-      fuelHapticSet = nil
+      fuelHapticSet = nil,
+      announceGet = nil,
+      announceSet = nil
     }
   }
   ui.runtimeBase = nil
@@ -420,6 +450,8 @@ function M.new(sectionKey)
   local function ownsField(field)
     return field.section == sectionKey
   end
+
+  local ownFields = SECTION_FIELDS[sectionKey] or {}
 
   local function ensureDeps()
     if not Common then
@@ -573,6 +605,36 @@ function M.new(sectionKey)
     return cache[key]
   end
 
+  -- How a flight-pack voltage is spoken. Two values, so its own pair rather than the repeat
+  -- row's, which would let a hand-edited value outside them through.
+  local function getAnnounceOptions(i18n)
+    return {
+      { value = 0, label = t(i18n, "voltage_announce_pack", "Pack") },
+      { value = 1, label = t(i18n, "voltage_announce_cell", "Cell") },
+    }
+  end
+
+  local function getAnnounceGetter()
+    if ui.runtime.announceGet then return ui.runtime.announceGet end
+    ui.runtime.announceGet = function()
+      if tonumber(ui.config.voltage_announce) == 1 then return 1 end
+      return 0
+    end
+    return ui.runtime.announceGet
+  end
+
+  local function getAnnounceSetter()
+    if ui.runtime.announceSet then return ui.runtime.announceSet end
+    ui.runtime.announceSet = function(value)
+      local nextValue = (tonumber(value) == 1) and 1 or 0
+      if ui.config.voltage_announce ~= nextValue then
+        ui.config.voltage_announce = nextValue
+        ui.runtime.markDirty()
+      end
+    end
+    return ui.runtime.announceSet
+  end
+
   local function getFuelHapticGetter()
     if ui.runtime.fuelHapticGet then return ui.runtime.fuelHapticGet end
     ui.runtime.fuelHapticGet = function(nextVal)
@@ -599,25 +661,23 @@ function M.new(sectionKey)
   local function copyFromPrefs(prefs)
     local audio_events = (prefs and prefs.audio_events) or {}
     local modelEvents = modelAudioEvents(false)
-    for _, field in ipairs(CONFIG_SCHEMA) do
-      if ownsField(field) then
-        local raw = audio_events[field.key]
-        if field.scope == "model" and modelEvents and modelEvents[field.key] ~= nil then
-          raw = modelEvents[field.key]
-        end
-        if field.type == "number" then
-          ui.config[field.key] = tonumber(raw) or field.default
-        else
-          ui.config[field.key] = prefBool(raw, field.default)
-        end
+    for _, field in ipairs(ownFields) do
+      local raw = audio_events[field.key]
+      if field.scope == "model" and modelEvents and modelEvents[field.key] ~= nil then
+        raw = modelEvents[field.key]
+      end
+      if field.type == "number" then
+        ui.config[field.key] = tonumber(raw) or field.default
+      else
+        ui.config[field.key] = prefBool(raw, field.default)
       end
     end
 
     -- A stored value outside the schema's range is brought back into it, so that the number
     -- on screen is one the control could have produced. The bounds are the schema's, which
     -- is the same pair the control below is built with.
-    for _, field in ipairs(CONFIG_SCHEMA) do
-      if ownsField(field) and field.type == "number" then
+    for _, field in ipairs(ownFields) do
+      if field.type == "number" then
         local value = ui.config[field.key]
         if field.min and value < field.min then value = field.min end
         if field.max and value > field.max then value = field.max end
@@ -628,10 +688,8 @@ function M.new(sectionKey)
 
     -- After the clamps, so that correcting an out-of-range stored value does not read as an
     -- edit the pilot made.
-    for _, field in ipairs(CONFIG_SCHEMA) do
-      if ownsField(field) then
-        loadedConfig[field.key] = ui.config[field.key]
-      end
+    for _, field in ipairs(ownFields) do
+      loadedConfig[field.key] = ui.config[field.key]
     end
   end
 
@@ -842,6 +900,8 @@ function M.new(sectionKey)
         local options, selected, onSelect
         if k == "fuel_callout_percent" then
           options, selected, onSelect = getFuelCalloutOptions(i18n), getFuelCalloutGetter()(), getFuelCalloutSetter()
+        elseif k == "voltage_announce" then
+          options, selected, onSelect = getAnnounceOptions(i18n), getAnnounceGetter()(), getAnnounceSetter()
         else
           options, selected, onSelect = getRepeatOptions(i18n), getRepeatGetter(k)(), getRepeatSetter(k, item.enabledBy)
         end
@@ -869,6 +929,7 @@ function M.new(sectionKey)
             enabled = getNumberEnabled(item.enabledBy),
             min = minVal,
             max = maxVal,
+            step = item.step,
             suffix = item.suffix or "",
             display = display,
             get = getNumberGetter(k, minVal, maxVal),

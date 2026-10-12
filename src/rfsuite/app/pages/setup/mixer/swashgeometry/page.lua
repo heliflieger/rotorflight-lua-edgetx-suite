@@ -90,11 +90,50 @@ local ui = {
     col_direction = 1
   },
   apiData = {},
+  -- What the board holds as far as this page knows: the geometry and its four records (mixer
+  -- configuration, pitch, roll and collective inputs) of this visit's read, or of the last save
+  -- that reached EEPROM. A value sent live in setup mode is a trial until Save, and this is what
+  -- leaving without Save puts back.
+  original = nil,
+  -- Whether a live write was queued since the snapshot, and the geometry it last sent, so the live
+  -- loop sends a change once rather than on every pass while the page is dirty.
+  liveSent = false,
+  liveConfig = nil,
   runtime = {
     readPending = false,
     requestRebuild = nil
   }
 }
+
+-- The four records, in the order the page writes them.
+local RECORDS = { "MIXER_CONFIG", "GET_MIXER_INPUT_PITCH", "GET_MIXER_INPUT_ROLL", "GET_MIXER_INPUT_COLLECTIVE" }
+
+-- Every record here is a flat table of numbers, so a flat copy is a full copy.
+local function copyFlat(src)
+  if type(src) ~= "table" then return nil end
+  local out = {}
+  for k, v in pairs(src) do out[k] = v end
+  return out
+end
+
+local function sameFlat(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+  for k, v in pairs(a) do
+    if b[k] ~= v then return false end
+  end
+  for k, v in pairs(b) do
+    if a[k] ~= v then return false end
+  end
+  return true
+end
+
+local function takeSnapshot()
+  local snap = { config = copyFlat(ui.config) }
+  for i = 1, #RECORDS do
+    snap[RECORDS[i]] = copyFlat(ui.apiData[RECORDS[i]])
+  end
+  return snap
+end
 
 local function getSession()
   local root = _G and _G.rfsuite
@@ -274,42 +313,80 @@ local function triggerLiveWrite()
 
   if not queue:isProcessed() then return end
 
-  if not M.canSave() or not copyConfigToApi() then return end
+  if not M.canSave() then return end
+  -- The board already has what is on screen.
+  if ui.liveConfig and sameFlat(ui.liveConfig, ui.config) then return end
+  if not copyConfigToApi() then return end
 
   local mixerCfgPayload = MixerConfigApi.buildWritePayload(ui.apiData.MIXER_CONFIG)
   local pitchPayload = MixerInputPitchApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_PITCH)
   local rollPayload = MixerInputRollApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_ROLL)
   local collectivePayload = MixerInputCollectiveApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_COLLECTIVE)
 
-  queue:add({
-    command = MixerConfigApi.writeCommand,
-    payload = mixerCfgPayload,
-    isWrite = true,
-    processReply = function()
+  ui.liveSent = true
+  ui.liveConfig = copyFlat(ui.config)
+
+  -- All four queued at once rather than each from the reply before it: a rollback or a read
+  -- queued while a chain was still running would otherwise land between its links, and the
+  -- rest of the trial would reach the board after it. The acknowledgements leave the page
+  -- dirty: the values are in the board's RAM only, and they stay a trial until Save writes them
+  -- to EEPROM. A write that went unanswered or was dropped is sent again on the next pass; one
+  -- the board refused is not repeated until the value changes.
+  local writes = {
+    { MixerConfigApi.writeCommand, mixerCfgPayload },
+    { MixerInputPitchApi.writeCommand, pitchPayload },
+    { MixerInputRollApi.writeCommand, rollPayload },
+    { MixerInputCollectiveApi.writeCommand, collectivePayload }
+  }
+  for i = 1, #writes do
+    queue:add({
+      command = writes[i][1],
+      payload = writes[i][2],
+      isWrite = true,
+      processReply = function() end,
+      errorHandler = function(_, reason) if reason ~= "refused" then ui.liveConfig = nil end end
+    })
+  end
+end
+
+--- Leaving without Save, or Reload: geometry sent live in setup mode goes back to the snapshot on
+--- the board, on screen and in the session copy. Only a record that differs from the snapshot is
+--- written, all of them queued at once, so they are ahead of whatever is queued after this call.
+--- Nothing is sent when no live write went out since the snapshot. The payloads are built here,
+--- not in a reply, because onClose drops this page's modules right after.
+local function rollbackLiveChanges()
+  local orig = ui.original
+  local sent = ui.liveSent
+  ui.liveSent = false
+  ui.liveConfig = nil
+  if not sent or type(orig) ~= "table" then return false end
+  if not MspRuntime or type(MspRuntime.getState) ~= "function" then return false end
+  local mspState = MspRuntime.getState()
+  local queue = mspState and mspState.queue
+  if not queue or type(queue.add) ~= "function" then return false end
+
+  local apis = { MixerConfigApi, MixerInputPitchApi, MixerInputRollApi, MixerInputCollectiveApi }
+  local changed = false
+  for i = 1, #RECORDS do
+    local key = RECORDS[i]
+    local api = apis[i]
+    local rec = orig[key]
+    if api and type(rec) == "table" and not sameFlat(ui.apiData[key], rec) then
       queue:add({
-        command = MixerInputPitchApi.writeCommand,
-        payload = pitchPayload,
+        command = api.writeCommand,
+        payload = api.buildWritePayload(rec),
         isWrite = true,
-        processReply = function()
-          queue:add({
-            command = MixerInputRollApi.writeCommand,
-            payload = rollPayload,
-            isWrite = true,
-            processReply = function()
-              queue:add({
-                command = MixerInputCollectiveApi.writeCommand,
-                payload = collectivePayload,
-                isWrite = true,
-                processReply = function()
-                  ui.dirty = false
-                end
-              })
-            end
-          })
-        end
+        processReply = function() end
       })
+      ui.apiData[key] = copyFlat(rec)
+      changed = true
     end
-  })
+  end
+  if not changed then return false end
+
+  for k, v in pairs(orig.config) do ui.config[k] = v end
+  saveToSession()
+  return true
 end
 
 local function queueGeometryRead(isAutoReload)
@@ -326,6 +403,7 @@ local function queueGeometryRead(isAutoReload)
   end
 
   ui.runtime.readPending = true
+  ui.original = nil
   if not isAutoReload then
     ui.loading = true
     ui.progress = 0
@@ -414,6 +492,13 @@ local function queueGeometryRead(isAutoReload)
 
                   saveToSession()
 
+                  -- Taken here rather than at each parse: nothing changes the four records
+                  -- between their parse and this line, because the live write and Save wait for
+                  -- canSave(), false while readPending.
+                  ui.original = takeSnapshot()
+                  ui.liveSent = false
+                  ui.liveConfig = nil
+
                   ui.runtime.readPending = false
                   ui.runtime.readComplete = true
                   ui.loading = false
@@ -481,6 +566,9 @@ local function queueGeometryWrite()
   local pitchPayload = MixerInputPitchApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_PITCH)
   local rollPayload = MixerInputRollApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_ROLL)
   local collectivePayload = MixerInputCollectiveApi.buildWritePayload(ui.apiData.GET_MIXER_INPUT_COLLECTIVE)
+  local stored = takeSnapshot()
+  -- The save sends what is on screen, so the live loop has nothing to send until it changes.
+  ui.liveConfig = copyFlat(ui.config)
 
   queue:add({
     command = MixerConfigApi.writeCommand,
@@ -508,7 +596,8 @@ local function queueGeometryWrite()
                       command = eepromApi.writeCommand,
                       payload = {},
                       isWrite = true,
-                      processReply = function() end,
+                      -- Stored: from now on this is what leaving without Save puts back.
+                      processReply = function() ui.original = stored end,
                       errorHandler = function() end
                     })
                   end
@@ -827,6 +916,8 @@ end
 function M.onReload(ctx)
   local session = getSession()
   if session then
+    -- Before the read, so the read is queued behind the rollback and shows the board's values.
+    if ui.dirty then rollbackLiveChanges() end
     loadFromSession()
     ui.dirty = false
     queueGeometryRead(false)
@@ -874,6 +965,11 @@ end
 
 
 function M.onClose()
+  -- Unsaved geometry sent live is taken back first, while setup mode is still on. Queued ahead of
+  -- the override writes on purpose: should the close end before every write is out, a lost
+  -- override write leaves a board that refuses to arm, a lost rollback a trial geometry the model
+  -- would fly with. Save clears dirty, so a save still on its way is not undone here.
+  if ui.dirty then rollbackLiveChanges() end
   if ui.inOverride then
     setOverride(false)
     ui.inOverride = false

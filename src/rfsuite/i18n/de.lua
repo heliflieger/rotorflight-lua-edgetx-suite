@@ -874,6 +874,10 @@ return {
         governor_state_bypass = "Bypass",
         voltage_alert = "Spannung",
         voltage_hold = "Haltezeit (s)",
+        voltage_reset = "Rückstellung (mV/Zelle)",
+        voltage_announce = "Ansage als",
+        voltage_announce_pack = "Akku",
+        voltage_announce_cell = "Zelle",
         section_main_power = "Hauptstrom",
         main_power_lost = "Hauptstrom verloren",
         pack_not_full = "Akku nicht voll",
@@ -904,16 +908,18 @@ return {
         model_announcement = "Modellname",
         help_model_announcement = "Spielt die nach dem Modell benannte Sounddatei SOUNDS/<Name>.wav einmal beim Verbinden. Fehlt die Datei auf der Karte, bleibt es still. Standard: aus.",
         help_battery_profile = "Sagt die Kapazität des aktiven Akkuprofils in mAh beim Verbinden und bei jedem Profilwechsel; ohne eingestellte Kapazität die Profilnummer. Standard: an.",
-        help_pack_not_full = "Einmal beim Verbinden: warnt mit der Spannung pro Zelle, wenn sie unter Max Zellspannung (Setup > Power > Batterie) minus der Toleranz darunter liegt. Standard: aus.",
+        help_pack_not_full = "Einmal beim Verbinden: warnt, wenn die Spannung pro Zelle unter Max Zellspannung (Setup > Power > Batterie) minus der Toleranz liegt, gesagt wie unter Spannung > Ansage als. Standard: aus.",
         help_pack_not_full_margin = "Wie weit eine Zelle unter Max Zellspannung liegen darf und noch als voll gilt, in Millivolt pro Zelle (10 bis 500). Standard: 100 mV.",
         help_initial_fuel = "Sagt den SmartFuel-Stand einmal nach dem Verbinden: beim ersten frischen Wert über 0, sonst nach ein paar Sekunden mit dem aktuellen Wert. Unabhängig vom Schalter der Seite SmartFuel. Standard: an.",
         help_arming_flags = "Ansage beim Scharfschalten und beim Entschärfen des Modells. Standard: an.",
         help_governor_state = "Sagt den Governor-Status bei einer Änderung, sobald der neue Zustand einen Moment anliegt. Darunter wählst du, welche Zustände gesprochen werden. Standard: an.",
         help_governor_state_row = "Ob dieser Zustand gesagt wird, wenn der Governor ihn erreicht. Nur sichtbar, solange Governor-Status an ist. Standard: an.",
-        help_voltage_alert = "Sagt die Akkuspannung, wenn sie unter Warn Zellspannung (Setup > Power > Batterie) mal Zellenzahl fällt. Standard: an.",
+        help_voltage_alert = "Ansage, wenn die Akkuspannung unter Warn Zellspannung (Setup > Power > Batterie) mal Zellenzahl fällt; die Spannung wird gesagt wie unter Ansage als gewählt. Standard: an.",
         help_voltage_hold = "So lange muss die Spannung unter dieser Schwelle bleiben, bevor sie gesagt wird; ein kurzer Einbruch unter Last bleibt still. 0 sagt sofort. Standard: 2 s.",
-        help_main_power_lost = "Ansage, wenn der Hauptakku weg ist und der Flugregler über BEC oder Stützakku weiterläuft, mit der BEC-Spannung, und erneut, wenn der Akku zurück ist. Standard: aus.",
-        help_voltage_repeat = "Wie oft eine Spannungswarnung spricht, solange ihr Zustand anhält, im Abstand von 10 s: bis behoben oder 1 bis 10 Mal.\nGilt für Spannung, Hauptstrom verloren und den BEC/RX-Alarm aus Setup > Power > Alarme.",
+        help_voltage_reset = "So weit muss die Spannung über diese Schwelle zurückkommen, in Millivolt pro Zelle, bis die Warnung als behoben gilt und die Wiederholung neu beginnt (50 bis 500). Standard: 100 mV.",
+        help_main_power_lost = "Ansage, wenn der Hauptakku weg ist und der Flugregler über BEC oder Stützakku weiterläuft, mit der BEC-Spannung, und erneut mit der Akkuspannung, wenn der Akku zurück ist. Standard: aus.",
+        help_voltage_announce = "Akku sagt die Akkuspannung, Zelle die Spannung pro Zelle mit zwei Nachkommastellen. Für Spannung, den wiederkehrenden Akku und Akku nicht voll, nicht für eine BEC-Spannung. Standard: Akku.",
+        help_voltage_repeat = "Wie oft eine Spannungswarnung spricht, solange ihr Zustand anhält, im Abstand von 10 s: bis behoben oder 1 bis 10 Mal. Spannung ist behoben über Schwelle plus Rückstellung.\nGilt für Spannung, Hauptstrom verloren und den BEC/RX-Alarm aus Setup > Power > Alarme.",
         help_voltage_haptic = "Ob der Sender bei Spannung, Hauptstrom verloren und dem BEC/RX-Alarm vibriert. Standard: an.",
         help_pid_profile = "Sagt die Nummer des PID-Profils bei einem Wechsel. Standard: an.",
         help_rate_profile = "Sagt die Nummer des Raten-Profils bei einem Wechsel. Standard: an.",
@@ -950,7 +956,7 @@ return {
         help_message = "Ansage des Governor-Status bei einer Änderung."
       },
       settings_audio_events_voltage = {
-        help_message = "Warnungen zur Spannung des Flugakkus und zur Stromversorgung des Modells."
+        help_message = "Warnungen zur Spannung des Flugakkus und zur Stromversorgung des Modells.\nSpannung: Ansage unter Warn Zellspannung mal Zellenzahl.\nHaltezeit (s): so lange muss sie darunter bleiben; 0 sagt sofort.\nRückstellung (mV/Zelle): so weit pro Zelle über die Schwelle, bis behoben.\nHauptstrom verloren: der Akku ist weg, ein BEC versorgt das Modell weiter.\nAnsage als: die Akkuspannung oder die Spannung pro Zelle.\nWiederholung: wie oft eine Warnung bis behoben spricht, alle 10 s.\nHaptisch: der Sender vibriert bei diesen Warnungen."
       },
       settings_audio_events_profiles = {
         help_message = "Ansage bei einem Wechsel des PID- oder Raten-Profils."

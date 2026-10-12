@@ -630,6 +630,56 @@ local function playVoltage(volts, decimals, opts)
   if not ok then emitLog(opts, "playNumber error: " .. tostring(err), "error") end
 end
 
+-- The battery configuration read from the flight controller, or nil until it has arrived.
+local function sessionBatteryConfig()
+  local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
+  local bc = session and (session.batteryConfig or session.battery_config) or nil
+  if type(bc) ~= "table" then return nil end
+  return bc
+end
+
+-- The cell count of the flight pack: the battery configuration's, and telemetry's where the
+-- configuration says 0, which is the flight controller's auto-detect. Nil when neither knows,
+-- so that a caller can tell "no count" apart from a count. The low-voltage line, its reset and
+-- every per-cell announcement divide by this one number.
+local function flightPackCells(state, batteryConfig)
+  local cells = batteryConfig and tonumber(batteryConfig.batteryCellCount) or nil
+  if not cells or cells <= 0 then
+    cells = tonumber(state and state.batteryCellCount)
+  end
+  if type(cells) ~= "number" then return nil end
+  cells = math.floor(cells + 0.5)
+  if cells <= 0 then return nil end
+  return cells
+end
+
+-- Speak a flight-pack voltage the way the pilot chose under Settings > Audio > Events > Voltage:
+-- the pack's voltage with one decimal (`voltage_announce` 0, the default), or the voltage per
+-- cell with two (1), which reads the same on every pack. Without a cell count there is nothing
+-- to divide by, and the pack is spoken rather than nothing.
+local function playPackVoltage(events, voltage, cells, opts)
+  if cells and tonumber(events and events.voltage_announce) == 1 then
+    playVoltage(voltage / cells, 2, opts)
+  else
+    playVoltage(voltage, 1, opts)
+  end
+end
+
+-- How far above its line the pack has to come back before the low-voltage alert counts as
+-- cleared, in volts per cell. The setting is in millivolts per cell so that one number means the
+-- same on every pack; it is brought into the range the settings page offers, so a hand-edited
+-- preferences file cannot ask for a reset the page could not.
+local VOLTAGE_RESET_DEFAULT_MV = 100
+local VOLTAGE_RESET_MIN_MV = 50
+local VOLTAGE_RESET_MAX_MV = 500
+
+local function voltageResetPerCell(events)
+  local mv = tonumber(events and events.voltage_reset) or VOLTAGE_RESET_DEFAULT_MV
+  if mv < VOLTAGE_RESET_MIN_MV then mv = VOLTAGE_RESET_MIN_MV end
+  if mv > VOLTAGE_RESET_MAX_MV then mv = VOLTAGE_RESET_MAX_MV end
+  return mv / 1000
+end
+
 -- WHO decides that the initial fuel / capacity is announced:
 -- The radio preference `preferences.audio_events.initial_fuel` (default true)
 -- governs this event exclusively.
@@ -1076,22 +1126,14 @@ local function announcePackNotFullEvent(self, events, opts)
     return
   end
 
-  local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session or nil
-  local bc = session and (session.batteryConfig or session.battery_config) or nil
-  if type(bc) ~= "table" then
+  local bc = sessionBatteryConfig()
+  if not bc then
     return
   end
 
   -- A configured cell count of 0 means auto-detect, so telemetry answers instead.
-  local cells = tonumber(bc.batteryCellCount)
-  if not cells or cells <= 0 then
-    cells = tonumber(self.state and self.state.batteryCellCount)
-  end
-  if type(cells) ~= "number" then
-    return
-  end
-  cells = math.floor(cells + 0.5)
-  if cells <= 0 then
+  local cells = flightPackCells(self.state, bc)
+  if not cells then
     return
   end
 
@@ -1133,7 +1175,7 @@ local function announcePackNotFullEvent(self, events, opts)
   end
 
   if tryPlayEventFile(audioState, now, soundFile, opts) then
-    playVoltage(perCell, 2, opts)
+    playPackVoltage(events, voltage, cells, opts)
   end
 end
 
@@ -1201,7 +1243,7 @@ local function announceMainPowerEvent(self, events, opts)
       emitLog(opts, "main power back at " .. string.format("%.1f", voltage) .. " V", "info")
       local soundFile = firstResolvedSound(MAIN_POWER_OK_SOUNDS)
       if soundFile and tryPlayEventFile(audioState, now, soundFile, opts) then
-        playVoltage(voltage, 1, opts)
+        playPackVoltage(events, voltage, flightPackCells(self.state, sessionBatteryConfig()), opts)
       end
     end
     return
@@ -1578,22 +1620,15 @@ function Audio.process(self, opts)
   if prefEnabled(events, "voltage_alert", true) then
     -- Resolve cell count: prefer MSP batteryConfig, fall back to telemetry state,
     -- then refuse to fire (no valid cell count known yet).
-    local warnBase
+    local warnBase, cells
     do
-      local session = type(_G) == "table" and _G.rfsuite and _G.rfsuite.session
-      local bc = session and (session.batteryConfig or session.battery_config)
+      local bc = sessionBatteryConfig()
       local warnV = normalizeCellVoltage(bc and bc.vbatwarningcellvoltage, nil)
       -- MSP batteryCellCount == 0 means auto-detect; use telemetry Cel# in that case
-      local cells = bc and tonumber(bc.batteryCellCount)
-      if not cells or cells <= 0 then
-        cells = tonumber(self.state and self.state.batteryCellCount)
-      end
-      if type(cells) == "number" then
-        cells = math.floor(cells + 0.5)
-      end
-      if warnV and warnV > 0 and cells and cells > 0 then
+      cells = flightPackCells(self.state, bc)
+      if warnV and warnV > 0 and cells then
         warnBase = warnV * cells
-      elseif bc and cells and cells > 0 then
+      elseif bc and cells then
         -- batteryConfig is available, use safe per-cell default (3.5V * cells)
         warnBase = 3.5 * cells
       end
@@ -1601,7 +1636,11 @@ function Audio.process(self, opts)
     end
     if warnBase then
       local warn = warnBase
-      local reset = warn + 0.5
+      -- The line is per cell, and so is the margin the pack has to recover by before the alert
+      -- counts as cleared. A fixed margin of 0.5 V for the whole pack is 0.17 V per cell on 3S
+      -- but 0.04 V on 12S, where a pack released from load can come back that far and so end the
+      -- episode -- and with it the Repeat count -- at every sag.
+      local reset = warn + voltageResetPerCell(events) * cells
       local voltage = tonumber(self.state.voltage)
       if type(voltage) == "number" and voltage > 0 then
         if voltage <= warn then
@@ -1625,7 +1664,7 @@ function Audio.process(self, opts)
               if tryPlayEventFile(audioState, now, "evt/lowvbat.wav", opts) then
                 -- The value the line was crossed at. The alert said only THAT it had been
                 -- crossed, and a pilot deciding whether to land now wants to know by how far.
-                playVoltage(voltage, 1, opts)
+                playPackVoltage(events, voltage, cells, opts)
                 alertSpoken(audioState, events, "voltage", now)
                 setGlobalLowVoltageAt(now)
               end

@@ -57,11 +57,45 @@ local ui = {
     tail_center_trim = 0
   },
   apiData = {},
+  -- What the board holds as far as this page knows: the trims and the MIXER_CONFIG record of
+  -- this visit's read, or of the last save that reached EEPROM. A value sent live under the
+  -- override is a trial until Save, and this is what leaving without Save puts back.
+  original = nil,
+  -- Whether a live write was queued since the snapshot, and the trims it last sent, so the live
+  -- loop sends a change once rather than on every pass while the page is dirty.
+  liveSent = false,
+  liveConfig = nil,
   runtime = {
     readPending = false,
     requestRebuild = nil
   }
 }
+
+-- Every record here is a flat table of numbers, so a flat copy is a full copy.
+local function copyFlat(src)
+  if type(src) ~= "table" then return nil end
+  local out = {}
+  for k, v in pairs(src) do out[k] = v end
+  return out
+end
+
+local function sameFlat(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+  for k, v in pairs(a) do
+    if b[k] ~= v then return false end
+  end
+  for k, v in pairs(b) do
+    if a[k] ~= v then return false end
+  end
+  return true
+end
+
+local function takeSnapshot()
+  return {
+    config = copyFlat(ui.config),
+    MIXER_CONFIG = copyFlat(ui.apiData.MIXER_CONFIG)
+  }
+end
 
 local function getSession()
   local root = _G and _G.rfsuite
@@ -162,6 +196,9 @@ local function triggerLiveWrite()
 
   if not M.canSave() or not ui.apiData.MIXER_CONFIG then return end
 
+  -- The board already has what is on screen.
+  if ui.liveConfig and sameFlat(ui.liveConfig, ui.config) then return end
+
   ui.apiData.MIXER_CONFIG.swash_trim_0 = ui.config.swash_trim_0
   ui.apiData.MIXER_CONFIG.swash_trim_1 = ui.config.swash_trim_1
   ui.apiData.MIXER_CONFIG.swash_trim_2 = ui.config.swash_trim_2
@@ -169,14 +206,46 @@ local function triggerLiveWrite()
 
   local mixerCfgPayload = MixerConfigApi.buildWritePayload(ui.apiData.MIXER_CONFIG)
 
+  -- The acknowledgement leaves the page dirty: the value is in the board's RAM only, and it stays
+  -- a trial until Save writes it to EEPROM. A write that went unanswered or was dropped is sent
+  -- again on the next pass; one the board refused is not repeated until the value changes.
   queue:add({
     command = MixerConfigApi.writeCommand,
     payload = mixerCfgPayload,
     isWrite = true,
-    processReply = function()
-      ui.dirty = false
-    end
+    processReply = function() end,
+    errorHandler = function(_, reason) if reason ~= "refused" then ui.liveConfig = nil end end
   })
+  ui.liveSent = true
+  ui.liveConfig = copyFlat(ui.config)
+end
+
+--- Leaving without Save, or Reload: a trim sent live under the override goes back to the
+--- snapshot on the board, on screen and in the session copy. Nothing is sent when no live write
+--- went out since the snapshot, or when what went out is the snapshot. The payload is built here,
+--- not in a reply, because onClose drops this page's modules right after.
+local function rollbackLiveChanges()
+  local orig = ui.original
+  local sent = ui.liveSent
+  ui.liveSent = false
+  ui.liveConfig = nil
+  if not sent or type(orig) ~= "table" or type(orig.MIXER_CONFIG) ~= "table" then return false end
+  if sameFlat(ui.apiData.MIXER_CONFIG, orig.MIXER_CONFIG) then return false end
+  if not MspRuntime or not MixerConfigApi or type(MspRuntime.getState) ~= "function" then return false end
+  local mspState = MspRuntime.getState()
+  local queue = mspState and mspState.queue
+  if not queue or type(queue.add) ~= "function" then return false end
+
+  queue:add({
+    command = MixerConfigApi.writeCommand,
+    payload = MixerConfigApi.buildWritePayload(orig.MIXER_CONFIG),
+    isWrite = true,
+    processReply = function() end
+  })
+  ui.apiData.MIXER_CONFIG = copyFlat(orig.MIXER_CONFIG)
+  for k, v in pairs(orig.config) do ui.config[k] = v end
+  saveToSession()
+  return true
 end
 
 local function queueTrimsRead(isAutoReload)
@@ -193,6 +262,7 @@ local function queueTrimsRead(isAutoReload)
   end
 
   ui.runtime.readPending = true
+  ui.original = nil
   if not isAutoReload then
     ui.loading = true
     ui.progress = 0
@@ -217,6 +287,12 @@ local function queueTrimsRead(isAutoReload)
       end
 
       saveToSession()
+
+      -- Taken here rather than at each field: nothing changes the record between the parse and
+      -- this line, because the live write and Save wait for canSave(), false while readPending.
+      ui.original = takeSnapshot()
+      ui.liveSent = false
+      ui.liveConfig = nil
 
       ui.runtime.readPending = false
       ui.runtime.readComplete = true
@@ -260,6 +336,9 @@ local function queueTrimsWrite()
   ui.apiData.MIXER_CONFIG.tail_center_trim = ui.config.tail_center_trim
 
   local mixerCfgPayload = MixerConfigApi.buildWritePayload(ui.apiData.MIXER_CONFIG)
+  local stored = takeSnapshot()
+  -- The save sends what is on screen, so the live loop has nothing to send until it changes.
+  ui.liveConfig = copyFlat(ui.config)
 
   queue:add({
     command = MixerConfigApi.writeCommand,
@@ -272,7 +351,8 @@ local function queueTrimsWrite()
           command = eepromApi.writeCommand,
           payload = {},
           isWrite = true,
-          processReply = function() end,
+          -- Stored: from now on this is what leaving without Save puts back.
+          processReply = function() ui.original = stored end,
           errorHandler = function() end
         })
       end
@@ -489,6 +569,8 @@ end
 function M.onReload(ctx)
   local session = getSession()
   if session then
+    -- Before the read, so the read is queued behind the rollback and shows the board's value.
+    if ui.dirty then rollbackLiveChanges() end
     loadFromSession()
     ui.dirty = false
     queueTrimsRead(false)
@@ -536,6 +618,11 @@ end
 
 
 function M.onClose()
+  -- An unsaved trim sent live is taken back first, while the override still holds the servos.
+  -- Queued ahead of the override writes on purpose: should the close end before every write is
+  -- out, a lost override write leaves a board that refuses to arm, a lost rollback a trial trim
+  -- the model would fly with. Save clears dirty, so a save still on its way is not undone here.
+  if ui.dirty then rollbackLiveChanges() end
   if ui.inOverride then
     setOverride(false)
     ui.inOverride = false
