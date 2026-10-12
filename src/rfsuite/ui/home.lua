@@ -654,7 +654,7 @@ state = {
     pendingValues = { pid_profile = nil, rate_profile = nil, battery_profile = nil },
     lastEnabled = { governor_state = nil }
   },
-  telemetryState = { profile = 1, rateProfile = 1, batteryProfile = 1, voltage = 0, bec_voltage = 0, escTemp = 0, fuel = 100, armFlags = 0, governor = 0, themeConfig = { v_min = 18.0 } },
+  telemetryState = { profile = 1, rateProfile = 1, batteryProfile = nil, voltage = 0, bec_voltage = 0, escTemp = 0, fuel = 100, armFlags = 0, governor = 0, themeConfig = { v_min = 18.0 } },
   -- Handed to the active page's wakeup and to the audio poll respectively, and refilled rather
   -- than rebuilt each time. They are containers only: nothing is read back out of them here.
   wakeupContext = {},
@@ -3895,7 +3895,7 @@ function M.run(event, touchState)
           ts.lqSource = (Sensors.active_paths and Sensors.active_paths.link) or ts.lqSource
           ts.profile = roundInt(Sensors.getValue("pid_profile") or ts.profile, ts.profile or 1)
           ts.rateProfile = roundInt(Sensors.getValue("rate_profile") or ts.rateProfile, ts.rateProfile or 1)
-          ts.batteryProfile = roundInt(Sensors.getValue("battery_profile") or ts.batteryProfile, ts.batteryProfile or 1)
+          ts.batteryProfile = roundInt(Sensors.getValue("battery_profile") or ts.batteryProfile, ts.batteryProfile)
           ts.armFlags = roundInt(armFlagsValue or ts.armFlags, ts.armFlags or 0)
           local armDisableFlagsValue = Sensors.getValue("armdisableflags")
           if type(armDisableFlagsValue) == "number" then

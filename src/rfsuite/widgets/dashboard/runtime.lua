@@ -2770,7 +2770,7 @@ local function readTelemetry(state, audioState)
   setField("lqSource", Sensors.active_paths and Sensors.active_paths.link)
   setField("profile", roundInt(getSensor("pid_profile") or state.profile, state.profile or 1))
   setField("rateProfile", roundInt(getSensor("rate_profile") or state.rateProfile, state.rateProfile or 1))
-  setField("batteryProfile", roundInt(getSensor("battery_profile") or state.batteryProfile, state.batteryProfile or 1))
+  setField("batteryProfile", roundInt(getSensor("battery_profile") or state.batteryProfile, state.batteryProfile))
   -- Read once for both fields that carry it -- `armFlags` here, which the announcements speak, and
   -- `armed` further down -- so a reading armFlagsRefused leaves untaken is untaken for both.
   local armState = getSensor("armflags")
@@ -3067,7 +3067,7 @@ function Runtime.new(zone, options)
       rpm = 0,
       profile = 1,
       rateProfile = 1,
-      batteryProfile = 1,
+      batteryProfile = nil,
       armFlags = 0,
       armDisableFlags = 0,
       -- The event history (noteEvent above): a table from here on, never nil, empty until the first
