@@ -828,9 +828,35 @@ end
 -- ui.runtime is dropped by resetPageState() on close. servoLoaded is emptied when a read starts,
 -- so it says that the selected servo's record came from this visit: picking another servo reads
 -- that one outside the chain, and Save writes the selected servo's record.
+-- The PWM servos are the head of the packed total MSP_STATUS reports; with bus servos on, the tail
+-- is the bus channels (app/pages/setup/servos/bus/page.lua carries the two index spaces). Derived
+-- here from the ui fields this visit's read sets, rather than read from a field build() stored,
+-- because canSave() is asked between the pass that finishes the read and the rebuild after it,
+-- where a stored count is still the previous build's -- and a Save in that window would write
+-- index 0, which on a board with no PWM servo is bus servo 1.
+local function pwmServoCount()
+  local totalServoCount = ui.servoCount or 4
+  if totalServoCount < 1 then totalServoCount = 4 end
+
+  local session = getSession()
+  local apiVersion = session and session.apiVersion
+  local isAtLeast1209 = ApiVersion and ApiVersion.isAtLeast and ApiVersion.isAtLeast(apiVersion, {12, 0, 9})
+
+  if ui.servoBusEnabled == true and isAtLeast1209
+    and not (system and system.getVersion and system.getVersion().simulation)
+    and totalServoCount >= 18 then
+    return totalServoCount - 18
+  end
+  return totalServoCount
+end
+
 function M.canSave()
+  -- The header is resolved before the page is built, so on the visit's first ask this has to load
+  -- the API-version module itself: pwmServoCount() reads it, and without it the bus channels
+  -- would not be subtracted and Save offered on a board with no PWM servo.
+  ensureDeps()
   -- With no PWM servo, servo 0 is a bus servo's record: refuse the write rather than send it.
-  return (ui.pwmServoCount or 1) >= 1
+  return pwmServoCount() >= 1
     and ui.runtime ~= nil and ui.runtime.readComplete == true and not ui.runtime.readPending
     and type(ui.servoLoaded) == "table" and ui.servoLoaded[ui.selectedServoIndex] == true
 end
@@ -875,31 +901,20 @@ function M.build(ctx)
     cursorY = cursorY + (Controls.STATIC_SECTION_H or 50)
   end
 
-  local totalServoCount = ui.servoCount or 4
-  if totalServoCount < 1 then totalServoCount = 4 end
-  local pwmServoCount = totalServoCount
-
-  local session = getSession()
-  local apiVersion = session and session.apiVersion
-  local isAtLeast1209 = ApiVersion and ApiVersion.isAtLeast and ApiVersion.isAtLeast(apiVersion, {12, 0, 9})
-
-  if ui.servoBusEnabled == true and isAtLeast1209 and not (system and system.getVersion and system.getVersion().simulation) and totalServoCount >= 18 then
-    pwmServoCount = totalServoCount - 18
-  end
-  -- No fallback to 4 here: with bus servos on and no PWM servo the count is 0 and the selector
-  -- stays empty. An unknown count is already covered above.
-  ui.pwmServoCount = pwmServoCount
+  -- The count is derived the same way canSave() derives it, from this visit's read (pwmServoCount
+  -- above), so a Save in the pass before the rebuild is refused on the same number this draws.
+  local pwmCount = pwmServoCount()
 
   -- Build Active Servo Combo Selector Options
   local servoOptions = {}
-  for i = 1, pwmServoCount do
+  for i = 1, pwmCount do
     servoOptions[#servoOptions + 1] = {
       label = getServoTitle(i18n, i),
       value = i - 1
     }
   end
 
-  if ui.selectedServoIndex == nil or ui.selectedServoIndex >= pwmServoCount then
+  if ui.selectedServoIndex == nil or ui.selectedServoIndex >= pwmCount then
     ui.selectedServoIndex = 0
   end
 
@@ -946,7 +961,7 @@ function M.build(ctx)
 
   -- Everything below is the selected servo's own record, so it is drawn only once that
   -- record has been read. Editing what an unfinished read left behind would write it back.
-  if pwmServoCount < 1 or not ui.servoLoaded[ui.selectedServoIndex] then return end
+  if pwmCount < 1 or not ui.servoLoaded[ui.selectedServoIndex] then return end
 
   local idx = ui.selectedServoIndex
   local s = ui.config.servos[idx]
