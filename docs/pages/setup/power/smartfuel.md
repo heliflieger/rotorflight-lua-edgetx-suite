@@ -26,7 +26,9 @@ armed.
 | Charge drop rate | How fast the reported fuel may drop in voltage mode once the model has been armed. 0.00 to 2.50 %/s in steps of 0.01, default 0.50. |
 | Sag gain | Strength of the load-sag compensation in voltage mode; higher compensates more aggressively. Raise it if the estimate reads too low under load in flight. 0 to 100 %, default 40. |
 
-The three tuning values are greyed out unless the source is *VOLTAGE* or *COMBINED*.
+The three tuning values apply to an estimate with a voltage track, and are greyed out
+elsewhere: they can be edited with Firmware Source *VOLTAGE* or *COMBINED*, and with *OFF (LOCAL)*
+when the local source under *Power* → *Preferences* is *VOLTAGE* or *COMBINED*.
 
 ## Notes
 
@@ -36,9 +38,13 @@ The three tuning values are greyed out unless the source is *VOLTAGE* or *COMBIN
   *OFF (LOCAL)*. Where that copy cannot be written, the notice says the model's
   settings were not saved and why — for example *the settings file could not be written to the
   SD card*.
-- The page also carries a *Local Source* selector (*CURRENT*, *VOLTAGE*, *COMBINED*) for a
-  flight controller whose firmware has no SmartFuel. Such a flight controller does not show
-  the tile at all, by the API-version rule above, so the selector is normally not seen.
+- With *OFF (LOCAL)* the radio computes the estimate itself, from the local source set under
+  *Power* → *Preferences*. Its voltage estimate (local source *VOLTAGE*) uses the same three
+  tuning values.
+- The radio's own estimate takes the cell count configured on the flight controller's *Battery*
+  page. Where that is 0 (auto-detect), it takes the count the flight controller detected when the
+  pack was plugged in (sensor `Cel#`), and infers one from the pack voltage only where neither is
+  available.
 
 ## Related
 

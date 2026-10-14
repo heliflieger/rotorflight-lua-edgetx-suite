@@ -2918,21 +2918,36 @@ local function readTelemetry(state, audioState)
     if configuredCells and configuredCells > 0 then
       setField("batteryCellCount", roundInt(configuredCells, state.batteryCellCount or 0))
     else
-      -- Otherwise infer it from the battery config's max cell voltage.
+      -- Otherwise infer it from the battery config's max cell voltage. A voltage below half a
+      -- cell is not a 1S pack but no pack at all -- a meter with nothing on it, or a pack that is
+      -- gone -- so it never sets a count. A count already held is kept then: it is the count of
+      -- the pack that was there, which is still the best fact about the pack that is gone.
       local maxCellVoltage = normalizeCellVoltage(batteryConfig and batteryConfig.vbatmaxcellvoltage, 4.2)
 
-      local inferredCells = math.max(1, math.floor((voltageValue / maxCellVoltage) + 0.5))
-      local existingCells = tonumber(state.batteryCellCount)
-      if not existingCells or existingCells <= 0 then
-        setField("batteryCellCount", inferredCells)
-      else
-        local perCell = voltageValue / existingCells
-        -- Reconnect-safe: replace stale cell count if implied per-cell voltage is implausible.
-        if perCell < 2.5 or perCell > 4.5 then
+      local inferredCells = math.floor((voltageValue / maxCellVoltage) + 0.5)
+      if inferredCells > 0 then
+        local existingCells = tonumber(state.batteryCellCount)
+        if not existingCells or existingCells <= 0 then
           setField("batteryCellCount", inferredCells)
+        else
+          local perCell = voltageValue / existingCells
+          -- Reconnect-safe: replace stale cell count if implied per-cell voltage is implausible.
+          if perCell < 2.5 or perCell > 4.5 then
+            setField("batteryCellCount", inferredCells)
+          end
         end
       end
     end
+  end
+
+  -- Whether the pack the model came up with was full: judged once per connection by lib/audio.lua's
+  -- *Pack Not Full* check, which takes it whether or not that announcement is switched on, and only
+  -- READ here, from the audio state that latches it, to publish it for a theme the way
+  -- `mainPowerLost` is published above. Not judged here: this read runs from the first pass of a
+  -- connection, while the voltage it has can still be the previous pack's. Nil until judged, so a theme
+  -- reading it with `== true` draws exactly what it drew before the verdict existed.
+  if DashboardAudio and type(DashboardAudio.packVerdict) == "function" then
+    state.packNotFull = DashboardAudio.packVerdict(audioState)
   end
 
   if type(armState) == "number" then
@@ -3159,6 +3174,9 @@ function Runtime.new(zone, options)
       -- published here so a theme can draw it. False rather than nil before the first read: a
       -- theme asking the question before any telemetry has arrived is not being told yes.
       mainPowerLost = false,
+      -- The pack plugged in was not full: true, false once judged full, nil until judged. Decided
+      -- once per connection in lib/audio.lua and published by readTelemetry.
+      packNotFull = nil,
       lastFlightEndingVoltage = nil,
       lastFlightEndingCells = nil,
       lastDisarmAt = nil,
@@ -3220,8 +3238,10 @@ function Runtime.new(zone, options)
 
     local voltage = tonumber(state and state.voltage)
     local maxCellVoltage = tonumber(batteryConfig and batteryConfig.vbatmaxcellvoltage) or 4.2
+    -- The same rule as readTelemetry's: a voltage below half a cell gives no count.
     if type(voltage) == "number" and voltage > 0 and maxCellVoltage > 0 then
-      return math.max(1, math.floor((voltage / maxCellVoltage) + 0.5))
+      local implied = math.floor((voltage / maxCellVoltage) + 0.5)
+      if implied > 0 then return implied end
     end
 
     return nil
@@ -3715,6 +3735,7 @@ function Runtime.new(zone, options)
       self.state.batteryTelemetrySeen = false
       self.state.rfTelemetrySeen = false
       self.state.fuelTelemetrySeen = false
+      self.state.packNotFull = nil
       self.state.previousSessionFuel = self.state.fuel
       self.state.fuel = 0
       if Sensors and type(Sensors.reset) == "function" then

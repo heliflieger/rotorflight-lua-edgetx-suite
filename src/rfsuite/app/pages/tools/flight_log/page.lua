@@ -36,6 +36,8 @@ local LINES_PER_WAKEUP = 90
 
 local ROW_H = 34
 local PROFILE_MAX = 6
+-- The Battery page's own bound for a profile's cell count.
+local CELLS_MAX = 24
 
 local ui = {
   view = "flights",
@@ -725,6 +727,7 @@ local function startEdit(entry)
     id = entry and entry.id or FlightLog.freeId(ui.registry),
     name = entry and entry.name or "",
     cap = tonumber(entry and entry.cap) or 0,
+    cells = tonumber(entry and entry.cells) or 0,
     models = models,
     profile = tonumber(entry and entry.profile) or 0,
     cycles = tonumber(entry and entry.cycles) or 0
@@ -766,6 +769,7 @@ local function saveEdit(i18n)
       id = id,
       name = FlightLog.sanitizeName(edit.name),
       cap = tonumber(edit.cap) or 0,
+      cells = tonumber(edit.cells) or 0,
       models = models,
       profile = tonumber(edit.profile) or 0,
       cycles = tonumber(edit.cycles) or 0
@@ -775,6 +779,7 @@ local function saveEdit(i18n)
       id = id,
       name = FlightLog.sanitizeName(edit.name),
       cap = (tonumber(edit.cap) or 0) > 0 and math.floor(edit.cap) or false,
+      cells = (tonumber(edit.cells) or 0) >= 1 and math.floor(edit.cells) or false,
       models = models,
       profile = (tonumber(edit.profile) or 0) >= 1 and math.floor(edit.profile) or false,
       cycles = math.floor(tonumber(edit.cycles) or 0)
@@ -841,6 +846,16 @@ local function buildBatteryForm(children, x, y, w, h, i18n)
       suffix = " mAh",
       get = function() return math.floor(tonumber(edit.cap) or 0) end,
       set = function(value) edit.cap = math.floor(tonumber(value) or 0) end
+    })
+
+  -- Matched against a board profile's own cell count where every profile has one, which is what
+  -- tells two packs of the same capacity apart; 0 leaves the field out of the file.
+  cursorY = cursorY + Controls.appendNumberField(children, x, cursorY, w,
+    pageText(i18n, "battery_cells", "Cells"), {
+      min = 0,
+      max = CELLS_MAX,
+      get = function() return math.floor(tonumber(edit.cells) or 0) end,
+      set = function(value) edit.cells = math.floor(tonumber(value) or 0) end
     })
 
   cursorY = cursorY + Controls.appendTextField(children, x, cursorY, w,
@@ -937,6 +952,8 @@ local function buildBattery(children, x, y, w, h, i18n)
   cursorY = cursorY + appendField(children, x, cursorY, w, pageText(i18n, "battery_id", "Id"), entry.id)
   cursorY = cursorY + appendField(children, x, cursorY, w, pageText(i18n, "battery_capacity", "Capacity"),
     entry.cap and (tostring(math.floor(entry.cap)) .. " mAh") or "-")
+  cursorY = cursorY + appendField(children, x, cursorY, w, pageText(i18n, "battery_cells", "Cells"),
+    (tonumber(entry.cells) or 0) >= 1 and tostring(math.floor(entry.cells)) or "-")
   cursorY = cursorY + appendField(children, x, cursorY, w, pageText(i18n, "battery_models", "Models"),
     (entry.models and #entry.models > 0) and table.concat(entry.models, ", ")
       or pageText(i18n, "models_all", "All models"))

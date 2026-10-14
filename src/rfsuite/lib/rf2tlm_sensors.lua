@@ -23,6 +23,20 @@ local function decS16(data, pos)
     return val < 0x8000 and val or val - 0x10000, ptr
 end
 
+-- Two 12-bit values in three bytes: the first byte carries the high nibble of each (the first
+-- value's in its low four bits), the next two bytes their low eight bits. This is the layout
+-- rotorflight-firmware's crsfSensorEncodeControl (src/main/telemetry/crsf.c) writes.
+local function decU12U12(data, pos)
+    local a = bit32.lshift(bit32.extract(data[pos],0,4),8) + data[pos+1]
+    local b = bit32.lshift(bit32.extract(data[pos],4,4),8) + data[pos+2]
+    return a,b,pos+3
+end
+
+local function decS12S12(data, pos)
+    local a,b,ptr = decU12U12(data, pos)
+    return a < 0x0800 and a or a - 0x1000, b < 0x0800 and b or b - 0x1000, ptr
+end
+
 local function decU24(data, pos)
     return bit32.lshift(data[pos],16) + bit32.lshift(data[pos+1],8) + data[pos+2], pos+3
 end
@@ -94,22 +108,27 @@ local function decAdjFunc(data, pos)
     return nil, pos
 end
 
+-- Six bytes: pitch and roll, then yaw and collective, as two pairs of signed 12-bit values
+-- (crsfSensorEncodeControl). The firmware scales pitch, roll and collective by 1200 and yaw by
+-- 800 here, where its individual rows 0x1031..0x1034 send 1200 and 2400 divided by 10 (the
+-- denominators in crsf.c's sensor table) at one decimal. Two decimals, and yaw times three, give
+-- the same reading on the same sensors from either path.
 local function decControl(data, pos)
-    local roll, pitch, yaw, coll
+    local pitch, roll, yaw, coll
     local first = pos
-    roll,pos = decS16(data,pos)
-    pitch,pos = decS16(data,pos)
-    yaw,pos = decS16(data,pos)
-    coll,pos = decS16(data,pos)
+    pitch,roll,pos = decS12S12(data,pos)
+    yaw,coll,pos = decS12S12(data,pos)
     if due and not due(0x1030, data, first, pos) then return nil, pos end
     setTelemetryValue(0x1030, 0, 0, 0, UNIT_RAW, 0, "Ctrl")
-    setTelemetryValue(0x1031, 0, 0, pitch, UNIT_DEGREE, 1, "CPtc")
-    setTelemetryValue(0x1032, 0, 0, roll, UNIT_DEGREE, 1, "CRol")
-    setTelemetryValue(0x1033, 0, 0, yaw, UNIT_DEGREE, 1, "CYaw")
-    setTelemetryValue(0x1034, 0, 0, coll, UNIT_DEGREE, 1, "CCol")
+    setTelemetryValue(0x1031, 0, 0, pitch, UNIT_DEGREE, 2, "CPtc")
+    setTelemetryValue(0x1032, 0, 0, roll, UNIT_DEGREE, 2, "CRol")
+    setTelemetryValue(0x1033, 0, 0, 3 * yaw, UNIT_DEGREE, 2, "CYaw")
+    setTelemetryValue(0x1034, 0, 0, coll, UNIT_DEGREE, 2, "CCol")
     return nil, pos
 end
 
+-- The combined attitude is sent undivided, in tenths of a degree (crsfSensorEncodeAttitude), where
+-- the individual rows 0x1101..0x1103 are divided by 10 first; hence one decimal here and none there.
 local function decAttitude(data, pos)
     local pitch, roll, yaw
     local first = pos
@@ -118,12 +137,14 @@ local function decAttitude(data, pos)
     yaw,pos = decS16(data,pos)
     if due and not due(0x1100, data, first, pos) then return nil, pos end
     setTelemetryValue(0x1100, 0, 0, 0, UNIT_DEGREE, 1, "Attd")
-    setTelemetryValue(0x1101, 0, 0, pitch, UNIT_DEGREE, 0, "Ptch")
-    setTelemetryValue(0x1102, 0, 0, roll, UNIT_DEGREE, 0, "Roll")
-    setTelemetryValue(0x1103, 0, 0, yaw, UNIT_DEGREE, 0, "Yaw")
+    setTelemetryValue(0x1101, 0, 0, pitch, UNIT_DEGREE, 1, "Ptch")
+    setTelemetryValue(0x1102, 0, 0, roll, UNIT_DEGREE, 1, "Roll")
+    setTelemetryValue(0x1103, 0, 0, yaw, UNIT_DEGREE, 1, "Yaw")
     return nil, pos
 end
 
+-- The combined acceleration is sent in hundredths of a g (crsfSensorEncodeAccel), the individual
+-- rows 0x1111..0x1113 in tenths; hence two decimals here and one there.
 local function decAccel(data, pos)
     local x, y, z
     local first = pos
@@ -132,9 +153,9 @@ local function decAccel(data, pos)
     z,pos = decS16(data,pos)
     if due and not due(0x1110, data, first, pos) then return nil, pos end
     setTelemetryValue(0x1110, 0, 0, 0, UNIT_G, 2, "Accl")
-    setTelemetryValue(0x1111, 0, 0, x, UNIT_G, 1, "AccX")
-    setTelemetryValue(0x1112, 0, 0, y, UNIT_G, 1, "AccY")
-    setTelemetryValue(0x1113, 0, 0, z, UNIT_G, 1, "AccZ")
+    setTelemetryValue(0x1111, 0, 0, x, UNIT_G, 2, "AccX")
+    setTelemetryValue(0x1112, 0, 0, y, UNIT_G, 2, "AccY")
+    setTelemetryValue(0x1113, 0, 0, z, UNIT_G, 2, "AccZ")
     return nil, pos
 end
 

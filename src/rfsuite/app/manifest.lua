@@ -58,6 +58,10 @@ local manifest = {
         { id = "validate_sensors", title = "@i18n(app.modules.validate_sensors.name)@", menuId = "diagnostics_validate_sensors_page", enabledWhen = "fblConnected", lockedWhileArmed = true },
         { id = "smartfuel", title = "@i18n(app.modules.smartfuel.name)@", menuId = "diagnostics_smartfuel_page", enabledWhen = "fblConnected", minApiVersion = { 12, 0, 9 }, lockedWhileArmed = true },
         { id = "crsf_sensors", title = "@i18n(app.modules.crsf_sensors.name)@", menuId = "diagnostics_crsf_sensors_page", enabledWhen = "fblConnected", minApiVersion = { 12, 0, 10 }, lockedWhileArmed = true },
+        -- Reads the radio's telemetry sensors and sends no MSP, so it needs no connection; it says
+        -- itself when neither packed word is received. Locked while armed like its neighbours: the
+        -- tool runs no page's wakeup while armed, so the page could not read there.
+        { id = "system_status", title = "@i18n(app.modules.system_status.name)@", menuId = "diagnostics_system_status_page", lockedWhileArmed = true },
         { id = "session_logs", title = "@i18n(app.modules.session_logs.name)@", menuId = "diagnostics_session_logs_page" },
         { id = "info", title = "@i18n(app.modules.info.name)@", menuId = "diagnostics_info_page", lockedWhileArmed = true }
       }
@@ -541,6 +545,10 @@ local manifest = {
     },
     diagnostics_crsf_sensors_page = {
       title = "@i18n(app.modules.crsf_sensors.name)@",
+      pages = {}
+    },
+    diagnostics_system_status_page = {
+      title = "@i18n(app.modules.system_status.name)@",
       pages = {}
     },
     diagnostics_session_logs_page = {

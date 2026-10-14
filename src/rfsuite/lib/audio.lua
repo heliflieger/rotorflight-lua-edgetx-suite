@@ -1104,41 +1104,101 @@ local function announceBatteryCapacityEvent(self, opts)
   audioState.batteryCapacityAnnounced = true
 end
 
--- The pack the model came up with is not full. Judged once per connection and then latched:
--- in flight the per-cell voltage falls past any margin, and without the latch this would turn
--- from one warning at power-up into a running commentary on the discharge.
+-- Whether the pack the model came up with is full, judged once per connection and then latched
+-- in `memo`: in flight the per-cell voltage falls past any margin, and without the latch the
+-- answer would turn from a verdict on the pack that was plugged in into a reading of the
+-- discharge.
+--
+-- true  the pack is not full: its voltage per cell is below the flight controller's full-cell
+--       voltage less `events.pack_not_full_margin` millivolts
+-- false the pack was judged full
+-- nil   not judged yet
 --
 -- Nothing is judged until everything it needs is there -- a pack voltage, a cell count and a
 -- battery configuration to take the full-cell voltage from -- so a missing piece costs a pass
 -- and not a wrong answer. The battery configuration arrives over MSP, which is the same
 -- reason the voltage alert skips until it is available.
+--
+-- Judged in one place, the *Pack Not Full* announcement below, which asks for it whether or not
+-- the announcement is switched on, so the verdict is there for a screen to draw either way. It is
+-- asked from `Audio.process` and nowhere earlier on purpose: the caller runs it only once its
+-- connect chain has finished, and right after a reconnect the pack voltage the radio hands over is
+-- still the previous pack's for a moment -- a verdict taken on the first reading that has a voltage
+-- would be a verdict on the pack that was unplugged. resetConnectionState clears the latch, so a
+-- real reconnect judges again. A screen reads the latched answer with `Audio.packVerdict`.
+function Audio.packNotFull(state, memo, events)
+  if type(memo) ~= "table" then
+    return nil
+  end
+  if memo.packJudged == true then
+    return memo.packNotFull
+  end
+
+  local voltage = tonumber(state and state.voltage)
+  if type(voltage) ~= "number" or voltage <= 0 then
+    return nil
+  end
+
+  local bc = sessionBatteryConfig()
+  if not bc then
+    return nil
+  end
+
+  -- A configured cell count of 0 means auto-detect, so telemetry answers instead.
+  local cells = flightPackCells(state, bc)
+  if not cells then
+    return nil
+  end
+
+  local fullCell = normalizeCellVoltage(bc.vbatmaxcellvoltage, 4.2)
+  local margin = tonumber(events and events.pack_not_full_margin) or 100
+  if margin < 0 then margin = 0 end
+  local perCell = voltage / cells
+
+  memo.packJudged = true
+  memo.packNotFull = perCell < fullCell - (margin / 1000)
+  -- Kept for the announcement, which speaks the reading the verdict was taken on rather than
+  -- whatever the pack reads by the time it may speak.
+  memo.packVoltage = voltage
+  memo.packCells = cells
+  memo.packFullCell = fullCell
+  memo.packMargin = margin
+  return memo.packNotFull
+end
+
+-- The verdict above as it stands, without judging: true, false, or nil while it has not been
+-- judged on this connection. For a screen, which publishes it on its own cadence; reading it
+-- costs one test.
+function Audio.packVerdict(memo)
+  if type(memo) ~= "table" or memo.packJudged ~= true then
+    return nil
+  end
+  return memo.packNotFull
+end
+
+-- The announcement of the verdict above: once per connection, when the verdict is in and the
+-- pilot has switched it on. `packCheckDone` latches what has been SPOKEN for this connection,
+-- which is a different thing from the verdict -- the verdict stands whether or not anything was
+-- said about it.
 local function announcePackNotFullEvent(self, events, opts)
   local audioState = self.audioState
   if audioState.packCheckDone then
     return
   end
-  if not prefEnabled(events, "pack_not_full", false) then
-    return
-  end
-
-  local voltage = tonumber(self.state and self.state.voltage)
-  if type(voltage) ~= "number" or voltage <= 0 then
-    return
-  end
-
-  local bc = sessionBatteryConfig()
-  if not bc then
-    return
-  end
-
-  -- A configured cell count of 0 means auto-detect, so telemetry answers instead.
-  local cells = flightPackCells(self.state, bc)
-  if not cells then
-    return
-  end
 
   local now = nowSeconds()
   if now < (audioState.nextAllowedAt or 0) then
+    return
+  end
+
+  -- Judged before the switch is asked, so the verdict is there for a screen to draw with the
+  -- announcement off.
+  local notFull = Audio.packNotFull(self.state, audioState, events)
+  if notFull == nil then
+    return
+  end
+
+  if not prefEnabled(events, "pack_not_full", false) then
     return
   end
 
@@ -1151,20 +1211,19 @@ local function announcePackNotFullEvent(self, events, opts)
     return
   end
 
-  local fullCell = normalizeCellVoltage(bc.vbatmaxcellvoltage, 4.2)
-  local margin = tonumber(events.pack_not_full_margin) or 100
-  if margin < 0 then margin = 0 end
-  local perCell = voltage / cells
-
   audioState.packCheckDone = true
 
-  if perCell >= fullCell - (margin / 1000) then
+  local voltage = audioState.packVoltage
+  local cells = audioState.packCells
+  local perCell = voltage / cells
+
+  if not notFull then
     emitLog(opts, "pack check: full at " .. tostring(perCell) .. " V/cell over " .. tostring(cells) .. " cells", "debug")
     return
   end
 
-  emitLog(opts, "pack not full: " .. tostring(perCell) .. " V/cell against " .. tostring(fullCell)
-    .. " V less a " .. tostring(margin) .. " mV margin", "info")
+  emitLog(opts, "pack not full: " .. tostring(perCell) .. " V/cell against " .. tostring(audioState.packFullCell)
+    .. " V less a " .. tostring(audioState.packMargin) .. " mV margin", "info")
 
   -- notfull.wav is this announcement's own file. Every pack ships voltage.wav, so a pack that
   -- predates notfull.wav still says something rather than nothing, and
@@ -1424,6 +1483,12 @@ function Audio.resetConnectionState(audioState)
   audioState.lqLevel = nil
   audioState.lqNotQualityLogged = nil
   audioState.packCheckDone = false
+  audioState.packJudged = false
+  audioState.packNotFull = nil
+  audioState.packVoltage = nil
+  audioState.packCells = nil
+  audioState.packFullCell = nil
+  audioState.packMargin = nil
   audioState.fuelDeferUntil = nil
   audioState.packVoltageSeen = false
   audioState.mainPowerLostActive = false

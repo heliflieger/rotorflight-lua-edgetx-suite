@@ -33,8 +33,8 @@ stores, what the theme selector resolves and what the per-theme settings are key
 The scan (`app/pages/settings/dashboard/lib.lua`, `scanThemes`) takes every entry of the
 folder that is not `.` or `..` and whose name does not end in a dotted extension, loads
 `<folder>/init.lua`, and accepts the folder as a theme when that returns a table with a
-string `name`. A folder with no readable `init.lua` is skipped silently — it appears in the
-log at *DEBUG*, and nowhere else.
+string `name`. A folder with no readable `init.lua` is skipped silently — it is named, with the
+reason, in the one line the scan writes to the log at *DEBUG*, and nowhere else.
 
 `app/pages/settings/dashboard/theme_index.lua` is a checked-in list of the shipped themes and
 is read **only when the scan found nothing at all**, which is the case on a radio whose
@@ -523,13 +523,14 @@ temperature limit is converted for a radio set to Fahrenheit — are described o
 
 ### Facts on `state` that are not a box source
 
-A free-form module is handed the widget state and may read more than the value list above. Two
+A free-form module is handed the widget state and may read more than the value list above. Three
 of those are worth naming, because nothing else in the tree says them -- and a theme that works
 the first out for itself will not agree with the announcement that speaks it:
 
 | Field | What it says |
 | --- | --- |
 | `state.mainPowerLost` | The main pack is gone while the flight controller is still answering — it reads as gone rather than merely low, it had read a real voltage earlier in this connection, and a BEC voltage is there beside it. It is the test `lib/audio.lua` makes for its *Main power lost* announcement, decided in one place (`Audio.mainPowerLost`) and published here; it does **not** depend on that announcement being switched on. A theme drawing it would show the voltage slot as running on the reserve and the fuel reading as unknown, because neither is being measured any more. It is refreshed on the telemetry cadence, so like every other reading it stands still on a post-flight screen whose link is gone. |
+| `state.packNotFull` | The pack plugged in was not full: `true` when its voltage per cell was below the flight controller's *Max cell voltage* less the *Margin* of the *Pack Not Full* announcement, `false` once it was judged full, `nil` until it has been judged -- which waits for the connect chain to finish and for a pack voltage, a cell count and the battery configuration read over MSP, so it arrives after the first fuel reading. Judged once per connection and kept for the rest of it, so a pack running down in flight does not turn it `true`; judged again after a reconnect. It is the verdict `lib/audio.lua` speaks for that announcement, decided in one place (`Audio.packNotFull`) and published here on the telemetry cadence; it does **not** depend on that announcement being switched on. Read it with `== true`: `nil` and `false` both mean "nothing to say". Urban draws its fuel gauge orange instead of green while it is `true`. |
 | `state.eventLog` | What changed on the craft and when: the last thirty transitions, oldest first, each `{ kind, value, text, level, time }`. `kind` is `"armed"`, `"disarmed"`, `"connected"`, `"disconnected"`, `"governor"` or `"esc"`; `value` is the governor state index for `"governor"`; `text` is the speed controller's own verdict for `"esc"`, already in the package's language, and nil otherwise, so the theme names every other kind in its own words; `level` is 1 information, 2 warning, 3 error (the speed controller's levels, which `"esc"` carries and a disconnect takes as 2); `time` is the radio's clock as `HH:MM:SS`, empty on a radio without one. A connection's first governor state is its starting point and is not an entry; its speed controller's first verdict is. An `"esc"` entry exists only while the active theme declares `esc_status_live` — the history reads the verdict the snapshot already resolved and never the sensors. The table is never nil, is kept across connections, and changes only on a transition, so a closure reading the newest entries (`log[#log]`, `log[#log - 1]`, ...) reads a few fields per frame and allocates nothing. |
 
 **`source` is read as a literal, once, at theme load.** When a theme is loaded the widget walks
@@ -713,7 +714,9 @@ on a model without that sensor, the widget takes the cell count configured on th
 (*Setup* → *Power* → *Battery*), which is the count the board itself uses for any pack plugged in.
 Only where that is 0, which leaves the detection to the board, or has not been read yet, does it
 estimate the count from the pack voltage. An estimate cannot tell every pack apart: 42 V is a full
-10S pack and a 12S pack at 3.5 V per cell.
+10S pack and a 12S pack at 3.5 V per cell. A voltage below half a cell gives no estimate at all:
+it is no pack, not a 1S pack, so it never sets `state.batteryCellCount` and the bounds are not
+fitted to one cell. A count already held -- a pack that was detected and is then pulled -- is kept.
 
 ## Splitting the settings into pages
 
@@ -985,15 +988,18 @@ closure may index it without guarding. A theme reads it and never writes it.
 | --- | --- |
 | `loaded` | the registry has been read for this connection |
 | `pending` | the prompt is on, this model has packs, and this connection the pilot has neither picked nor closed it and the model has not been armed |
-| `candidates` | the registry entries for this model: `id`, `name`, `cap`, `profile`, `cycles`, `last`, plus `targetProfile` |
+| `candidates` | the registry entries for this model: `id`, `name`, `cap`, `cells`, `profile`, `cycles`, `last`, plus `targetProfile` |
 | `selectedId`, `selectedName` | the pack picked this connection, else the one stored for the model, else `nil` |
 | `boardProfile` | the battery profile the flight controller reported on connecting, 0-based; `nil` until it has answered, and again after any profile write, which is not confirmed |
 | `dismissed` | the pilot closed the picker without picking, this connection |
 | `applied` | what became of the profile write: `nil`, `"queued"`, `"skipped"` or `"refused:<why>"` |
 
-`targetProfile` is 0-based like `boardProfile`, and is `nil` where the pack names no profile and
-no board profile is set to its capacity. The BatP telemetry sensor is 1-based and is a different
-number; do not mix the two.
+`targetProfile` is 0-based like `boardProfile`, and is `nil` where the pack names a profile outside
+1-6, or names none and none can be derived for it: no board profile matches it, more than one does
+([the rules](../pages/tools/flight_log.md#the-battery-profile)), or the board's battery
+configuration was not there when the registry was read. With *Set the pack's battery profile* on it
+is resolved again for the picked pack when the pick is applied. The BatP telemetry sensor is
+1-based and is a different number; do not mix the two.
 
 ### `rfsuite.batteryPick`
 

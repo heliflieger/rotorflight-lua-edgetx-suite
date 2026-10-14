@@ -926,11 +926,16 @@ L.SOURCES = {
   { id = "cell_voltage", label = "@i18n(widgets.dashboard.urban_cell_voltage)@", unit = "V", sample = "4.20",
     minKey = "minVoltage", maxKey = "maxVoltage", places = 2, perCell = true,
     make = function(state)
-      -- The cell count is a render key term, so it is a constant of this build.
+      -- The cell count is a render key term, so it is a constant of this build. Common.cells
+      -- answers a count even when the host has none (from the configured full-pack voltage), so
+      -- whether the count is KNOWN is read live: a pack voltage divided by a guessed count is not a
+      -- cell voltage, and the row shows "-" until the host has a count.
       local cells = Common.cells(state)
       return Common.scaledGetter(function()
         local v = num(state.voltage)
         if v == nil or v <= 0 then return nil end
+        local known = num(state.batteryCellCount)
+        if known == nil or known <= 0 then return nil end
         return v / cells
       end, 2)
     end,
@@ -941,6 +946,9 @@ L.SOURCES = {
         -- The pack being gone outranks the pack being low: the figure beside this colour is
         -- no longer a measurement of the main pack at all.
         if state.mainPowerLost == true then return C.crit end
+        -- No cell count, no cell voltage to judge: the row shows "-" and is not coloured.
+        local known = num(state.batteryCellCount)
+        if known == nil or known <= 0 then return C.text end
         local v = num(state.voltage)
         local cfg = state.themeConfig
         local vMin = cfg and num(cfg.v_min) or nil

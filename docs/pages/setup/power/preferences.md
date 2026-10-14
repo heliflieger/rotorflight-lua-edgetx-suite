@@ -22,7 +22,7 @@ Always available.
 | Setting | What it does |
 | --- | --- |
 | Model Type | What the suite treats this machine as for the fuel estimate and for the announcements: *AUTO*, *ELECTRIC* or *NITRO*. Default *AUTO*, which decides from the battery telemetry. |
-| Local SmartFuel Source | Which estimate the suite computes itself when the flight controller does not: *CURRENT*, *VOLTAGE* or *COMBINED*. Default *CURRENT*. Used only where the board has no SmartFuel of its own — see the [SmartFuel page](smartfuel.md). |
+| Local SmartFuel Source | Which estimate the suite computes itself when the flight controller does not: *CURRENT*, *VOLTAGE* or *COMBINED*. Default *CURRENT*. Used where the board computes none itself (Firmware Source *OFF (LOCAL)*) — see the [SmartFuel page](smartfuel.md), whose three tuning values it unlocks when it is *VOLTAGE* or *COMBINED*. |
 | Publish SmFt / SmCp | Whether the remaining fuel and the estimated consumption are published as the `SmFt` and `SmCp` telemetry sensors. **On by default**, which is what the suite has always done; turn it off on a machine whose sensors nothing reads. |
 | ESC Current Limit | The current limit the speed controller is set to allow, in amps, and the figure the dashboard's ESC load reading is a percentage of. *NOT SET* is the default and means there is no reading. |
 

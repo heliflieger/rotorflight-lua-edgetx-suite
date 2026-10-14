@@ -112,6 +112,7 @@ local entries = {
   diagnostics_validate_sensors_page = definePage("tools/diagnostics/validate_sensors"),
   diagnostics_smartfuel_page = definePage("tools/diagnostics/smartfuel"),
   diagnostics_crsf_sensors_page = definePage("tools/diagnostics/crsf_sensors"),
+  diagnostics_system_status_page = definePage("tools/diagnostics/system_status"),
   diagnostics_session_logs_page = definePage("tools/diagnostics/session_logs"),
   diagnostics_info_page = definePage("tools/diagnostics/info"),
   logs_page = definePage("logs")

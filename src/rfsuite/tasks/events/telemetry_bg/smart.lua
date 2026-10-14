@@ -31,7 +31,8 @@ local state = {
   lastFuelPush = 0,
   lastConsumptionValue = nil,
   lastConsumptionPush = 0,
-  lastFirmwareFuelMissingLog = 0
+  lastFirmwareFuelMissingLog = 0,
+  sensedCellCount = nil
 }
 
 -- Every module this file loads is a shared library, and the rest of the Lua state -- the
@@ -575,11 +576,21 @@ function Smart.wakeup()
   local firmwareSource = tonumber(cfg.firmwareSource)
   local firmwareActive = type(firmwareSource) == "number" and firmwareSource > 0
   local packCapacity = getActivePackCapacity(session, batteryConfig)
-  local cellCount = tonumber(batteryConfig.batteryCellCount) or tonumber(getSensor("battery_cell_count")) or 0
+  -- A configured count of 0 is the board's auto-detect, and the count it then detects when the pack
+  -- is plugged in is its Cel# sensor. That sensor reads nil while the radio is still searching for
+  -- it and 0 before the board has latched a count, so the last count it gave is kept over such a
+  -- gap: the count is part of the reset signature below, and a gap that changed it would restart
+  -- the estimate. The kept count goes with the pack voltage and with the connection.
+  local cellCount = tonumber(batteryConfig.batteryCellCount)
+  if not cellCount or cellCount <= 0 then
+    local sensed = tonumber(getSensor("battery_cell_count"))
+    if sensed and sensed > 0 then state.sensedCellCount = sensed end
+    cellCount = state.sensedCellCount or 0
+  end
 
   local voltage = tonumber(getSensor("voltage"))
   
-  -- Auto-detect cell count if missing
+  -- Neither a configured nor a detected count: infer one from the pack voltage
   if not firmwareActive and cellCount <= 0 and voltage and voltage > 2 then
     local maxCellV = (tonumber(batteryConfig.vbatmaxcellvoltage) or 410) / 100
     cellCount = math.max(1, math.floor((voltage / maxCellV) + 0.5))
@@ -612,6 +623,7 @@ function Smart.wakeup()
 
   if not firmwareActive then
     if not voltage or voltage <= 2 then
+      state.sensedCellCount = nil
       resetComputedState()
       return
     end
@@ -683,6 +695,7 @@ function Smart.reset()
   state.lastConsumptionValue = nil
   state.lastConsumptionPush = 0
   state.lastFirmwareFuelMissingLog = 0
+  state.sensedCellCount = nil
   resetComputedState()
 end
 

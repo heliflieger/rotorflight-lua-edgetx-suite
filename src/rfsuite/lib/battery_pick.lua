@@ -10,8 +10,10 @@
 --   which profile  the board's battery profile the pack belongs to. A registry entry states it
 --                  outright with `profile=1..6`, or it is derived by matching the entry's `cap`
 --                  against the capacities the board itself publishes (MSP_BATTERY_CONFIG,
---                  `batteryCapacity_0` .. `batteryCapacity_5`). Where neither answers, nothing is
---                  written: guessing a profile moves the low-voltage cut of the next flight.
+--                  `batteryCapacity_0` .. `batteryCapacity_5`), and its `cells` against the
+--                  per-profile cell counts where the board has them. Where neither answers, or
+--                  the match names more than one profile, nothing is written: guessing a
+--                  profile moves the low-voltage cut of the next flight.
 --
 -- Both MSP indices here are 0-based, which is the firmware's own numbering on both legs:
 -- MSP_BATTERY_PROFILE answers `batteryConfig()->batteryProfile` and MSP_SET_BATTERY_PROFILE
@@ -80,6 +82,7 @@ function M.candidates(session)
       id = entry.id,
       name = entry.name,
       cap = entry.cap,
+      cells = entry.cells,
       profile = entry.profile,
       cycles = entry.cycles,
       last = entry.last
@@ -165,8 +168,15 @@ end
 --- The board profile a registry entry belongs to: a 0-based index and the reason, or nil.
 --
 -- `profile=` in the registry wins outright, because it is the pilot saying it. The capacity
--- match is the convenience below it and it is exact: two packs of the same capacity are the
--- same profile as far as the board is concerned, and a near match would be a different one.
+-- match is the convenience below it and it is exact: a near match would be a different pack.
+--
+-- Where the board keeps one cell count for all profiles, two profiles of the same capacity are
+-- the same battery as far as it is concerned, so the first one is taken. Where every profile
+-- has its own cell count (the reply carries the per-profile blocks, `hasProfileCells`), the
+-- same capacity can be two different batteries: the entry's `cells=` then has to agree with
+-- the profile's own count as well, and a capacity that still names more than one profile is
+-- refused as a tie rather than settled by order. The per-profile count is read, never the
+-- single `batteryCellCount`, which follows whichever profile is active.
 function M.targetProfile(entry, cfg)
   if type(entry) ~= "table" then
     log("no target profile: no registry entry", "debug")
@@ -198,14 +208,57 @@ function M.targetProfile(entry, cfg)
     log("no target profile: the entry carries no capacity to match", "info")
     return nil, "nocap"
   end
+
+  if cfg.hasProfileCells ~= true then
+    for i = 0, PROFILE_COUNT - 1 do
+      if tonumber(cfg["batteryCapacity_" .. i]) == cap then
+        log(string.format("target profile %d matched on %d mAh", i + 1, math.floor(cap)), "info")
+        return i, "capacity"
+      end
+    end
+    log(string.format("no target profile: no board profile is set to %d mAh", math.floor(cap)), "info")
+    return nil, "nomatch"
+  end
+
+  local cells = tonumber(entry.cells)
+  if cells ~= nil then
+    cells = math.floor(cells)
+    if cells < 1 then cells = nil end
+  end
+  -- `%s`, not `%d`: a hand-written value too large for an integer stays a float after
+  -- math.floor, and `%d` would raise on it instead of reporting that nothing matched.
+  local wanted = cells and string.format("%s mAh %sS", tostring(math.floor(cap)), tostring(cells))
+    or string.format("%s mAh", tostring(math.floor(cap)))
+
+  local found = {}
   for i = 0, PROFILE_COUNT - 1 do
-    if tonumber(cfg["batteryCapacity_" .. i]) == cap then
-      log(string.format("target profile %d matched on %d mAh", i + 1, math.floor(cap)), "info")
-      return i, "capacity"
+    if tonumber(cfg["batteryCapacity_" .. i]) == cap
+      and (cells == nil or tonumber(cfg["batteryCellCount_" .. i]) == cells) then
+      found[#found + 1] = i
     end
   end
-  log(string.format("no target profile: no board profile is set to %d mAh", math.floor(cap)), "info")
-  return nil, "nomatch"
+  if #found == 1 then
+    log(string.format("target profile %d matched on %s", found[1] + 1, wanted), "info")
+    return found[1], "capacity"
+  end
+  if #found == 0 then
+    log(string.format("no target profile: no board profile is set to %s", wanted), "info")
+    return nil, "nomatch"
+  end
+  -- `cells=` settles a tie only where one of the tied profiles has a cell count no other one has;
+  -- otherwise only `profile=` can.
+  local names, seen, advice = {}, {}, "profile="
+  for k = 1, #found do
+    names[k] = tostring(found[k] + 1)
+    local count = tonumber(cfg["batteryCellCount_" .. found[k]]) or 0
+    seen[count] = (seen[count] or 0) + 1
+  end
+  for count, n in pairs(seen) do
+    if cells == nil and count >= 1 and n == 1 then advice = "cells= or profile=" end
+  end
+  log(string.format("no target profile: a tie, profiles %s are all set to %s; give the entry %s",
+    table.concat(names, ", "), wanted, advice), "warn")
+  return nil, "tie"
 end
 
 --- Ask the board which battery profile it is on. `callback(index0)` on the reply.

@@ -50,7 +50,20 @@ reported as a margin to widen rather than a pass to celebrate.
   which is what makes a new box type ship its cost with the PR that adds it.
 - **Per unit**: the whole background wakeup, the custom-telemetry drain with a full frame
   backlog, one MSP pump on an idle queue (the turn that finds nothing to do, not a pump with
-  work on it), and the API-layer parse of the largest scripted reply.
+  work on it), and the API-layer parse of the largest scripted reply. The drain rows are
+  measured once `telemetry_bg` is warm: the warm-up runs until a call has consumed its frame
+  without calling a loader, so neither row carries one of the staggered loads of `tasks.lua`
+  or `smart.lua`, and then hands every frame of the cycle through once, so the measured call
+  publishes no sensor for the first time. The function script's row is primed the same way.
+- **The telemetry frames** every scenario is fed are the flight controller's: each sensor of
+  the decoder table that a firmware sends, at the width its encoder writes (`WIRE_WIDTH` in `measure.lua`,
+  from the encoder column of the sensor table in the firmware's `telemetry/crsf.c`, not from
+  the decoders), packed the way the firmware packs a frame -- entries are added while more
+  than 32 of the 64 bytes are left -- so every sensor is sent once per cycle of frames, and
+  a backlog is consecutive frames of that cycle. Before anything is measured, every frame is
+  walked with the decoders, and the run fails unless each entry is consumed at its encoder's
+  width and each frame to its last byte. A decoder added for a sensor with no width there
+  fails the run too, until its width is added.
 - **Every tool page the dashboard can open**: the build of the page, hosted. See below.
 
 ## The tool's pages

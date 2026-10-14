@@ -23,8 +23,10 @@ return function(ctx)
   local help_p6 = t(i18n, "help_p6", "The tab you are on is marked. Editing a pack takes the whole screen until Save or Cancel.")
   local help_p7 = t(i18n, "help_p7", "With the prompt on, the dashboard offers this model's packs in fullscreen once after connecting.")
   local help_p8 = t(i18n, "help_p8", "A pick in the prompt can also set the flight controller's battery profile, never while armed.")
+  local help_p9 = t(i18n, "help_p9",
+    "Cells: where the flight controller keeps a cell count per profile, it has to match it too; 0 leaves it out. A tie sets no profile.")
 
-  local parts = { help_p1, help_p2, help_p3, help_p4, help_p5, help_p6, help_p7, help_p8 }
+  local parts = { help_p1, help_p2, help_p3, help_p4, help_p5, help_p6, help_p7, help_p8, help_p9 }
 
   return {
     title = t(i18n, "help_title", "Flight Log Help"),

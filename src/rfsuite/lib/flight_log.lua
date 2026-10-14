@@ -9,8 +9,8 @@
 --                  and the statistics columns are optional: a five-column line is valid, and is
 --                  what this suite writes for a flight that recorded no statistics at all.
 --   batteries.cfg  the pilot's own battery registry, one pack per line,
---                    id=<unique>;name=<label>;cap=<mAh>;models=<name,name|*>;profile=<1-6>;
---                    cycles=<n>;last=<YYYY-MM-DD>
+--                    id=<unique>;name=<label>;cap=<mAh>;cells=<n>;models=<name,name|*>;
+--                    profile=<1-6>;cycles=<n>;last=<YYYY-MM-DD>
 --                  `#` starts a comment line, `models` empty or `*` means every model, and a
 --                  duplicate id is resolved in favour of the first line carrying it.
 --
@@ -136,7 +136,7 @@ end
 -- Registry
 -- ---------------------------------------------------------------------------
 
--- Returns an array of { id, name, cap, models (lower case), profile, cycles, last }. A missing
+-- Returns an array of { id, name, cap, cells, models (lower case), profile, cycles, last }. A missing
 -- file is an empty registry, not an error. Duplicate ids: the first line wins, because the
 -- format declares the id unique and keeping both would show two packs of which only one is
 -- ever stamped.
@@ -158,6 +158,8 @@ function M.loadRegistry()
           entry.name = value
         elseif key == "cap" then
           entry.cap = tonumber(value)
+        elseif key == "cells" then
+          entry.cells = tonumber(value)
         elseif key == "models" then
           local models = {}
           for name in string.gmatch(value, "[^,]+") do
@@ -550,7 +552,7 @@ local function cleanValue(value)
 end
 
 -- The known keys, in the order a new line serialises them.
-local KNOWN_KEYS = { "id", "name", "cap", "models", "profile", "cycles", "last" }
+local KNOWN_KEYS = { "id", "name", "cap", "cells", "models", "profile", "cycles", "last" }
 
 -- Rewrites one line's content. `fields` maps a lower-case known key to a value to write, to
 -- false to remove the key, or leaves it absent to keep the field's exact bytes -- spacing and
@@ -590,6 +592,9 @@ local function serializeEntry(entry)
   local line = "id=" .. cleanValue(entry.id) .. ";name=" .. cleanValue(entry.name)
   if type(entry.cap) == "number" and entry.cap > 0 then
     line = line .. ";cap=" .. cleanValue(entry.cap)
+  end
+  if type(entry.cells) == "number" and entry.cells >= 1 then
+    line = line .. ";cells=" .. cleanValue(entry.cells)
   end
   if entry.models ~= nil and entry.models ~= false and cleanValue(entry.models) ~= "" then
     line = line .. ";models=" .. cleanValue(entry.models)

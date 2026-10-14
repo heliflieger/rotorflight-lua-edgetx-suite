@@ -168,17 +168,146 @@ function World.require(path)
   return _G.rfsuite.require(path)
 end
 
--- One custom telemetry frame carrying the full sensor set, built from the repository's own
--- decoder table so the byte walk a pass pays for is the walk the firmware sends.
-local function buildTelemetryFrame(frameId, sensorIds)
-  local frame = { 0xEA, 0xC8, frameId & 0xFF }
+-- The custom telemetry frames, built the way the flight controller builds them.
+--
+-- Every entry carries its value at the width the firmware's encoder writes, read off the encoder
+-- column of the sensor table in rotorflight-firmware's src/main/telemetry/crsf.c -- and NOT off the
+-- decoders in lib/rf2tlm_sensors.lua. A width taken from a decoder agrees with that decoder by
+-- construction, so a decoder that reads the wrong number of bytes would walk a fixture built from
+-- itself to the end and price a frame the firmware never sends. checkTelemetryFrames below walks
+-- every frame with the repository's decoders and fails the run unless each one is consumed to its
+-- last byte.
+local CELL_COUNT = 6
+local CELL_BYTE = 210 -- 4.10 V: the encoder sends a cell as its voltage less 2.00 V, in 10 mV
+local WIRE_WIDTH = {
+  [0x1000] = 0,                                                 -- Nil
+  [0x1001] = 2,                                                 -- U16
+  [0x1011] = 2, [0x1012] = 2, [0x1013] = 2, [0x1014] = 1,       -- U16 U16 U16 U8
+  [0x1020] = 1, [0x1021] = 1,                                   -- U8 CellVolt
+  [0x102F] = 1 + CELL_COUNT,                                    -- Cells: the count, then a byte per cell
+  [0x1030] = 6,                                                 -- Control: two pairs of 12-bit values
+  [0x1031] = 2, [0x1032] = 2, [0x1033] = 2, [0x1034] = 2,       -- S16
+  [0x1035] = 1,                                                 -- S8
+  [0x1041] = 2, [0x1042] = 2, [0x1043] = 2, [0x1044] = 3,       -- U16 U16 U16 U24
+  [0x1045] = 2, [0x1046] = 2, [0x1047] = 1, [0x1048] = 1,       -- U16 U16 U8 U8
+  [0x1049] = 2, [0x104A] = 2, [0x104E] = 4, [0x104F] = 1,       -- U16 U16 U32 U8
+  [0x1051] = 2, [0x1052] = 2, [0x1053] = 2, [0x1054] = 3,       -- U16 U16 U16 U24
+  [0x1057] = 1, [0x105F] = 1,                                   -- U8
+  [0x1080] = 2, [0x1081] = 2, [0x1082] = 2, [0x1083] = 2,       -- U16
+  [0x1090] = 2, [0x1091] = 2, [0x1092] = 2, [0x1093] = 2,       -- U16
+  [0x10A0] = 1, [0x10A1] = 1, [0x10A3] = 1,                     -- U8
+  [0x10B1] = 2, [0x10B2] = 3, [0x10B3] = 2,                     -- S16 S24 S16
+  [0x10C0] = 2, [0x10C1] = 2,                                   -- U16
+  [0x1100] = 6,                                                 -- Attitude: three S16
+  [0x1101] = 2, [0x1102] = 2, [0x1103] = 2,                     -- S16
+  [0x1110] = 6,                                                 -- Accel: three S16
+  [0x1111] = 2, [0x1112] = 2, [0x1113] = 2,                     -- S16
+  [0x1121] = 1, [0x1122] = 1, [0x1123] = 1, [0x1124] = 1,       -- U8
+  [0x1125] = 8,                                                 -- LatLong: two S32
+  [0x1126] = 2, [0x1127] = 2, [0x1128] = 2, [0x1129] = 2,       -- S16 S16 U16 U16
+  [0x112A] = 2,                                                 -- S16
+  [0x1141] = 1, [0x1142] = 1, [0x1143] = 1,                     -- U8
+  [0x1200] = 1, [0x1201] = 2, [0x1202] = 1, [0x1203] = 4,       -- U8 U16 U8 U32
+  [0x1204] = 1, [0x1205] = 1,                                   -- U8
+  [0x1211] = 1, [0x1212] = 1, [0x1213] = 1, [0x1214] = 1,       -- U8
+  [0x1220] = 6,                                                 -- AdjFunc: U16 then S32
+  [0x1230] = 4, [0x1231] = 4,                                   -- U32 (newer firmware)
+  [0xDB00] = 4, [0xDB01] = 4, [0xDB02] = 4, [0xDB03] = 4,       -- S32
+  [0xDB04] = 4, [0xDB05] = 4, [0xDB06] = 4, [0xDB07] = 4,       -- S32
+}
+-- In the decoder table, but sent by no firmware: the suite's own SmartFuel sensor. Left out of the
+-- frames, because the drain never meets it on a link.
+local NOT_ENCODED = { [0x1015] = true }
+
+-- crsfSendCustomTelemetry (crsf.c) opens a frame with six header bytes and appends entries while
+-- more than CRSF_CUSTOM_TELEMETRY_MIN_SPACE (32) of its CRSF_FRAME_SIZE_MAX (64, rx/crsf_protocol.h)
+-- bytes are left; an entry that would leave no byte for the CRC goes into the next frame. So every
+-- sensor is sent once per cycle of a dozen or so frames, not all of them in one.
+local FRAME_SIZE_MAX, FRAME_HEADER, FRAME_MIN_SPACE = 64, 6, 32
+
+local function packTelemetryFrames(sensorIds)
+  local frames, entries, used = {}, {}, FRAME_HEADER
   for _, sid in ipairs(sensorIds) do
-    frame[#frame + 1] = (sid >> 8) & 0xFF
-    frame[#frame + 1] = sid & 0xFF
-    frame[#frame + 1] = 0x01
-    frame[#frame + 1] = 0x00
+    if not NOT_ENCODED[sid] then
+      local width = WIRE_WIDTH[sid]
+      if width == nil then
+        error(string.format("accounting: sensor 0x%04X has a decoder but no wire width here; "
+          .. "add the width its firmware encoder writes", sid))
+      end
+      local size = 2 + width
+      if #entries > 0 and (FRAME_SIZE_MAX - used <= FRAME_MIN_SPACE or FRAME_SIZE_MAX - used - size < 1) then
+        frames[#frames + 1] = entries
+        entries, used = {}, FRAME_HEADER
+      end
+      local bytes = {}
+      if sid == 0x102F then
+        bytes[1] = CELL_COUNT
+        for i = 1, CELL_COUNT do bytes[i + 1] = CELL_BYTE end
+      else
+        for i = 1, width do bytes[i] = 0 end
+      end
+      entries[#entries + 1] = { sid = sid, bytes = bytes }
+      used = used + size
+    end
+  end
+  if #entries > 0 then frames[#frames + 1] = entries end
+  return frames
+end
+
+-- The cycle for the sensor list the run was given, packed once.
+local cycleFor, cycle = nil, nil
+
+-- One custom telemetry frame, as the radio hands it to the script: the destination, the origin
+-- and the frame id, then the entries -- without the sync, length, type and CRC bytes. Consecutive
+-- frame ids walk the cycle, so a backlog carries consecutive frames of it. A fresh table every
+-- time, as crossfireTelemetryPop hands out: the drain keeps a reference to a frame it published a
+-- group from.
+local function buildTelemetryFrame(frameId, sensorIds)
+  if cycleFor ~= sensorIds then
+    cycle, cycleFor = packTelemetryFrames(sensorIds), sensorIds
+  end
+  local frame = { 0xEA, 0xC8, frameId & 0xFF }
+  for _, entry in ipairs(cycle[frameId % #cycle + 1]) do
+    frame[#frame + 1] = (entry.sid >> 8) & 0xFF
+    frame[#frame + 1] = entry.sid & 0xFF
+    for _, b in ipairs(entry.bytes) do frame[#frame + 1] = b end
   end
   return frame
+end
+
+--- Walk every frame of the cycle the way the drain does, with the repository's decoders, and fail
+-- unless each entry is consumed at the width its encoder wrote and each frame to its last byte.
+-- Returns the number of frames in the cycle and the fewest and most entries one of them carries.
+local function checkTelemetryFrames(sensorIds, decoders)
+  buildTelemetryFrame(0, sensorIds)
+  local fewest, most = math.huge, 0
+  for index = 1, #cycle do
+    local frame = buildTelemetryFrame(index - 1, sensorIds)
+    if #frame + 4 > FRAME_SIZE_MAX then
+      error(string.format("accounting: telemetry frame %d is %d bytes on the wire, over the %d the firmware sends",
+        index, #frame + 4, FRAME_SIZE_MAX))
+    end
+    local ptr, entries = 4, 0
+    while ptr <= #frame do
+      local sid = (frame[ptr] << 8) + frame[ptr + 1]
+      local sensor = decoders[sid]
+      if type(sensor) ~= "table" or type(sensor.dec) ~= "function" then
+        error(string.format("accounting: telemetry frame %d: no decoder for sensor 0x%04X", index, sid))
+      end
+      local ok, res, nextPtr = pcall(sensor.dec, frame, ptr + 2)
+      if not ok or nextPtr ~= ptr + 2 + WIRE_WIDTH[sid] then
+        local what = ok and string.format("consumed %d bytes", (tonumber(nextPtr) or ptr + 2) - ptr - 2)
+          or ("raised (" .. tostring(res) .. ")")
+        error(string.format("accounting: telemetry frame %d: the decoder for sensor 0x%04X %s where its "
+          .. "firmware encoder writes %d; the frame is not decoded as it is sent", index, sid, what,
+          WIRE_WIDTH[sid]))
+      end
+      ptr = nextPtr
+      entries = entries + 1
+    end
+    fewest, most = math.min(fewest, entries), math.max(most, entries)
+  end
+  return #cycle, fewest, most
 end
 
 -- What "the allowance fully drawn" means for a STATE pass: the drain finds a full backlog
@@ -917,6 +1046,9 @@ end
 table.sort(sensorIds)
 if #sensorIds == 0 then error("accounting: no sensor decoders found") end
 World.sensorIds = sensorIds
+local telemetryCycle, telemetryFewest, telemetryMost = checkTelemetryFrames(sensorIds, RFSensors)
+local telemetryShape = string.format("%d to %d sensors per frame, a cycle of %d frames",
+  telemetryFewest, telemetryMost, telemetryCycle)
 
 local control = sweepControl(2000)
 
@@ -1168,20 +1300,68 @@ end
 ------------------------------------------------------------------------------
 -- Per unit: the telemetry drain, the MSP poll quantum, the largest parse.
 ------------------------------------------------------------------------------
+--- Hand every frame of the cycle through once, one frame a call, so that each sensor has been
+-- published before anything is measured. A sensor's first publication is cold-start cost, as the
+-- function script's warm-up below says of its own; with only one frame of the cycle in a warm-up,
+-- the measured call would publish what the other frames carry for the first time, where a steady
+-- link with these constant values publishes nothing. The frame ids end on 0 modulo 256, as the
+-- warm-up's do, so the backlog that follows (ids from 1) reads as the next frames, not a skip.
+local function primeTelemetryCycle(handle)
+  buildTelemetryFrame(0, sensorIds)
+  for id = 257 - #cycle, 256 do
+    Stubs.telemetryFrames = {}
+    Stubs.pushFrame(0x88, buildTelemetryFrame(id, sensorIds))
+    handle()
+    if #Stubs.telemetryFrames ~= 0 then
+      error(string.format("accounting: frame %d of the cycle was not consumed while priming the drain",
+        id % #cycle))
+    end
+  end
+end
+
 --- Warm telemetry_bg's staggered lazy loads, and prove they are warm.
 --
 -- tasks.lua loads at most one module per wakeup and RETURNS, so a fixed number of warm-up calls
 -- is a number that goes stale the moment another module joins that chain -- and the symptom is
 -- silent: the measured call returns on a load instead of draining, and the row reports the load.
--- Warm until a call actually consumes a frame, and fail where none ever does.
+-- A consumed frame is not the end of the chain either: smart.lua, once loaded, takes its own five
+-- modules one per wakeup, and those wakeups drain as well -- so a warm-up that stopped at the first
+-- consumed frame left one of smart.lua's loads in whichever call came next, the measured one.
+-- Warm until a call consumes a frame AND calls no loader, and fail where none ever does. The calls
+-- are counted by wrapping loadScript and rfsuite.require for the warm-up only: every loader on
+-- this chain looks both up when it calls them, so nothing keeps the wrapper afterwards. (A call to
+-- rfsuite.require that its cache answers counts too: a module that called it on every wakeup would
+-- keep the warm-up from ever ending, and the run would fail here rather than measure a load.)
+-- Then every frame of the cycle goes through once, so the measured call publishes no sensor for
+-- the first time either.
 local function warmTelemetryBg(Events)
-  for _ = 1, 10 do
+  local loads = 0
+  local loadScriptWas, requireWas = _G.loadScript, _G.rfsuite.require
+  _G.loadScript = function(...)
+    loads = loads + 1
+    return loadScriptWas(...)
+  end
+  _G.rfsuite.require = function(...)
+    loads = loads + 1
+    return requireWas(...)
+  end
+  local warm = false
+  for _ = 1, 20 do
+    loads = 0
     Stubs.telemetryFrames = {}
     Stubs.pushFrame(0x88, buildTelemetryFrame(0, sensorIds))
     Events.wakeup()
-    if #Stubs.telemetryFrames == 0 then return end
+    if #Stubs.telemetryFrames == 0 and loads == 0 then
+      warm = true
+      break
+    end
   end
-  error("accounting: telemetry_bg never consumed a frame; the drain row would measure a load")
+  _G.loadScript, _G.rfsuite.require = loadScriptWas, requireWas
+  if not warm then
+    error("accounting: telemetry_bg never consumed a frame without calling a loader; "
+      .. "the drain row would measure a load")
+  end
+  primeTelemetryCycle(Events.wakeup)
 end
 
 World.reset()
@@ -1192,7 +1372,7 @@ do
     Stubs.pushFrame(0x88, buildTelemetryFrame(i, sensorIds))
   end
   addRow("unit.telemetry.drain", count(Events.wakeup),
-    FRAME_BACKLOG .. " frames queued, " .. #sensorIds .. " sensors per frame")
+    FRAME_BACKLOG .. " frames queued, " .. telemetryShape)
 end
 
 -- The same wakeup while the background function script is draining: the liveness counter in the
@@ -1256,6 +1436,9 @@ do
   if not warmed then
     error("accounting: the function script never consumed a frame; the row would measure a load")
   end
+  -- One frame of the cycle published only that frame's sensors; the rest of the cycle once more,
+  -- so the backlog below publishes none of them for the first time.
+  primeTelemetryCycle(script.run)
 
   for i = 1, FRAME_BACKLOG do
     Stubs.pushFrame(0x88, buildTelemetryFrame(i, sensorIds))
