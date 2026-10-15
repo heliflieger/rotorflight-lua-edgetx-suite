@@ -1,4 +1,4 @@
-# 0.1.7
+# 0.2.0
 
 ### Features & Enhancements
 - **Dashboard per-model settings are switched on explicitly, and a model's theme settings are edited on a page of their own (`app/pages/settings/dashboard/`, `app/lib/dashboard_builder.lua`, `app/pages/init.lua`, `lib/preferences.lua`, `lib/model_preferences.lua`, `widgets/dashboard/runtime.lua`, `docs/pages/settings/dashboard/`)**:
@@ -1194,7 +1194,7 @@
   - Measured on `bin/accounting` against the master this entry was rebased on (after #389, #390, #391 and #399): `pass.state` 11340 -> 10741, `unit.events.wakeup` 4506 -> 4287, `pass.state.armed` 11156 -> 10988, `pass.tuning.state` 12421 -> 11808, `pass.service` 1274 -> 1184 (the 200-pass row; #348 widens that row to 600 passes, so its figures are on a different window); `pass.startup.worst` 10618 -> 10639, the view being built while the sequence runs. After the sequence each of the three questions costs what it cost against an empty queue, and the progress question allocates nothing.
   - The configuration tool's home screen already stopped asking once the sequence was through, so the saving is in the widget states.
 - **Release Version (`lib/version.lua`)**:
-  - Bumped the Rotorflight Lua EdgeTX Suite version to `0.1.7`.
+  - Bumped the Rotorflight Lua EdgeTX Suite version to `0.2.0`.
 - **The flight controller's UID is read once per connect (`tasks/msp/runtime.lua`, `tasks/events/onconnect/tasks/uid.lua`, `docs/troubleshooting/no-connection.md`) (fixes #410)**:
   - The MSP runtime reads `MSP_UID` itself once the API version is in and its queue is idle, and the `uid` connect task queued a second read of its own whenever the runtime's answer was not yet in the session when the task started. On a link with round trips of a couple of hundred milliseconds that was the usual case: two requests, and two loads of the per-model preferences file within a few hundred milliseconds.
   - The task's read could not deliver anything the runtime's did not. The runtime's `publish()` copies its own UID over `session.mcu_id` after every queue pass, so where the task's reply was the first to land, the UID and the preferences it had written were gone again in the same pass, and the runtime then read the UID a second time anyway.
