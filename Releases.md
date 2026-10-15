@@ -1,6 +1,9 @@
 # 0.2.0
 
 ### Features & Enhancements
+- **Bound release notes extraction to GitHub's release body character limit (`.github/scripts/extract-release-notes.py`)**:
+  - GitHub releases reject bodies exceeding 125,000 characters with HTTP 422. With over 500 changes in 0.2.0, the cumulative release section reached ~480,000 characters.
+  - Added character bounding (default: 120,000 characters) cutting cleanly at line boundaries with a truncation note pointing to `Releases.md` for the full changelog, plus a regression self-test suite.
 - **Dashboard per-model settings are switched on explicitly, and a model's theme settings are edited on a page of their own (`app/pages/settings/dashboard/`, `app/lib/dashboard_builder.lua`, `app/pages/init.lua`, `lib/preferences.lua`, `lib/model_preferences.lua`, `widgets/dashboard/runtime.lua`, `docs/pages/settings/dashboard/`)**:
   - Whether a model uses its own theme and its own theme settings is decided by two switches on *Dashboard* → *Design*: *Allow per-model settings* for the radio, and *Own settings for this model* for the connected model. Before, a theme setting saved while a flight controller was connected went into that model's file and was used by it from then on, with nothing on screen saying so.
   - Theme settings are saved into the scope the page edits instead of wherever a connected flight controller points. The theme tiles under *Dashboard* → *Settings* edit the standard values of every model, and their first line says so. A new *Per-Model Settings* tile, first in that grid and shown while a flight controller is connected and per-model settings are on for its model, opens the settings of each theme that model draws — named by the flight phases it is drawn in — for that model alone, where only a value that differs from the standard is stored; below them it lists what that model changes beside the standard value and resets one or all of them.
